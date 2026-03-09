@@ -176,6 +176,30 @@ func TestCallOverridesClientDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildArgsToolsCommaSeparated(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithTools("Read,Write", "Bash")}).buildArgs()
+
+	if n := argCount(args, "--allowedTools"); n != 3 {
+		t.Errorf("expected 3 --allowedTools flags, got %d", n)
+	}
+}
+
+func TestBuildArgsToolsDeduplicates(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithTools("Read,Write", "Read")}).buildArgs()
+
+	if n := argCount(args, "--allowedTools"); n != 2 {
+		t.Errorf("expected 2 --allowedTools flags (deduped), got %d", n)
+	}
+}
+
+func TestBuildArgsDisallowedToolsCommaSeparated(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithDisallowedTools("Read,Write")}).buildArgs()
+
+	if n := argCount(args, "--disallowedTools"); n != 2 {
+		t.Errorf("expected 2 --disallowedTools flags, got %d", n)
+	}
+}
+
 func TestToolsOverrideReplacesNotMerges(t *testing.T) {
 	args := resolveOptions(
 		[]Option{WithTools("Read", "Write")},

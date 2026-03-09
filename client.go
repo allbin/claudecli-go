@@ -38,6 +38,8 @@ func NewWithExecutor(executor Executor, defaults ...Option) *Client {
 }
 
 // Run starts a streaming Claude session. Returns a Stream for event consumption.
+// The executor is started synchronously so the process is running when Run returns.
+// Callers can safely defer cleanup of resources the process depends on (temp files, mounts).
 func (c *Client) Run(ctx context.Context, prompt string, opts ...Option) *Stream {
 	ctx, cancel := context.WithCancel(ctx)
 	resolved := resolveOptions(c.defaults, opts)
@@ -54,29 +56,52 @@ func (c *Client) Run(ctx context.Context, prompt string, opts ...Option) *Stream
 		WorkDir: resolved.workDir,
 	}
 
+	proc, err := c.executor.Start(ctx, &StartConfig{
+		Args:    args,
+		Stdin:   strings.NewReader(prompt),
+		Env:     resolved.env,
+		WorkDir: resolved.workDir,
+	})
+	if err != nil {
+		events <- &ErrorEvent{Err: fmt.Errorf("start: %w", err), Fatal: true}
+		close(events)
+		close(done)
+		return stream
+	}
+
 	go func() {
 		defer close(done)
 		defer close(events)
-		c.runProcess(ctx, &StartConfig{
-			Args:    args,
-			Stdin:   strings.NewReader(prompt),
-			Env:     resolved.env,
-			WorkDir: resolved.workDir,
-		}, events)
+		c.readProcess(proc, events)
 	}()
 
 	return stream
 }
 
-func (c *Client) runProcess(ctx context.Context, cfg *StartConfig, events chan<- Event) {
-	proc, err := c.executor.Start(ctx, cfg)
-	if err != nil {
-		events <- &ErrorEvent{Err: fmt.Errorf("start: %w", err), Fatal: true}
-		return
-	}
-
+func (c *Client) readProcess(proc *Process, events chan<- Event) {
 	stderrLines, stderrDone := scanStderr(proc, events)
-	ParseEvents(proc.Stdout, events)
+
+	// Intercept parsed events to track whether a ResultEvent was emitted
+	parsed := make(chan Event, 64)
+	var sawResult bool
+	var accText []string
+	parseDone := make(chan struct{})
+	go func() {
+		defer close(parseDone)
+		for ev := range parsed {
+			switch e := ev.(type) {
+			case *ResultEvent:
+				sawResult = true
+			case *TextEvent:
+				accText = append(accText, e.Content)
+			}
+			events <- ev
+		}
+	}()
+
+	ParseEvents(proc.Stdout, parsed)
+	close(parsed)
+	<-parseDone
 	<-stderrDone
 
 	if err := proc.Wait(); err != nil {
@@ -91,6 +116,14 @@ func (c *Client) runProcess(ctx context.Context, cfg *StartConfig, events chan<-
 				Stderr:   strings.Join(*stderrLines, "\n"),
 			},
 			Fatal: true,
+		}
+		return
+	}
+
+	// Synthesize ResultEvent if CLI exited successfully without emitting one
+	if !sawResult {
+		events <- &ResultEvent{
+			Text: strings.Join(accText, ""),
 		}
 	}
 }

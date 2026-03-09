@@ -265,7 +265,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*ToolResultEvent` | Result from a tool invocation.                                                                                              |
 | `*RateLimitEvent`  | Rate limit status and utilization.                                                                                          |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
-| `*ResultEvent`     | Session complete. Accumulated text, cost, duration, token usage.                                                            |
+| `*ResultEvent`     | Session complete. Accumulated text, cost, duration, token usage. Synthesized if CLI exits cleanly without one.               |
 | `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal parse errors. |
 
 ## Options
@@ -279,8 +279,8 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithSystemPromptFile(string)`       | Load system prompt from a file.                                                                       |
 | `WithAppendSystemPrompt(string)`     | Append to the default system prompt.                                                                  |
 | `WithAppendSystemPromptFile(string)` | Append to the default system prompt from a file.                                                      |
-| `WithTools(...string)`               | Allowed tools — execute without permission prompts (repeatable).                                      |
-| `WithDisallowedTools(...string)`     | Disallowed tools — removed from model context (repeatable).                                           |
+| `WithTools(...string)`               | Allowed tools. Accepts individual names or comma-separated (`"A,B"` == `"A", "B"`). Deduplicates.     |
+| `WithDisallowedTools(...string)`     | Disallowed tools. Same comma/dedup behavior as `WithTools`.                                           |
 | `WithBuiltinTools(...string)`        | Restrict available built-in tools. `"default"` for all, `""` for none, or names like `"Bash"`, `"Edit"`. |
 | `WithPermissionMode(PermissionMode)` | Permission mode (`PermissionDefault`, `PermissionPlan`, `PermissionAcceptEdits`, `PermissionBypass`, `PermissionDontAsk`, `PermissionAuto`). |
 | `WithJSONSchema(string)`             | JSON schema for structured output validation.                                                         |
@@ -346,7 +346,7 @@ claudecli-go/
 
 1. **Parse** (`parse.go`) — JSONL deserialization into typed events. Zero coupling to process execution. Testable with fixtures. Returns immediately after the result event to avoid blocking on CLI hang bugs.
 2. **Execute** (`executor.go`) — `Executor` interface abstracts process spawning. `LocalExecutor` handles the real CLI with platform-aware line buffering (`stdbuf -oL` on Linux).
-3. **Client** (`client.go`) — Composes executor + options. Builds CLI args, manages goroutines, emits events through the Stream.
+3. **Client** (`client.go`) — Composes executor + options. Builds CLI args, starts process synchronously, reads events in goroutine. Synthesizes `ResultEvent` if CLI exits without one.
 4. **Blocking** (`blocking.go`) — Non-streaming path using `--output-format json`. Simpler execution model for `RunBlocking`/`RunBlockingJSON`.
 
 ## Known limitations / TODO

@@ -3,6 +3,8 @@ package claudecli
 import (
 	"context"
 	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -211,10 +213,76 @@ func TestUnmarshalErrorContainsRawText(t *testing.T) {
 	}
 }
 
+func TestSynthesizeResultOnMissingResultEvent(t *testing.T) {
+	// Simulates a CLI that exits cleanly but never emits a result JSONL line.
+	// Common with DockerExecutor.
+	jsonl := `{"type":"system","session_id":"test-123","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello "},{"type":"text","text":"world"}]}}
+`
+	exec := NewFixtureExecutor(strings.NewReader(jsonl))
+	client := NewWithExecutor(exec)
+
+	stream := client.Run(context.Background(), "ignored")
+	var gotResult bool
+	var resultText string
+	for event := range stream.Events() {
+		if r, ok := event.(*ResultEvent); ok {
+			gotResult = true
+			resultText = r.Text
+		}
+	}
+
+	if !gotResult {
+		t.Fatal("expected synthesized ResultEvent")
+	}
+	if resultText != "hello world" {
+		t.Errorf("expected 'hello world', got %q", resultText)
+	}
+	if stream.State() != StateDone {
+		t.Errorf("expected StateDone, got %s", stream.State())
+	}
+
+	result, err := stream.Wait()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("Wait() returned nil result")
+	}
+}
+
+func TestRunProcessStartedBeforeReturn(t *testing.T) {
+	// Verify that executor.Start() is called synchronously in Run(),
+	// not deferred to a goroutine. We use a tracking executor.
+	tracker := &trackStartExecutor{}
+	client := NewWithExecutor(tracker)
+
+	_ = client.Run(context.Background(), "ignored")
+
+	// Start should have been called by the time Run() returns
+	if !tracker.started {
+		t.Error("executor.Start() was not called before Run() returned")
+	}
+}
+
 type failExecutor struct {
 	err error
 }
 
 func (e *failExecutor) Start(_ context.Context, _ *StartConfig) (*Process, error) {
 	return nil, e.err
+}
+
+type trackStartExecutor struct {
+	started bool
+}
+
+func (e *trackStartExecutor) Start(_ context.Context, _ *StartConfig) (*Process, error) {
+	e.started = true
+	// Return a minimal process with empty streams
+	return &Process{
+		Stdout: io.NopCloser(strings.NewReader("")),
+		Stderr: io.NopCloser(strings.NewReader("")),
+		Wait:   func() error { return nil },
+	}, nil
 }

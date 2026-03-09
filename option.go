@@ -1,6 +1,9 @@
 package claudecli
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Option configures a Run call. Options set at call time
 // replace (not merge with) client-level defaults.
@@ -74,8 +77,16 @@ func WithAppendSystemPromptFile(p string) Option {
 	return func(o *options) { o.appendSystemPromptFile = p }
 }
 
-func WithTools(tools ...string) Option          { return func(o *options) { o.tools = tools } }
-func WithDisallowedTools(tools ...string) Option { return func(o *options) { o.disallowedTools = tools } }
+// WithTools sets allowed tools. Accepts individual names or comma-separated lists.
+// Both WithTools("A", "B") and WithTools("A,B") produce one --allowedTools per tool.
+func WithTools(tools ...string) Option {
+	return func(o *options) { o.tools = normalizeTools(tools) }
+}
+
+// WithDisallowedTools sets disallowed tools. Accepts individual names or comma-separated lists.
+func WithDisallowedTools(tools ...string) Option {
+	return func(o *options) { o.disallowedTools = normalizeTools(tools) }
+}
 
 // WithBuiltinTools restricts which built-in tools are available.
 // Use "default" for all tools, "" to disable all, or specific names like "Bash", "Edit", "Read".
@@ -232,6 +243,22 @@ func (o *options) appendExecArgs(args *[]string) {
 	if o.effort != "" {
 		*args = append(*args, "--effort", o.effort)
 	}
+}
+
+// normalizeTools splits comma-separated tool names, trims whitespace, and deduplicates.
+func normalizeTools(tools []string) []string {
+	var result []string
+	seen := make(map[string]bool)
+	for _, t := range tools {
+		for _, name := range strings.Split(t, ",") {
+			name = strings.TrimSpace(name)
+			if name != "" && !seen[name] {
+				seen[name] = true
+				result = append(result, name)
+			}
+		}
+	}
+	return result
 }
 
 func resolveOptions(defaults []Option, overrides []Option) *options {
