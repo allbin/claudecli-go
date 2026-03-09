@@ -60,6 +60,9 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 					CacheCreateTokens: raw.Usage.CacheCreationInputTokens,
 				},
 			}
+			// Result is the terminal event. Return immediately to avoid
+			// blocking on scanner.Scan() if the CLI keeps stdout open (known bug).
+			return
 
 		case "rate_limit_event":
 			ch <- &RateLimitEvent{

@@ -52,7 +52,7 @@ Items to fix, improve, or investigate before calling this package production-rea
 
 ## Future considerations
 
-- [ ] **Investigate `--output-format json` mode** — currently only `stream-json` is supported. The blocking JSON mode could be a separate code path or a `WithOutputFormat` option.
+- [x] **Investigate `--output-format json` mode** — fixed: `RunBlocking`/`RunBlockingJSON` in `blocking.go`. Uses `--output-format json` for simpler non-streaming path with `structured_output` support.
 - [ ] **Multi-turn sessions** — current API is one-shot (prompt in, events out). Multi-turn would need a higher-level abstraction that manages session IDs across calls.
 - [ ] **Event filtering/middleware** — allow consumers to register transforms or filters on the event stream.
 - [ ] **Structured error parsing** — Claude CLI sometimes returns structured JSON error bodies. Parse these into typed error variants.

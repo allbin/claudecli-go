@@ -25,4 +25,13 @@
 // RunJSON automatically strips markdown code fences (```json ... ```) before
 // unmarshaling. On parse failure it returns *UnmarshalError which contains the
 // original model output in RawText for debugging.
+//
+// # Blocking Mode
+//
+// RunBlocking and RunBlockingJSON use --output-format json instead of streaming.
+// Simpler and avoids known CLI bugs with hanging stdout. RunBlockingJSON prefers
+// the schema-validated structured_output field when WithJSONSchema is set.
+//
+//	result, err := client.RunBlocking(ctx, prompt)
+//	val, result, err := claudecli.RunBlockingJSON[T](ctx, client, prompt)
 package claudecli

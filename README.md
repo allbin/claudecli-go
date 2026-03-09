@@ -75,6 +75,31 @@ analysis, result, err := claudecli.RunJSON[Analysis](ctx, client, prompt,
 
 `RunJSON` automatically strips markdown code fences (`` ```json ... ``` ``) before unmarshaling.
 
+## Blocking mode
+
+When you don't need streaming events, use `RunBlocking` for a simpler, more reliable path. Uses `--output-format json` internally.
+
+```go
+result, err := client.RunBlocking(ctx, "Summarize this file")
+fmt.Println(result.Text)
+fmt.Printf("Cost: $%.4f, Turns: %d\n", result.CostUSD, result.NumTurns)
+```
+
+For typed JSON with schema validation:
+
+```go
+type Analysis struct {
+    Summary string   `json:"summary"`
+    Tags    []string `json:"tags"`
+}
+
+// When WithJSONSchema is set, parses the schema-validated structured_output field.
+// Otherwise, parses the text result with code fence stripping.
+analysis, result, err := claudecli.RunBlockingJSON[Analysis](ctx, client, prompt,
+    claudecli.WithJSONSchema(`{"type":"object","properties":{"summary":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}},"required":["summary","tags"]}`),
+)
+```
+
 ## Client with defaults
 
 ```go
@@ -126,6 +151,21 @@ stream := client.Run(ctx, "Try a different approach",
 // Continue the most recent session
 stream := client.Run(ctx, "What were we doing?",
     claudecli.WithContinue(),
+)
+```
+
+## Agents
+
+```go
+// Use a named agent
+stream := client.Run(ctx, "Review this PR",
+    claudecli.WithAgent("reviewer"),
+)
+
+// Define custom agents inline
+stream := client.Run(ctx, "Check the code",
+    claudecli.WithAgentDef(`{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}`),
+    claudecli.WithAgent("reviewer"),
 )
 ```
 
@@ -234,21 +274,29 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | `WithBinaryPath(string)`             | Path to the `claude` binary. Only effective in `New()`. Default: `"claude"`.                          |
 | `WithModel(Model)`                   | Model to use (`ModelHaiku`, `ModelSonnet`, `ModelOpus`). Default: `ModelSonnet`.                      |
+| `WithFallbackModel(Model)`           | Fallback model if primary is unavailable.                                                             |
 | `WithSystemPrompt(string)`           | System prompt.                                                                                        |
+| `WithSystemPromptFile(string)`       | Load system prompt from a file.                                                                       |
 | `WithAppendSystemPrompt(string)`     | Append to the default system prompt.                                                                  |
-| `WithTools(...string)`               | Allowed tools (repeatable).                                                                           |
-| `WithDisallowedTools(...string)`     | Disallowed tools (repeatable).                                                                        |
+| `WithAppendSystemPromptFile(string)` | Append to the default system prompt from a file.                                                      |
+| `WithTools(...string)`               | Allowed tools — execute without permission prompts (repeatable).                                      |
+| `WithDisallowedTools(...string)`     | Disallowed tools — removed from model context (repeatable).                                           |
+| `WithBuiltinTools(...string)`        | Restrict available built-in tools. `"default"` for all, `""` for none, or names like `"Bash"`, `"Edit"`. |
 | `WithPermissionMode(PermissionMode)` | Permission mode (`PermissionDefault`, `PermissionPlan`, `PermissionAcceptEdits`, `PermissionBypass`, `PermissionDontAsk`, `PermissionAuto`). |
-| `WithJSONSchema(string)`             | JSON schema for structured output.                                                                    |
+| `WithJSONSchema(string)`             | JSON schema for structured output validation.                                                         |
 | `WithMaxBudget(float64)`             | Maximum cost budget in USD.                                                                           |
+| `WithMaxTurns(int)`                  | Maximum agentic turns before stopping.                                                                |
 | `WithWorkDir(string)`                | Working directory for the CLI process.                                                                |
+| `WithAddDirs(...string)`             | Additional directories to allow tool access to.                                                       |
 | `WithSessionID(string)`              | Resume a specific session.                                                                            |
 | `WithForkSession()`                  | Fork from the session (requires `WithSessionID`).                                                     |
 | `WithContinue()`                     | Continue the most recent session.                                                                     |
-| `WithEffort(string)`                 | Effort level.                                                                                         |
-| `WithFallbackModel(Model)`           | Fallback model if primary is unavailable.                                                             |
+| `WithEffort(string)`                 | Effort level (`"low"`, `"medium"`, `"high"`).                                                         |
 | `WithMCPConfig(...string)`           | MCP server configs — file paths or inline JSON strings.                                               |
 | `WithStrictMCPConfig()`              | Only use MCP servers from `WithMCPConfig`, ignoring all other MCP configurations.                     |
+| `WithAgent(string)`                  | Named agent for the session.                                                                          |
+| `WithAgentDef(string)`               | Custom agent definitions as JSON.                                                                     |
+| `WithIncludePartialMessages()`       | Include partial message chunks (streaming only).                                                      |
 | `WithEnv(map[string]string)`         | Additional environment variables.                                                                     |
 
 Options set at call time **replace** (not merge with) client-level defaults.
@@ -270,7 +318,7 @@ if errors.As(err, &cliErr) {
     fmt.Println(cliErr.Stderr)
 }
 
-// RunJSON failed to parse response as JSON — inspect raw model output
+// RunJSON/RunBlockingJSON failed to parse response as JSON
 var ue *claudecli.UnmarshalError
 if errors.As(err, &ue) {
     fmt.Println(ue.RawText) // original model output before fence stripping
@@ -290,17 +338,19 @@ claudecli-go/
   parse.go       JSONL stream parser (decoupled from process lifecycle)
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
   client.go      Client struct, Run/RunText/RunJSON, package-level shortcuts
+  blocking.go    RunBlocking/RunBlockingJSON — non-streaming JSON output mode
   error.go       Typed Error (ExitCode, Stderr, Message), UnmarshalError (RawText)
 ```
 
 **Layers:**
 
-1. **Parse** (`parse.go`) — JSONL deserialization into typed events. Zero coupling to process execution. Testable with fixtures.
+1. **Parse** (`parse.go`) — JSONL deserialization into typed events. Zero coupling to process execution. Testable with fixtures. Returns immediately after the result event to avoid blocking on CLI hang bugs.
 2. **Execute** (`executor.go`) — `Executor` interface abstracts process spawning. `LocalExecutor` handles the real CLI with platform-aware line buffering (`stdbuf -oL` on Linux).
 3. **Client** (`client.go`) — Composes executor + options. Builds CLI args, manages goroutines, emits events through the Stream.
+4. **Blocking** (`blocking.go`) — Non-streaming path using `--output-format json`. Simpler execution model for `RunBlocking`/`RunBlockingJSON`.
 
 ## Known limitations / TODO
 
-- **JSONL format is unversioned** — Claude CLI's `stream-json` output format is not formally versioned by Anthropic. Tested with Claude Code CLI 1.x (`--output-format stream-json`). Breaking changes across CLI versions are possible.
+- **JSONL format is unversioned** — Claude CLI's `stream-json` output format is not formally versioned by Anthropic. Tested with Claude Code CLI 2.x. Breaking changes across CLI versions are possible.
 - **No retry/backoff** — `RateLimitEvent` is emitted but the package does not automatically retry or backoff. Consumers must implement their own retry logic.
 - **`stdbuf` recommended on Linux** — `LocalExecutor` uses `stdbuf -oL` for line-buffered stdout on Linux when available, falling back to direct execution without it.

@@ -179,3 +179,39 @@ also broken {{{
 		t.Errorf("expected 1 ResultEvent, got %d", resultCount)
 	}
 }
+
+func TestParseReturnsAfterResult(t *testing.T) {
+	// Simulate a CLI that keeps stdout open after result (known bug).
+	// ParseEvents should return after the result event without blocking.
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"should not appear"}]}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	// Should get init, text, result — but NOT the text after result
+	for _, e := range events {
+		if te, ok := e.(*TextEvent); ok && te.Content == "should not appear" {
+			t.Error("ParseEvents continued reading after result event")
+		}
+	}
+	var gotResult bool
+	for _, e := range events {
+		if _, ok := e.(*ResultEvent); ok {
+			gotResult = true
+		}
+	}
+	if !gotResult {
+		t.Error("missing ResultEvent")
+	}
+}
