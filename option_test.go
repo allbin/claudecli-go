@@ -84,6 +84,36 @@ func TestCallOverridesClientDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildArgsJSONSchema(t *testing.T) {
+	opts := resolveOptions(nil, []Option{WithJSONSchema(`{"type":"object"}`)})
+	args := opts.buildArgs()
+
+	for i, a := range args {
+		if a == "--json-schema" {
+			if args[i+1] != `{"type":"object"}` {
+				t.Errorf("unexpected schema value: %q", args[i+1])
+			}
+			return
+		}
+	}
+	t.Error("missing --json-schema flag")
+}
+
+func TestBuildArgsMaxBudget(t *testing.T) {
+	opts := resolveOptions(nil, []Option{WithMaxBudget(1.50)})
+	args := opts.buildArgs()
+
+	for i, a := range args {
+		if a == "--max-budget-usd" {
+			if args[i+1] != "1.50" {
+				t.Errorf("unexpected budget value: %q", args[i+1])
+			}
+			return
+		}
+	}
+	t.Error("missing --max-budget-usd flag")
+}
+
 func TestToolsOverrideReplacesNotMerges(t *testing.T) {
 	defaults := []Option{WithTools("Read", "Write")}
 	overrides := []Option{WithTools("Bash")}

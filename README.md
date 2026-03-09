@@ -238,7 +238,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithAppendSystemPrompt(string)`     | Append to the default system prompt.                                                                  |
 | `WithTools(...string)`               | Allowed tools (repeatable).                                                                           |
 | `WithDisallowedTools(...string)`     | Disallowed tools (repeatable).                                                                        |
-| `WithPermissionMode(PermissionMode)` | Permission mode (`PermissionDefault`, `PermissionPlan`, `PermissionAcceptEdits`, `PermissionBypass`). |
+| `WithPermissionMode(PermissionMode)` | Permission mode (`PermissionDefault`, `PermissionPlan`, `PermissionAcceptEdits`, `PermissionBypass`, `PermissionDontAsk`, `PermissionAuto`). |
 | `WithJSONSchema(string)`             | JSON schema for structured output.                                                                    |
 | `WithMaxBudget(float64)`             | Maximum cost budget in USD.                                                                           |
 | `WithWorkDir(string)`                | Working directory for the CLI process.                                                                |

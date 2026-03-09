@@ -105,11 +105,11 @@ func (o *options) buildArgs() []string {
 	}
 
 	if o.jsonSchema != "" {
-		args = append(args, "--output-format-json-schema", o.jsonSchema)
+		args = append(args, "--json-schema", o.jsonSchema)
 	}
 
 	if o.maxBudget > 0 {
-		args = append(args, "--max-turns-budget", fmt.Sprintf("%.2f", o.maxBudget))
+		args = append(args, "--max-budget-usd", fmt.Sprintf("%.2f", o.maxBudget))
 	}
 
 	if o.sessionID != "" {

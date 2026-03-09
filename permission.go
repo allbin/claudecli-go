@@ -8,4 +8,6 @@ const (
 	PermissionPlan         PermissionMode = "plan"
 	PermissionAcceptEdits  PermissionMode = "acceptEdits"
 	PermissionBypass       PermissionMode = "bypassPermissions"
+	PermissionDontAsk      PermissionMode = "dontAsk"
+	PermissionAuto         PermissionMode = "auto"
 )
