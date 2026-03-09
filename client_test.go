@@ -159,6 +159,57 @@ func TestClientRunStartFailure(t *testing.T) {
 	}
 }
 
+func TestStripCodeFence(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"plain json", `{"a":1}`, `{"a":1}`},
+		{"json fence", "```json\n{\"a\":1}\n```", `{"a":1}`},
+		{"bare fence", "```\n{\"a\":1}\n```", `{"a":1}`},
+		{"with whitespace", "  ```json\n{\"a\":1}\n```  ", `{"a":1}`},
+		{"multiline content", "```json\n{\n  \"a\": 1,\n  \"b\": 2\n}\n```", "{\n  \"a\": 1,\n  \"b\": 2\n}"},
+		{"no closing fence", "```json\n{\"a\":1}", "```json\n{\"a\":1}"},
+		{"single line", `{"a":1}`, `{"a":1}`},
+		{"empty", "", ""},
+		// Tighter detection: reject 4+ backticks
+		{"four backticks ignored", "````json\n{\"a\":1}\n```", "````json\n{\"a\":1}\n```"},
+		// Reject non-alphanumeric lang tag
+		{"special char tag ignored", "```json!\n{\"a\":1}\n```", "```json!\n{\"a\":1}\n```"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripCodeFence(tt.input)
+			if got != tt.want {
+				t.Errorf("stripCodeFence(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUnmarshalErrorContainsRawText(t *testing.T) {
+	exec, err := NewFixtureExecutorFromFile("testdata/basic.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := NewWithExecutor(exec)
+
+	// basic.jsonl returns prose, not JSON — RunJSON should fail with UnmarshalError
+	type Dummy struct{ X int }
+	_, _, err = RunJSON[Dummy](context.Background(), client, "ignored")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var ue *UnmarshalError
+	if !errors.As(err, &ue) {
+		t.Fatalf("expected *UnmarshalError, got %T: %v", err, err)
+	}
+	if ue.RawText == "" {
+		t.Error("RawText is empty")
+	}
+}
+
 type failExecutor struct {
 	err error
 }

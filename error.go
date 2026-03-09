@@ -18,3 +18,18 @@ func (e *Error) Error() string {
 	}
 	return fmt.Sprintf("claudecli: exit %d", e.ExitCode)
 }
+
+// UnmarshalError is returned by RunJSON when the response text cannot be
+// parsed as JSON. RawText contains the original model output for debugging.
+type UnmarshalError struct {
+	Err     error
+	RawText string
+}
+
+func (e *UnmarshalError) Error() string {
+	return fmt.Sprintf("unmarshal response: %s (raw text: %q)", e.Err, e.RawText)
+}
+
+func (e *UnmarshalError) Unwrap() error {
+	return e.Err
+}

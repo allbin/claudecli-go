@@ -43,24 +43,7 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 				continue
 			}
 			for _, block := range raw.Message.Content {
-				switch block.Type {
-				case "thinking":
-					ch <- &ThinkingEvent{Content: block.Thinking}
-				case "text":
-					resultText = append(resultText, block.Text)
-					ch <- &TextEvent{Content: block.Text}
-				case "tool_use":
-					ch <- &ToolUseEvent{
-						ID:    block.ID,
-						Name:  block.Name,
-						Input: block.Input,
-					}
-				case "tool_result":
-					ch <- &ToolResultEvent{
-						ToolUseID: block.ToolUseID,
-						Content:   block.Content,
-					}
-				}
+				parseContentBlock(block, &resultText, ch)
 			}
 
 		case "result":
@@ -88,6 +71,27 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 
 	if err := scanner.Err(); err != nil {
 		ch <- &ErrorEvent{Err: fmt.Errorf("scanner: %w", err)}
+	}
+}
+
+func parseContentBlock(block rawContent, resultText *[]string, ch chan<- Event) {
+	switch block.Type {
+	case "thinking":
+		ch <- &ThinkingEvent{Content: block.Thinking}
+	case "text":
+		*resultText = append(*resultText, block.Text)
+		ch <- &TextEvent{Content: block.Text}
+	case "tool_use":
+		ch <- &ToolUseEvent{
+			ID:    block.ID,
+			Name:  block.Name,
+			Input: block.Input,
+		}
+	case "tool_result":
+		ch <- &ToolResultEvent{
+			ToolUseID: block.ToolUseID,
+			Content:   block.Content,
+		}
 	}
 }
 

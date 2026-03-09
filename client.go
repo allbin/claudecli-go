@@ -57,62 +57,65 @@ func (c *Client) Run(ctx context.Context, prompt string, opts ...Option) *Stream
 	go func() {
 		defer close(done)
 		defer close(events)
-
-		cfg := &StartConfig{
+		c.runProcess(ctx, &StartConfig{
 			Args:    args,
 			Stdin:   strings.NewReader(prompt),
 			Env:     resolved.env,
 			WorkDir: resolved.workDir,
-		}
-
-		proc, err := c.executor.Start(ctx, cfg)
-		if err != nil {
-			events <- &ErrorEvent{Err: fmt.Errorf("start: %w", err), Fatal: true}
-			return
-		}
-
-		// Parse stderr in background, collect lines for error reporting
-		var stderrLines []string
-		stderrDone := make(chan struct{})
-		go func() {
-			defer close(stderrDone)
-			defer func() {
-				if r := recover(); r != nil {
-					events <- &ErrorEvent{
-						Err:   fmt.Errorf("stderr goroutine panic: %v", r),
-						Fatal: true,
-					}
-				}
-			}()
-			scanner := bufio.NewScanner(proc.Stderr)
-			for scanner.Scan() {
-				line := scanner.Text()
-				stderrLines = append(stderrLines, line)
-				events <- &StderrEvent{Content: line}
-			}
-		}()
-
-		ParseEvents(proc.Stdout, events)
-
-		// Wait for stderr goroutine
-		<-stderrDone
-
-		if err := proc.Wait(); err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				events <- &ErrorEvent{
-					Err: &Error{
-						ExitCode: exitErr.ExitCode(),
-						Stderr:   strings.Join(stderrLines, "\n"),
-					},
-					Fatal: true,
-				}
-			} else {
-				events <- &ErrorEvent{Err: err, Fatal: true}
-			}
-		}
+		}, events)
 	}()
 
 	return stream
+}
+
+func (c *Client) runProcess(ctx context.Context, cfg *StartConfig, events chan<- Event) {
+	proc, err := c.executor.Start(ctx, cfg)
+	if err != nil {
+		events <- &ErrorEvent{Err: fmt.Errorf("start: %w", err), Fatal: true}
+		return
+	}
+
+	stderrLines, stderrDone := scanStderr(proc, events)
+	ParseEvents(proc.Stdout, events)
+	<-stderrDone
+
+	if err := proc.Wait(); err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			events <- &ErrorEvent{Err: err, Fatal: true}
+			return
+		}
+		events <- &ErrorEvent{
+			Err: &Error{
+				ExitCode: exitErr.ExitCode(),
+				Stderr:   strings.Join(*stderrLines, "\n"),
+			},
+			Fatal: true,
+		}
+	}
+}
+
+func scanStderr(proc *Process, events chan<- Event) (*[]string, <-chan struct{}) {
+	var lines []string
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				events <- &ErrorEvent{
+					Err:   fmt.Errorf("stderr goroutine panic: %v", r),
+					Fatal: true,
+				}
+			}
+		}()
+		scanner := bufio.NewScanner(proc.Stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			lines = append(lines, line)
+			events <- &StderrEvent{Content: line}
+		}
+	}()
+	return &lines, done
 }
 
 // RunText runs a prompt and returns the accumulated text output.
@@ -129,16 +132,64 @@ func (c *Client) RunText(ctx context.Context, prompt string, opts ...Option) (st
 }
 
 // RunJSON runs a prompt and unmarshals the text output into T.
+// Markdown code fences (```json ... ``` or ``` ... ```) are stripped
+// before unmarshaling so that model responses wrapped in fences parse correctly.
 func RunJSON[T any](ctx context.Context, c *Client, prompt string, opts ...Option) (T, *ResultEvent, error) {
 	var zero T
 	text, result, err := c.RunText(ctx, prompt, opts...)
 	if err != nil {
 		return zero, result, err
 	}
-	if err := json.Unmarshal([]byte(text), &zero); err != nil {
-		return zero, result, fmt.Errorf("unmarshal response: %w", err)
+	if err := json.Unmarshal([]byte(stripCodeFence(text)), &zero); err != nil {
+		return zero, result, &UnmarshalError{Err: err, RawText: text}
 	}
 	return zero, result, nil
+}
+
+// stripCodeFence removes surrounding markdown code fences from text.
+// Handles ```json\n...\n```, ```\n...\n```, and leading/trailing whitespace.
+// Only matches exactly three backticks optionally followed by a language tag
+// (letters/digits only) — four+ backticks or non-alphanumeric suffixes are ignored.
+func stripCodeFence(s string) string {
+	s = strings.TrimSpace(s)
+	lines := strings.SplitN(s, "\n", 2)
+	if len(lines) < 2 {
+		return s
+	}
+	first := strings.TrimSpace(lines[0])
+	if !isOpeningFence(first) {
+		return s
+	}
+	// Verify closing fence
+	lastNewline := strings.LastIndex(s, "\n")
+	if lastNewline < 0 {
+		return s
+	}
+	closing := strings.TrimSpace(s[lastNewline+1:])
+	if closing != "```" {
+		return s
+	}
+	// Extract content between fences
+	inner := s[strings.Index(s, "\n")+1 : lastNewline]
+	return strings.TrimSpace(inner)
+}
+
+// isOpeningFence returns true for exactly ``` or ```<alphanum lang tag>.
+func isOpeningFence(line string) bool {
+	if !strings.HasPrefix(line, "```") {
+		return false
+	}
+	tag := line[3:]
+	if tag == "" {
+		return true
+	}
+	// Reject 4+ backticks or non-alphanumeric suffixes
+	for _, r := range tag {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 // Package-level shortcuts for one-off use without constructing a client.

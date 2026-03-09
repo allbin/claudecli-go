@@ -73,6 +73,8 @@ analysis, result, err := claudecli.RunJSON[Analysis](ctx, client, prompt,
 )
 ```
 
+`RunJSON` automatically strips markdown code fences (`` ```json ... ``` ``) before unmarshaling.
+
 ## Client with defaults
 
 ```go
@@ -267,6 +269,12 @@ if errors.As(err, &cliErr) {
     fmt.Println(cliErr.ExitCode)
     fmt.Println(cliErr.Stderr)
 }
+
+// RunJSON failed to parse response as JSON — inspect raw model output
+var ue *claudecli.UnmarshalError
+if errors.As(err, &ue) {
+    fmt.Println(ue.RawText) // original model output before fence stripping
+}
 ```
 
 ## Architecture
@@ -282,7 +290,7 @@ claudecli-go/
   parse.go       JSONL stream parser (decoupled from process lifecycle)
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
   client.go      Client struct, Run/RunText/RunJSON, package-level shortcuts
-  error.go       Typed Error (ExitCode, Stderr, Message)
+  error.go       Typed Error (ExitCode, Stderr, Message), UnmarshalError (RawText)
 ```
 
 **Layers:**

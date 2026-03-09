@@ -56,16 +56,11 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 		return nil, fmt.Errorf("claude binary not found: %w", err)
 	}
 
-	var cmd *exec.Cmd
+	cmd := exec.CommandContext(ctx, resolvedBinary, cfg.Args...)
 	if runtime.GOOS == "linux" {
 		if stdbuf, err := exec.LookPath("stdbuf"); err == nil {
-			cmdArgs := append([]string{"-oL", resolvedBinary}, cfg.Args...)
-			cmd = exec.CommandContext(ctx, stdbuf, cmdArgs...)
-		} else {
-			cmd = exec.CommandContext(ctx, resolvedBinary, cfg.Args...)
+			cmd = exec.CommandContext(ctx, stdbuf, append([]string{"-oL", resolvedBinary}, cfg.Args...)...)
 		}
-	} else {
-		cmd = exec.CommandContext(ctx, resolvedBinary, cfg.Args...)
 	}
 
 	cmd.Stdin = cfg.Stdin
