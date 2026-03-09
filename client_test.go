@@ -173,6 +173,7 @@ func TestStripCodeFence(t *testing.T) {
 		{"no closing fence", "```json\n{\"a\":1}", "```json\n{\"a\":1}"},
 		{"single line", `{"a":1}`, `{"a":1}`},
 		{"empty", "", ""},
+		{"trailing text after fence", "```json\n{\"a\":1}\n```\n\n**Reasoning:** some explanation", `{"a":1}`},
 		// Tighter detection: reject 4+ backticks
 		{"four backticks ignored", "````json\n{\"a\":1}\n```", "````json\n{\"a\":1}\n```"},
 		// Reject non-alphanumeric lang tag

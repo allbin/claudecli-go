@@ -160,17 +160,32 @@ func stripCodeFence(s string) string {
 	if !isOpeningFence(first) {
 		return s
 	}
-	// Verify closing fence
-	lastNewline := strings.LastIndex(s, "\n")
-	if lastNewline < 0 {
-		return s
+	// Find closing fence (may not be last line if model appends commentary)
+	rest := s[strings.Index(s, "\n")+1:]
+	fenceIdx := -1
+	pos := 0
+	for {
+		nl := strings.Index(rest[pos:], "\n")
+		var line string
+		if nl < 0 {
+			line = rest[pos:]
+		} else {
+			line = rest[pos : pos+nl]
+		}
+		if strings.TrimSpace(line) == "```" {
+			fenceIdx = pos
+			break
+		}
+		if nl < 0 {
+			break
+		}
+		pos += nl + 1
 	}
-	closing := strings.TrimSpace(s[lastNewline+1:])
-	if closing != "```" {
+	if fenceIdx < 0 {
 		return s
 	}
 	// Extract content between fences
-	inner := s[strings.Index(s, "\n")+1 : lastNewline]
+	inner := rest[:fenceIdx]
 	return strings.TrimSpace(inner)
 }
 
