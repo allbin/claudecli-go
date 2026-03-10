@@ -57,10 +57,11 @@ func (c *Client) Run(ctx context.Context, prompt string, opts ...Option) *Stream
 	}
 
 	proc, err := c.executor.Start(ctx, &StartConfig{
-		Args:    args,
-		Stdin:   strings.NewReader(prompt),
-		Env:     resolved.env,
-		WorkDir: resolved.workDir,
+		Args:                    args,
+		Stdin:                   strings.NewReader(prompt),
+		Env:                     resolved.env,
+		WorkDir:                 resolved.workDir,
+		EnableFileCheckpointing: resolved.enableFileCheckpointing,
 	})
 	if err != nil {
 		events <- &ErrorEvent{Err: fmt.Errorf("start: %w", err), Fatal: true}
@@ -72,14 +73,14 @@ func (c *Client) Run(ctx context.Context, prompt string, opts ...Option) *Stream
 	go func() {
 		defer close(done)
 		defer close(events)
-		c.readProcess(proc, events)
+		c.readProcess(proc, events, resolved.stderrCallback)
 	}()
 
 	return stream
 }
 
-func (c *Client) readProcess(proc *Process, events chan<- Event) {
-	stderrLines, stderrDone := scanStderr(proc, events)
+func (c *Client) readProcess(proc *Process, events chan<- Event, stderrCallback func(string)) {
+	stderrLines, stderrDone := scanStderr(proc, events, stderrCallback)
 
 	// Intercept parsed events to track whether a ResultEvent was emitted
 	parsed := make(chan Event, 64)
@@ -128,7 +129,7 @@ func (c *Client) readProcess(proc *Process, events chan<- Event) {
 	}
 }
 
-func scanStderr(proc *Process, events chan<- Event) (*[]string, <-chan struct{}) {
+func scanStderr(proc *Process, events chan<- Event, callback func(string)) (*[]string, <-chan struct{}) {
 	var lines []string
 	done := make(chan struct{})
 	go func() {
@@ -145,6 +146,9 @@ func scanStderr(proc *Process, events chan<- Event) (*[]string, <-chan struct{})
 		for scanner.Scan() {
 			line := scanner.Text()
 			lines = append(lines, line)
+			if callback != nil {
+				callback(line)
+			}
 			events <- &StderrEvent{Content: line}
 		}
 	}()
@@ -240,6 +244,44 @@ func isOpeningFence(line string) bool {
 	return true
 }
 
+// Connect starts an interactive session with bidirectional control protocol.
+// Returns a Session for multi-turn conversations, permission callbacks, etc.
+func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	resolved := resolveOptions(c.defaults, opts)
+	args := resolved.buildSessionArgs()
+
+	proc, err := c.executor.Start(ctx, &StartConfig{
+		Args:                    args,
+		Env:                     resolved.env,
+		WorkDir:                 resolved.workDir,
+		KeepStdinOpen:           true,
+		EnableFileCheckpointing: resolved.enableFileCheckpointing,
+	})
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("start: %w", err)
+	}
+
+	session := &Session{
+		proc:       proc,
+		events:     make(chan Event, 64),
+		done:       make(chan struct{}),
+		ctx:        ctx,
+		cancel:     cancel,
+		canUseTool: resolved.canUseTool,
+	}
+
+	go session.readLoop()
+
+	if err := session.initialize(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("initialize: %w", err)
+	}
+
+	return session, nil
+}
+
 // Package-level shortcuts for one-off use without constructing a client.
 
 var defaultClient = New()
@@ -252,4 +294,9 @@ func Run(ctx context.Context, prompt string, opts ...Option) *Stream {
 // RunText runs a prompt and returns text using the default local executor.
 func RunText(ctx context.Context, prompt string, opts ...Option) (string, *ResultEvent, error) {
 	return defaultClient.RunText(ctx, prompt, opts...)
+}
+
+// Connect starts an interactive session using the default local executor.
+func Connect(ctx context.Context, opts ...Option) (*Session, error) {
+	return defaultClient.Connect(ctx, opts...)
 }

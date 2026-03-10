@@ -48,11 +48,13 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 
 		case "result":
 			ch <- &ResultEvent{
-				Text:      strings.Join(resultText, ""),
-				Subtype:   raw.Subtype,
-				Duration:  time.Duration(raw.DurationMS) * time.Millisecond,
-				CostUSD:   raw.CostUSD,
-				SessionID: raw.SessionID,
+				Text:             strings.Join(resultText, ""),
+				Subtype:          raw.Subtype,
+				StopReason:       raw.StopReason,
+				StructuredOutput: raw.StructuredOutput,
+				Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
+				CostUSD:          raw.CostUSD,
+				SessionID:        raw.SessionID,
 				Usage: Usage{
 					InputTokens:       raw.Usage.InputTokens,
 					OutputTokens:      raw.Usage.OutputTokens,
@@ -69,6 +71,25 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 				Status:      raw.RateLimitStatus,
 				Utilization: raw.RateLimitUtilization,
 			}
+
+		case "control_request":
+			var body rawControlRequestBody
+			if err := json.Unmarshal(raw.Request, &body); err != nil {
+				ch <- &ErrorEvent{Err: fmt.Errorf("unmarshal control request: %w", err)}
+				continue
+			}
+			ch <- &ControlRequestEvent{
+				RequestID: raw.RequestID,
+				Subtype:   body.Subtype,
+				Body:      raw.Request,
+			}
+
+		case "stream_event":
+			ch <- &StreamEvent{
+				UUID:      raw.UUID,
+				SessionID: raw.SessionID,
+				Event:     raw.Event,
+			}
 		}
 	}
 
@@ -80,7 +101,7 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 func parseContentBlock(block rawContent, resultText *[]string, ch chan<- Event) {
 	switch block.Type {
 	case "thinking":
-		ch <- &ThinkingEvent{Content: block.Thinking}
+		ch <- &ThinkingEvent{Content: block.Thinking, Signature: block.Signature}
 	case "text":
 		*resultText = append(*resultText, block.Text)
 		ch <- &TextEvent{Content: block.Text}
@@ -145,14 +166,24 @@ type rawEvent struct {
 	Message *rawMessage `json:"message,omitempty"`
 
 	// result event
-	Result     string  `json:"result,omitempty"`
-	DurationMS float64 `json:"duration_ms,omitempty"`
-	CostUSD    float64 `json:"total_cost_usd,omitempty"`
-	Usage      rawUsage `json:"usage,omitempty"`
+	Result           string          `json:"result,omitempty"`
+	DurationMS       float64         `json:"duration_ms,omitempty"`
+	CostUSD          float64         `json:"total_cost_usd,omitempty"`
+	StopReason       string          `json:"stop_reason,omitempty"`
+	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
+	Usage            rawUsage        `json:"usage,omitempty"`
 
 	// rate_limit_event
 	RateLimitStatus      string  `json:"status,omitempty"`
 	RateLimitUtilization float64 `json:"utilization,omitempty"`
+
+	// control_request
+	RequestID string          `json:"request_id,omitempty"`
+	Request   json.RawMessage `json:"request,omitempty"`
+
+	// stream_event
+	UUID  string          `json:"uuid,omitempty"`
+	Event json.RawMessage `json:"event,omitempty"`
 }
 
 type rawMessage struct {
@@ -163,6 +194,7 @@ type rawContent struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
 	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`

@@ -14,8 +14,10 @@ type options struct {
 	binaryPath string
 
 	// model
-	model         Model
-	fallbackModel Model
+	model             Model
+	fallbackModel     Model
+	betas             []string
+	maxThinkingTokens int
 
 	// prompts
 	systemPrompt           string
@@ -29,7 +31,8 @@ type options struct {
 	builtinTools    []string
 
 	// permissions
-	permissionMode PermissionMode
+	permissionMode           PermissionMode
+	permissionPromptToolName string
 
 	// output
 	jsonSchema string
@@ -42,6 +45,7 @@ type options struct {
 	sessionID       string
 	forkSession     bool
 	continueSession bool
+	resume          string
 
 	// MCP
 	mcpConfig       []string
@@ -51,12 +55,26 @@ type options struct {
 	agent    string
 	agentDef string
 
+	// settings
+	settings       string
+	settingSources []string
+
+	// plugins
+	pluginDirs []string
+
 	// execution
 	addDirs                []string
 	workDir                string
 	effort                 string
 	env                    map[string]string
-	includePartialMessages bool
+	includePartialMessages  bool
+	extraArgs               map[string]string
+	user                    string
+	stderrCallback          func(string)
+	enableFileCheckpointing bool
+
+	// session callbacks
+	canUseTool ToolPermissionFunc
 }
 
 // WithBinaryPath sets the Claude CLI binary path. Only effective when passed
@@ -65,8 +83,10 @@ func WithBinaryPath(path string) Option {
 	return func(o *options) { o.binaryPath = path }
 }
 
-func WithModel(m Model) Option        { return func(o *options) { o.model = m } }
-func WithFallbackModel(m Model) Option { return func(o *options) { o.fallbackModel = m } }
+func WithModel(m Model) Option            { return func(o *options) { o.model = m } }
+func WithFallbackModel(m Model) Option    { return func(o *options) { o.fallbackModel = m } }
+func WithBetas(betas ...string) Option    { return func(o *options) { o.betas = betas } }
+func WithMaxThinkingTokens(n int) Option  { return func(o *options) { o.maxThinkingTokens = n } }
 
 func WithSystemPrompt(p string) Option     { return func(o *options) { o.systemPrompt = p } }
 func WithSystemPromptFile(p string) Option { return func(o *options) { o.systemPromptFile = p } }
@@ -94,6 +114,9 @@ func WithDisallowedTools(tools ...string) Option {
 func WithBuiltinTools(tools ...string) Option { return func(o *options) { o.builtinTools = tools } }
 
 func WithPermissionMode(m PermissionMode) Option { return func(o *options) { o.permissionMode = m } }
+func WithPermissionPromptToolName(name string) Option {
+	return func(o *options) { o.permissionPromptToolName = name }
+}
 func WithJSONSchema(schema string) Option        { return func(o *options) { o.jsonSchema = schema } }
 func WithMaxBudget(usd float64) Option           { return func(o *options) { o.maxBudget = usd } }
 func WithMaxTurns(n int) Option                  { return func(o *options) { o.maxTurns = n } }
@@ -113,9 +136,23 @@ func WithAgentDef(jsonDef string) Option { return func(o *options) { o.agentDef 
 // WithAddDirs adds directories the CLI tools can access beyond the working directory.
 func WithAddDirs(dirs ...string) Option { return func(o *options) { o.addDirs = dirs } }
 
-func WithWorkDir(dir string) Option    { return func(o *options) { o.workDir = dir } }
-func WithEffort(level string) Option   { return func(o *options) { o.effort = level } }
-func WithEnv(env map[string]string) Option { return func(o *options) { o.env = env } }
+func WithSettings(s string) Option               { return func(o *options) { o.settings = s } }
+func WithSettingSources(sources ...string) Option { return func(o *options) { o.settingSources = sources } }
+func WithPluginDirs(dirs ...string) Option        { return func(o *options) { o.pluginDirs = dirs } }
+func WithWorkDir(dir string) Option               { return func(o *options) { o.workDir = dir } }
+func WithEffort(level string) Option              { return func(o *options) { o.effort = level } }
+func WithEnv(env map[string]string) Option         { return func(o *options) { o.env = env } }
+func WithResume(sessionID string) Option           { return func(o *options) { o.resume = sessionID } }
+func WithExtraArgs(args map[string]string) Option  { return func(o *options) { o.extraArgs = args } }
+func WithUser(user string) Option                  { return func(o *options) { o.user = user } }
+func WithStderrCallback(fn func(string)) Option    { return func(o *options) { o.stderrCallback = fn } }
+func WithFileCheckpointing() Option                { return func(o *options) { o.enableFileCheckpointing = true } }
+
+// WithCanUseTool registers a callback for tool permission requests.
+// Only effective with Connect() sessions.
+func WithCanUseTool(fn ToolPermissionFunc) Option {
+	return func(o *options) { o.canUseTool = fn }
+}
 
 // WithIncludePartialMessages enables partial message chunks as they arrive.
 // Only works with streaming output format.
@@ -141,6 +178,7 @@ func (o *options) buildArgsWithFormat(format string) []string {
 	o.appendSessionArgs(&args)
 	o.appendMCPArgs(&args)
 	o.appendAgentArgs(&args)
+	o.appendSettingsArgs(&args)
 	o.appendExecArgs(&args)
 
 	return args
@@ -155,6 +193,12 @@ func (o *options) appendModelArgs(args *[]string) {
 
 	if o.fallbackModel != "" {
 		*args = append(*args, "--fallback-model", string(o.fallbackModel))
+	}
+	if len(o.betas) > 0 {
+		*args = append(*args, "--betas", strings.Join(o.betas, ","))
+	}
+	if o.maxThinkingTokens > 0 {
+		*args = append(*args, "--max-thinking-tokens", fmt.Sprintf("%d", o.maxThinkingTokens))
 	}
 }
 
@@ -211,6 +255,10 @@ func (o *options) appendSessionArgs(args *[]string) {
 		}
 		return
 	}
+	if o.resume != "" {
+		*args = append(*args, "--resume", o.resume)
+		return
+	}
 	if o.continueSession {
 		*args = append(*args, "--continue")
 		return
@@ -236,6 +284,18 @@ func (o *options) appendAgentArgs(args *[]string) {
 	}
 }
 
+func (o *options) appendSettingsArgs(args *[]string) {
+	if o.settings != "" {
+		*args = append(*args, "--settings", o.settings)
+	}
+	if len(o.settingSources) > 0 {
+		*args = append(*args, "--setting-sources", strings.Join(o.settingSources, ","))
+	}
+	for _, d := range o.pluginDirs {
+		*args = append(*args, "--plugin-dir", d)
+	}
+}
+
 func (o *options) appendExecArgs(args *[]string) {
 	for _, d := range o.addDirs {
 		*args = append(*args, "--add-dir", d)
@@ -243,6 +303,51 @@ func (o *options) appendExecArgs(args *[]string) {
 	if o.effort != "" {
 		*args = append(*args, "--effort", o.effort)
 	}
+	if o.user != "" {
+		*args = append(*args, "--user", o.user)
+	}
+	for k, v := range o.extraArgs {
+		*args = append(*args, "--"+k)
+		if v != "" {
+			*args = append(*args, v)
+		}
+	}
+}
+
+func (o *options) buildSessionArgs() []string {
+	args := []string{"--verbose", "--output-format", "stream-json", "--input-format", "stream-json"}
+
+	o.appendModelArgs(&args)
+	o.appendPromptArgs(&args)
+	o.appendToolArgs(&args)
+	o.appendOutputArgs(&args)
+
+	// Session mode: skip --no-session-persistence, keep session/continue flags
+	if o.sessionID != "" {
+		args = append(args, "--session-id", o.sessionID)
+		if o.forkSession {
+			args = append(args, "--fork-session")
+		}
+	} else if o.resume != "" {
+		args = append(args, "--resume", o.resume)
+	} else if o.continueSession {
+		args = append(args, "--continue")
+	}
+
+	o.appendMCPArgs(&args)
+	o.appendAgentArgs(&args)
+	o.appendSettingsArgs(&args)
+	o.appendExecArgs(&args)
+
+	if o.canUseTool != nil {
+		toolName := "stdio"
+		if o.permissionPromptToolName != "" {
+			toolName = o.permissionPromptToolName
+		}
+		args = append(args, "--permission-prompt-tool", toolName)
+	}
+
+	return args
 }
 
 // normalizeTools splits comma-separated tool names, trims whitespace, and deduplicates.

@@ -33,10 +33,11 @@ func (c *Client) RunBlocking(ctx context.Context, prompt string, opts ...Option)
 	args := resolved.buildBlockingArgs()
 
 	proc, err := c.executor.Start(ctx, &StartConfig{
-		Args:    args,
-		Stdin:   strings.NewReader(prompt),
-		Env:     resolved.env,
-		WorkDir: resolved.workDir,
+		Args:                    args,
+		Stdin:                   strings.NewReader(prompt),
+		Env:                     resolved.env,
+		WorkDir:                 resolved.workDir,
+		EnableFileCheckpointing: resolved.enableFileCheckpointing,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start: %w", err)

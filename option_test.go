@@ -1,6 +1,7 @@
 package claudecli
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 )
@@ -212,5 +213,139 @@ func TestToolsOverrideReplacesNotMerges(t *testing.T) {
 	}
 	if v, _ := argValue(args, "--allowedTools"); v != "Bash" {
 		t.Errorf("expected tool 'Bash', got %q", v)
+	}
+}
+
+func TestBuildArgsBetas(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithBetas("interleaved-thinking", "extended-output")}).buildArgs()
+
+	if v, ok := argValue(args, "--betas"); !ok || v != "interleaved-thinking,extended-output" {
+		t.Errorf("missing or wrong --betas: %q", v)
+	}
+}
+
+func TestBuildArgsMaxThinkingTokens(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithMaxThinkingTokens(4096)}).buildArgs()
+
+	if v, ok := argValue(args, "--max-thinking-tokens"); !ok || v != "4096" {
+		t.Errorf("missing or wrong --max-thinking-tokens: %q", v)
+	}
+}
+
+func TestBuildArgsSettings(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithSettings("/tmp/settings.json")}).buildArgs()
+
+	if v, ok := argValue(args, "--settings"); !ok || v != "/tmp/settings.json" {
+		t.Errorf("missing or wrong --settings: %q", v)
+	}
+}
+
+func TestBuildArgsSettingSources(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithSettingSources("user", "project")}).buildArgs()
+
+	if v, ok := argValue(args, "--setting-sources"); !ok || v != "user,project" {
+		t.Errorf("missing or wrong --setting-sources: %q", v)
+	}
+}
+
+func TestBuildArgsPluginDirs(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithPluginDirs("/tmp/plugins", "/opt/plugins")}).buildArgs()
+
+	if n := argCount(args, "--plugin-dir"); n != 2 {
+		t.Errorf("expected 2 --plugin-dir flags, got %d", n)
+	}
+}
+
+func TestBuildSessionArgs(t *testing.T) {
+	opts := resolveOptions(nil, []Option{
+		WithModel(ModelOpus),
+		WithSessionID("sess-123"),
+	})
+	args := opts.buildSessionArgs()
+
+	if v, ok := argValue(args, "--input-format"); !ok || v != "stream-json" {
+		t.Error("missing --input-format stream-json")
+	}
+	for _, a := range args {
+		if a == "--print" {
+			t.Error("session args should not have --print")
+		}
+		if a == "--no-session-persistence" {
+			t.Error("session args should not have --no-session-persistence")
+		}
+	}
+}
+
+func TestBuildArgsResume(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithResume("sess-abc")}).buildArgs()
+
+	if v, ok := argValue(args, "--resume"); !ok || v != "sess-abc" {
+		t.Errorf("missing or wrong --resume: %q", v)
+	}
+	if slices.Contains(args, "--no-session-persistence") {
+		t.Error("should not have --no-session-persistence with resume")
+	}
+}
+
+func TestBuildArgsExtraArgs(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithExtraArgs(map[string]string{
+		"custom-flag": "value1",
+		"bool-flag":   "",
+	})}).buildArgs()
+
+	if v, ok := argValue(args, "--custom-flag"); !ok || v != "value1" {
+		t.Errorf("missing or wrong --custom-flag: %q", v)
+	}
+	if !slices.Contains(args, "--bool-flag") {
+		t.Error("missing --bool-flag")
+	}
+}
+
+func TestBuildArgsUser(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithUser("user-123")}).buildArgs()
+
+	if v, ok := argValue(args, "--user"); !ok || v != "user-123" {
+		t.Errorf("missing or wrong --user: %q", v)
+	}
+}
+
+func TestBuildArgsPermissionPromptToolName(t *testing.T) {
+	opts := resolveOptions(nil, []Option{
+		WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {
+			return &PermissionResponse{Allow: true}, nil
+		}),
+		WithPermissionPromptToolName("custom-tool"),
+	})
+	args := opts.buildSessionArgs()
+
+	if v, ok := argValue(args, "--permission-prompt-tool"); !ok || v != "custom-tool" {
+		t.Errorf("missing or wrong --permission-prompt-tool: %q", v)
+	}
+}
+
+func TestBuildArgsEffort(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithEffort("high")}).buildArgs()
+
+	if v, ok := argValue(args, "--effort"); !ok || v != "high" {
+		t.Errorf("missing or wrong --effort: %q", v)
+	}
+}
+
+func TestBuildSessionArgsWithCanUseTool(t *testing.T) {
+	opts := resolveOptions(nil, []Option{
+		WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {
+			return &PermissionResponse{Allow: true}, nil
+		}),
+	})
+	args := opts.buildSessionArgs()
+
+	var hasPermTool bool
+	for i, a := range args {
+		if a == "--permission-prompt-tool" && i+1 < len(args) && args[i+1] == "stdio" {
+			hasPermTool = true
+		}
+	}
+	if !hasPermTool {
+		t.Error("missing --permission-prompt-tool stdio")
 	}
 }

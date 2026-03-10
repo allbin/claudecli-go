@@ -1,6 +1,7 @@
 package claudecli
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"testing"
@@ -258,6 +259,69 @@ func TestParseToolResultStringContent(t *testing.T) {
 	}
 }
 
+func TestParseControlRequest(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"control_request","request_id":"req_1","request":{"subtype":"can_use_tool","tool_name":"Bash"}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var gotControl bool
+	for _, e := range events {
+		if cr, ok := e.(*ControlRequestEvent); ok {
+			gotControl = true
+			if cr.RequestID != "req_1" {
+				t.Errorf("expected request_id 'req_1', got %q", cr.RequestID)
+			}
+			if cr.Subtype != "can_use_tool" {
+				t.Errorf("expected subtype 'can_use_tool', got %q", cr.Subtype)
+			}
+		}
+	}
+	if !gotControl {
+		t.Error("no ControlRequestEvent found")
+	}
+}
+
+func TestParseStreamEvent(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"stream_event","uuid":"abc-123","session_id":"test","event":{"type":"content_block_delta"}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var gotStream bool
+	for _, e := range events {
+		if se, ok := e.(*StreamEvent); ok {
+			gotStream = true
+			if se.UUID != "abc-123" {
+				t.Errorf("expected uuid 'abc-123', got %q", se.UUID)
+			}
+		}
+	}
+	if !gotStream {
+		t.Error("no StreamEvent found")
+	}
+}
+
 func TestParseReturnsAfterResult(t *testing.T) {
 	// Simulate a CLI that keeps stdout open after result (known bug).
 	// ParseEvents should return after the result event without blocking.
@@ -291,5 +355,104 @@ func TestParseReturnsAfterResult(t *testing.T) {
 	}
 	if !gotResult {
 		t.Error("missing ResultEvent")
+	}
+}
+
+func TestParseResultStopReason(t *testing.T) {
+	input := `{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
+{"type":"result","subtype":"success","stop_reason":"end_turn","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var result *ResultEvent
+	for _, e := range events {
+		if r, ok := e.(*ResultEvent); ok {
+			result = r
+		}
+	}
+	if result == nil {
+		t.Fatal("no ResultEvent found")
+	}
+	if result.StopReason != "end_turn" {
+		t.Errorf("expected stop_reason 'end_turn', got %q", result.StopReason)
+	}
+	if !strings.Contains(result.String(), "StopReason: end_turn") {
+		t.Error("String() should include StopReason when set")
+	}
+}
+
+func TestParseResultStructuredOutput(t *testing.T) {
+	input := `{"type":"result","subtype":"success","stop_reason":"end_turn","structured_output":{"name":"test","value":42},"total_cost_usd":0.02,"usage":{"input_tokens":20,"output_tokens":10}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var result *ResultEvent
+	for _, e := range events {
+		if r, ok := e.(*ResultEvent); ok {
+			result = r
+		}
+	}
+	if result == nil {
+		t.Fatal("no ResultEvent found")
+	}
+	if result.StructuredOutput == nil {
+		t.Fatal("expected non-nil StructuredOutput")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(result.StructuredOutput, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal StructuredOutput: %v", err)
+	}
+	if parsed["name"] != "test" {
+		t.Errorf("expected name 'test', got %v", parsed["name"])
+	}
+}
+
+func TestParseThinkingSignature(t *testing.T) {
+	input := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"let me think","signature":"sig_abc123"}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var thinking *ThinkingEvent
+	for _, e := range events {
+		if te, ok := e.(*ThinkingEvent); ok {
+			thinking = te
+		}
+	}
+	if thinking == nil {
+		t.Fatal("no ThinkingEvent found")
+	}
+	if thinking.Content != "let me think" {
+		t.Errorf("expected content 'let me think', got %q", thinking.Content)
+	}
+	if thinking.Signature != "sig_abc123" {
+		t.Errorf("expected signature 'sig_abc123', got %q", thinking.Signature)
 	}
 }

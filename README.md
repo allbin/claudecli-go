@@ -169,6 +169,57 @@ stream := client.Run(ctx, "Check the code",
 )
 ```
 
+## Interactive sessions
+
+`Connect()` starts a bidirectional session with the CLI's control protocol. Supports multi-turn conversations, programmatic tool permission callbacks, and mid-session model/permission changes.
+
+```go
+session, err := client.Connect(ctx,
+    claudecli.WithModel(claudecli.ModelSonnet),
+    claudecli.WithCanUseTool(func(name string, input json.RawMessage) (*claudecli.PermissionResponse, error) {
+        if name == "Bash" {
+            return &claudecli.PermissionResponse{Allow: false, DenyMessage: "no shell"}, nil
+        }
+        return &claudecli.PermissionResponse{Allow: true}, nil
+    }),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer session.Close()
+
+// Send queries
+session.Query("What files are in this directory?")
+
+// Read events
+for event := range session.Events() {
+    switch e := event.(type) {
+    case *claudecli.TextEvent:
+        fmt.Print(e.Content)
+    case *claudecli.ResultEvent:
+        fmt.Printf("\nDone: $%.4f\n", e.CostUSD)
+    }
+}
+
+// Or block until completion
+result, err := session.Wait()
+```
+
+Session methods:
+- `Query(prompt)` — send a user message
+- `Events()` — event channel
+- `Wait()` — block until result (idempotent)
+- `Interrupt()` — send interrupt signal
+- `SetPermissionMode(mode)` — change permissions mid-session
+- `SetModel(model)` — change model mid-session
+- `GetServerInfo()` — raw JSON from the initialize handshake
+- `RewindFiles(userMessageID)` — rewind files to a checkpoint
+- `ReconnectMCPServer(name)` — reconnect a named MCP server
+- `ToggleMCPServer(name, enabled)` — enable/disable an MCP server
+- `StopTask(taskID)` — stop a running task
+- `GetMCPStatus()` — query MCP server status
+- `Close()` — terminate session
+
 ## Custom executor
 
 The `Executor` interface controls how the CLI process is spawned. Implement it to run Claude in Docker, over SSH, or any other environment.
@@ -179,10 +230,12 @@ type Executor interface {
 }
 
 type StartConfig struct {
-    Args    []string
-    Stdin   io.Reader
-    Env     map[string]string
-    WorkDir string
+    Args                    []string
+    Stdin                   io.Reader
+    Env                     map[string]string
+    WorkDir                 string
+    KeepStdinOpen           bool
+    EnableFileCheckpointing bool
 }
 ```
 
@@ -238,6 +291,22 @@ func TestMyFeature(t *testing.T) {
 }
 ```
 
+For testing interactive sessions, use `BidiFixtureExecutor`:
+
+```go
+bidi := claudecli.NewBidiFixtureExecutor()
+client := claudecli.NewWithExecutor(bidi)
+
+go func() {
+    // Simulate CLI responses on bidi.StdoutWriter
+    // Read SDK requests from bidi.StdinReader
+    bidi.StdoutWriter.Write([]byte(`{"type":"system","session_id":"test","model":"sonnet"}` + "\n"))
+    bidi.StdoutWriter.Close()
+}()
+
+session, _ := client.Connect(ctx)
+```
+
 You can also parse JSONL directly:
 
 ```go
@@ -259,13 +328,15 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `*StartEvent`      | Emitted before process launch. Contains resolved model, args, working dir.                                                  |
 | `*InitEvent`       | CLI session started. Session ID, model, available tools.                                                                    |
-| `*ThinkingEvent`   | Extended thinking content.                                                                                                  |
+| `*ThinkingEvent`   | Extended thinking content. Includes `Signature` for verification.                                                            |
 | `*TextEvent`       | Assistant text output.                                                                                                      |
 | `*ToolUseEvent`    | Tool invocation with name and input.                                                                                        |
 | `*ToolResultEvent` | Result from a tool invocation.                                                                                              |
 | `*RateLimitEvent`  | Rate limit status and utilization.                                                                                          |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
-| `*ResultEvent`     | Session complete. Accumulated text, cost, duration, token usage. Synthesized if CLI exits cleanly without one.               |
+| `*ResultEvent`     | Session complete. Text, cost, duration, usage, `StopReason`, `StructuredOutput`. Synthesized if CLI exits cleanly without one. |
+| `*ControlRequestEvent` | Control request from CLI (handled internally in sessions).                                                              |
+| `*StreamEvent`     | Partial message update (when `WithIncludePartialMessages` is on).                                                            |
 | `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal parse errors. |
 
 ## Options
@@ -275,6 +346,8 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithBinaryPath(string)`             | Path to the `claude` binary. Only effective in `New()`. Default: `"claude"`.                          |
 | `WithModel(Model)`                   | Model to use (`ModelHaiku`, `ModelSonnet`, `ModelOpus`). Default: `ModelSonnet`.                      |
 | `WithFallbackModel(Model)`           | Fallback model if primary is unavailable.                                                             |
+| `WithBetas(...string)`               | Beta features to enable.                                                                              |
+| `WithMaxThinkingTokens(int)`         | Maximum thinking tokens for extended thinking.                                                        |
 | `WithSystemPrompt(string)`           | System prompt.                                                                                        |
 | `WithSystemPromptFile(string)`       | Load system prompt from a file.                                                                       |
 | `WithAppendSystemPrompt(string)`     | Append to the default system prompt.                                                                  |
@@ -297,7 +370,17 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithAgent(string)`                  | Named agent for the session.                                                                          |
 | `WithAgentDef(string)`               | Custom agent definitions as JSON.                                                                     |
 | `WithIncludePartialMessages()`       | Include partial message chunks (streaming only).                                                      |
+| `WithSettings(string)`               | Path to settings file.                                                                                |
+| `WithSettingSources(...string)`      | Setting sources (comma-joined).                                                                       |
+| `WithPluginDirs(...string)`          | Plugin directories.                                                                                   |
+| `WithResume(string)`                 | Resume a session by ID (mutually exclusive with `WithSessionID`/`WithContinue`).                      |
+| `WithCanUseTool(ToolPermissionFunc)` | Tool permission callback (sessions only).                                                             |
+| `WithPermissionPromptToolName(string)` | Custom permission prompt tool name (default: `"stdio"`). Sessions only.                             |
 | `WithEnv(map[string]string)`         | Additional environment variables.                                                                     |
+| `WithExtraArgs(map[string]string)`   | Arbitrary `--key value` flags for forward compatibility. Empty value emits flag only.                  |
+| `WithUser(string)`                   | User identifier passed to the CLI.                                                                    |
+| `WithStderrCallback(func(string))`   | Called per stderr line in addition to `StderrEvent` emission.                                         |
+| `WithFileCheckpointing()`            | Enable SDK file checkpointing via `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING` env var.                |
 
 Options set at call time **replace** (not merge with) client-level defaults.
 
@@ -334,11 +417,14 @@ claudecli-go/
   model.go       Model constants
   permission.go  PermissionMode constants
   option.go      Functional options + CLI arg builder
-  executor.go    Executor interface, LocalExecutor, FixtureExecutor
+  executor.go    Executor interface, LocalExecutor, FixtureExecutor, BidiFixtureExecutor
   parse.go       JSONL stream parser (decoupled from process lifecycle)
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
-  client.go      Client struct, Run/RunText/RunJSON, package-level shortcuts
+  client.go      Client struct, Run/RunText/RunJSON/Connect, package-level shortcuts
+  session.go     Interactive session with bidirectional control protocol
+  control.go     Control message types for the bidirectional protocol
   blocking.go    RunBlocking/RunBlockingJSON — non-streaming JSON output mode
+  version.go     CLI version checking with semver parsing
   error.go       Typed Error (ExitCode, Stderr, Message), UnmarshalError (RawText)
 ```
 
@@ -346,8 +432,9 @@ claudecli-go/
 
 1. **Parse** (`parse.go`) — JSONL deserialization into typed events. Zero coupling to process execution. Testable with fixtures. Returns immediately after the result event to avoid blocking on CLI hang bugs.
 2. **Execute** (`executor.go`) — `Executor` interface abstracts process spawning. `LocalExecutor` handles the real CLI with platform-aware line buffering (`stdbuf -oL` on Linux).
-3. **Client** (`client.go`) — Composes executor + options. Builds CLI args, starts process synchronously, reads events in goroutine. Synthesizes `ResultEvent` if CLI exits without one.
-4. **Blocking** (`blocking.go`) — Non-streaming path using `--output-format json`. Simpler execution model for `RunBlocking`/`RunBlockingJSON`.
+3. **Client** (`client.go`) — Composes executor + options. Builds CLI args, starts process synchronously, reads events in goroutine. Synthesizes `ResultEvent` if CLI exits without one. `Connect()` creates interactive sessions.
+4. **Session** (`session.go`) — Bidirectional control protocol over stdin/stdout. Handles initialize handshake, control request routing (tool permissions), and multi-turn conversations.
+5. **Blocking** (`blocking.go`) — Non-streaming path using `--output-format json`. Simpler execution model for `RunBlocking`/`RunBlockingJSON`.
 
 ## Known limitations / TODO
 

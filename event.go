@@ -39,7 +39,8 @@ func (e *InitEvent) String() string {
 
 // ThinkingEvent contains extended thinking output.
 type ThinkingEvent struct {
-	Content string
+	Content   string
+	Signature string
 }
 
 func (*ThinkingEvent) event() {}
@@ -103,16 +104,22 @@ func (e *StderrEvent) String() string {
 
 // ResultEvent is emitted at the end of a successful session.
 type ResultEvent struct {
-	Text      string
-	Subtype   string
-	Duration  time.Duration
-	CostUSD   float64
-	SessionID string
-	Usage     Usage
+	Text             string
+	Subtype          string
+	StopReason       string
+	StructuredOutput json.RawMessage
+	Duration         time.Duration
+	CostUSD          float64
+	SessionID        string
+	Usage            Usage
 }
 
 func (*ResultEvent) event() {}
 func (e *ResultEvent) String() string {
+	if e.StopReason != "" {
+		return fmt.Sprintf("ResultEvent{Cost: $%.4f, Duration: %s, Tokens: %d/%d, StopReason: %s}",
+			e.CostUSD, e.Duration, e.Usage.InputTokens, e.Usage.OutputTokens, e.StopReason)
+	}
 	return fmt.Sprintf("ResultEvent{Cost: $%.4f, Duration: %s, Tokens: %d/%d}",
 		e.CostUSD, e.Duration, e.Usage.InputTokens, e.Usage.OutputTokens)
 }
@@ -129,6 +136,31 @@ func (*ErrorEvent) event() {}
 func (e *ErrorEvent) String() string { return fmt.Sprintf("ErrorEvent{Fatal: %v, Err: %v}", e.Fatal, e.Err) }
 func (e *ErrorEvent) Error() string  { return e.Err.Error() }
 func (e *ErrorEvent) Unwrap() error  { return e.Err }
+
+// ControlRequestEvent is emitted when the CLI sends a control request.
+// In session mode, these are handled internally and not exposed.
+type ControlRequestEvent struct {
+	RequestID string
+	Subtype   string
+	Body      json.RawMessage
+}
+
+func (*ControlRequestEvent) event() {}
+func (e *ControlRequestEvent) String() string {
+	return fmt.Sprintf("ControlRequestEvent{RequestID: %s, Subtype: %s}", e.RequestID, e.Subtype)
+}
+
+// StreamEvent represents a partial message update (when include_partial_messages is on).
+type StreamEvent struct {
+	UUID      string
+	SessionID string
+	Event     json.RawMessage
+}
+
+func (*StreamEvent) event() {}
+func (e *StreamEvent) String() string {
+	return fmt.Sprintf("StreamEvent{UUID: %s}", e.UUID)
+}
 
 // Usage contains token usage statistics.
 type Usage struct {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"runtime"
@@ -13,19 +14,25 @@ import (
 	"time"
 )
 
+// SDKVersion is the version of this Go SDK, sent as an env var to the CLI.
+const SDKVersion = "0.2.0"
+
 // Process represents a running CLI subprocess.
 type Process struct {
 	Stdout io.ReadCloser
 	Stderr io.ReadCloser
+	Stdin  io.WriteCloser // nil when stdin was closed after initial write
 	Wait   func() error
 }
 
 // StartConfig holds parameters for starting a CLI process.
 type StartConfig struct {
-	Args    []string
-	Stdin   io.Reader
-	Env     map[string]string
-	WorkDir string
+	Args          []string
+	Stdin         io.Reader
+	Env           map[string]string
+	WorkDir                 string
+	KeepStdinOpen           bool // if true, don't close stdin after initial write
+	EnableFileCheckpointing bool
 }
 
 // Executor controls how the Claude CLI process is spawned.
@@ -63,8 +70,33 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 		}
 	}
 
-	cmd.Stdin = cfg.Stdin
-	cmd.Env = buildEnv(cfg.Env)
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("stdin pipe: %w", err)
+	}
+
+	if cfg.Stdin != nil {
+		if cfg.KeepStdinOpen {
+			go func() {
+				io.Copy(stdinPipe, cfg.Stdin)
+			}()
+		} else {
+			go func() {
+				io.Copy(stdinPipe, cfg.Stdin)
+				stdinPipe.Close()
+			}()
+		}
+	} else if !cfg.KeepStdinOpen {
+		stdinPipe.Close()
+	}
+
+	envOverrides := cfg.Env
+	if cfg.EnableFileCheckpointing {
+		envOverrides = make(map[string]string, len(cfg.Env)+1)
+		maps.Copy(envOverrides, cfg.Env)
+		envOverrides["CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"] = "1"
+	}
+	cmd.Env = buildEnv(envOverrides)
 	if runtime.GOOS != "windows" {
 		cmd.Cancel = func() error {
 			return cmd.Process.Signal(syscall.SIGTERM)
@@ -92,16 +124,17 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 	return &Process{
 		Stdout: stdout,
 		Stderr: stderr,
+		Stdin:  stdinPipe,
 		Wait:   cmd.Wait,
 	}, nil
 }
 
 // buildEnv merges the current environment with overrides, deduplicating keys.
 func buildEnv(overrides map[string]string) []string {
-	env := make([]string, 0, len(os.Environ())+len(overrides))
+	env := make([]string, 0, len(os.Environ())+len(overrides)+2)
 	for _, e := range os.Environ() {
 		key, _, _ := strings.Cut(e, "=")
-		if key == "CLAUDECODE" {
+		if key == "CLAUDECODE" || key == "CLAUDE_CODE_ENTRYPOINT" {
 			continue
 		}
 		if _, ok := overrides[key]; ok {
@@ -112,6 +145,8 @@ func buildEnv(overrides map[string]string) []string {
 	for k, v := range overrides {
 		env = append(env, k+"="+v)
 	}
+	env = append(env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
+	env = append(env, "CLAUDE_AGENT_SDK_VERSION="+SDKVersion)
 	return env
 }
 
@@ -145,6 +180,35 @@ func (e *FixtureExecutor) Start(_ context.Context, _ *StartConfig) (*Process, er
 	return &Process{
 		Stdout: pr,
 		Stderr: io.NopCloser(strings.NewReader("")),
+		Wait:   func() error { return nil },
+	}, nil
+}
+
+// BidiFixtureExecutor supports bidirectional I/O for testing sessions.
+type BidiFixtureExecutor struct {
+	StdoutWriter io.WriteCloser
+	StdinReader  io.ReadCloser
+	stdoutReader io.ReadCloser
+	stdinWriter  io.WriteCloser
+}
+
+// NewBidiFixtureExecutor creates a bidirectional executor for session tests.
+func NewBidiFixtureExecutor() *BidiFixtureExecutor {
+	stdoutR, stdoutW := io.Pipe()
+	stdinR, stdinW := io.Pipe()
+	return &BidiFixtureExecutor{
+		StdoutWriter: stdoutW,
+		StdinReader:  stdinR,
+		stdoutReader: stdoutR,
+		stdinWriter:  stdinW,
+	}
+}
+
+func (e *BidiFixtureExecutor) Start(_ context.Context, _ *StartConfig) (*Process, error) {
+	return &Process{
+		Stdout: e.stdoutReader,
+		Stderr: io.NopCloser(strings.NewReader("")),
+		Stdin:  e.stdinWriter,
 		Wait:   func() error { return nil },
 	}, nil
 }
