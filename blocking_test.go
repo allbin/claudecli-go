@@ -13,12 +13,13 @@ import (
 // without JSONL parsing.
 type staticExecutor struct {
 	stdout []byte
+	stderr string
 }
 
 func (e *staticExecutor) Start(_ context.Context, _ *StartConfig) (*Process, error) {
 	return &Process{
 		Stdout: io.NopCloser(bytes.NewReader(e.stdout)),
-		Stderr: io.NopCloser(strings.NewReader("")),
+		Stderr: io.NopCloser(strings.NewReader(e.stderr)),
 		Wait:   func() error { return nil },
 	}, nil
 }
@@ -128,5 +129,51 @@ func TestRunBlockingStartFailure(t *testing.T) {
 	_, err := client.RunBlocking(context.Background(), "ignored")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestRunBlockingStderrCallback(t *testing.T) {
+	exec := &staticExecutor{
+		stdout: []byte(blockingFixture),
+		stderr: "warn: rate limit\nerror: retry\n",
+	}
+	client := NewWithExecutor(exec)
+
+	var lines []string
+	result, err := client.RunBlocking(context.Background(), "ignored",
+		WithStderrCallback(func(line string) {
+			lines = append(lines, line)
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 callback lines, got %d", len(lines))
+	}
+	if lines[0] != "warn: rate limit" {
+		t.Errorf("line 0 = %q", lines[0])
+	}
+	if lines[1] != "error: retry" {
+		t.Errorf("line 1 = %q", lines[1])
+	}
+	if result.Stderr != "warn: rate limit\nerror: retry" {
+		t.Errorf("Stderr = %q", result.Stderr)
+	}
+}
+
+func TestRunBlockingStderrPopulated(t *testing.T) {
+	exec := &staticExecutor{
+		stdout: []byte(blockingFixture),
+		stderr: "some warning\n",
+	}
+	client := NewWithExecutor(exec)
+
+	result, err := client.RunBlocking(context.Background(), "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Stderr != "some warning" {
+		t.Errorf("Stderr = %q, want %q", result.Stderr, "some warning")
 	}
 }

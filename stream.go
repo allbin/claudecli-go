@@ -11,6 +11,7 @@ type State int
 
 const (
 	StateStarting State = iota
+	StateIdle
 	StateRunning
 	StateDone
 	StateFailed
@@ -20,6 +21,8 @@ func (s State) String() string {
 	switch s {
 	case StateStarting:
 		return "starting"
+	case StateIdle:
+		return "idle"
 	case StateRunning:
 		return "running"
 	case StateDone:

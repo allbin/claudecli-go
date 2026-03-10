@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -33,6 +34,7 @@ type StartConfig struct {
 	WorkDir                 string
 	KeepStdinOpen           bool // if true, don't close stdin after initial write
 	EnableFileCheckpointing bool
+	SkipVersionCheck        bool
 }
 
 // Executor controls how the Claude CLI process is spawned.
@@ -45,6 +47,9 @@ type Executor interface {
 type LocalExecutor struct {
 	// BinaryPath overrides the CLI binary. Defaults to "claude".
 	BinaryPath string
+
+	versionOnce sync.Once
+	versionErr  error
 }
 
 // NewLocalExecutor returns an executor that runs Claude CLI locally.
@@ -56,6 +61,18 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 	binary := e.BinaryPath
 	if binary == "" {
 		binary = "claude"
+	}
+
+	if !cfg.SkipVersionCheck {
+		e.versionOnce.Do(func() {
+			err := CheckCLIVersion(ctx, binary)
+			if _, ok := err.(*VersionError); ok {
+				e.versionErr = err
+			}
+		})
+		if e.versionErr != nil {
+			return nil, e.versionErr
+		}
 	}
 
 	resolvedBinary, err := exec.LookPath(binary)

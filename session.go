@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+const controlRequestTimeout = 5 * time.Second
+
 // Session represents a long-lived interactive Claude CLI session with
 // bidirectional control protocol support.
 //
@@ -39,18 +41,52 @@ type Session struct {
 	sessionID  string
 	serverInfo json.RawMessage
 	stateMu    sync.Mutex
-	state     State
-	result    *ResultEvent
-	err       error
-	waited    bool
+	state      State
+	result     *ResultEvent
+	err        error
+	waited     bool
 }
 
 // Events returns the event channel. Closed when session ends.
 // Control requests are handled internally and not exposed here.
 func (s *Session) Events() <-chan Event { return s.events }
 
+// State returns the current lifecycle state.
+func (s *Session) State() State {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.state
+}
+
+// SessionID returns the session ID assigned by the CLI.
+func (s *Session) SessionID() string {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.sessionID
+}
+
 // Query sends a user message to the CLI.
 func (s *Session) Query(prompt string) error {
+	s.stateMu.Lock()
+	switch s.state {
+	case StateFailed:
+		err := s.err
+		s.stateMu.Unlock()
+		return fmt.Errorf("session failed: %w", err)
+	case StateRunning:
+		s.stateMu.Unlock()
+		return fmt.Errorf("query already in progress")
+	case StateDone:
+		s.stateMu.Unlock()
+		return fmt.Errorf("session ended")
+	}
+	// Valid: StateStarting (initial query), StateIdle (subsequent queries)
+	s.state = StateRunning
+	s.waited = false
+	s.result = nil
+	s.err = nil
+	s.stateMu.Unlock()
+
 	msg := userMessage{
 		Type:            "user",
 		SessionID:       s.sessionID,
@@ -64,8 +100,9 @@ func (s *Session) Query(prompt string) error {
 	return s.writeStdin(append(data, '\n'))
 }
 
-// Wait blocks until a ResultEvent or error, draining remaining events.
-// Idempotent: multiple calls return the same result.
+// Wait blocks until a ResultEvent or error for the current query.
+// In multi-turn sessions, returns after each result (not at process exit).
+// Idempotent within a single query: multiple calls return the same result.
 func (s *Session) Wait() (*ResultEvent, error) {
 	s.stateMu.Lock()
 	if s.waited {
@@ -75,7 +112,14 @@ func (s *Session) Wait() (*ResultEvent, error) {
 	}
 	s.stateMu.Unlock()
 
-	for range s.events {
+	for ev := range s.events {
+		if _, ok := ev.(*ResultEvent); ok {
+			s.stateMu.Lock()
+			s.waited = true
+			result, err := s.result, s.err
+			s.stateMu.Unlock()
+			return result, err
+		}
 	}
 	<-s.done
 
@@ -153,9 +197,12 @@ func (s *Session) writeStdin(data []byte) error {
 	return err
 }
 
-// sendControlRequest sends a control request to the CLI (fire-and-forget).
+// sendControlRequest sends a control request and waits for the CLI's response.
 func (s *Session) sendControlRequest(subtype string, data map[string]any) error {
 	id := fmt.Sprintf("req_%d", s.reqCounter.Add(1))
+	resultCh := make(chan controlResult, 1)
+	s.pending.Store(id, resultCh)
+	defer s.pending.Delete(id)
 
 	reqMap := map[string]any{
 		"subtype": subtype,
@@ -172,7 +219,21 @@ func (s *Session) sendControlRequest(subtype string, data map[string]any) error 
 	if err != nil {
 		return err
 	}
-	return s.writeStdin(append(raw, '\n'))
+	if err := s.writeStdin(append(raw, '\n')); err != nil {
+		return err
+	}
+
+	select {
+	case result := <-resultCh:
+		if result.Err != nil {
+			return fmt.Errorf("%s: %w", subtype, result.Err)
+		}
+		return nil
+	case <-time.After(controlRequestTimeout):
+		return fmt.Errorf("%s: timeout after %s", subtype, controlRequestTimeout)
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
 }
 
 // initialize sends the initialize control request and waits for response.
@@ -213,6 +274,7 @@ func (s *Session) initialize() error {
 func (s *Session) readLoop() {
 	defer close(s.done)
 	defer close(s.events)
+	defer s.setDoneState()
 
 	stderrLines, stderrDone := scanStderr(s.proc, s.events, nil)
 
@@ -241,6 +303,7 @@ func (s *Session) readLoop() {
 			go s.handleControlRequest(raw.RequestID, raw.Request)
 
 		case "system":
+			resultText = nil
 			ev := &InitEvent{SessionID: raw.SessionID, Model: raw.Model, Tools: raw.Tools}
 			s.sessionID = raw.SessionID
 			s.trackState(ev)
@@ -320,15 +383,26 @@ func (s *Session) readLoop() {
 			s.sendEvent(ev)
 			return
 		}
+		stderr := strings.Join(*stderrLines, "\n")
 		ev := &ErrorEvent{
 			Err: &Error{
 				ExitCode: exitErr.ExitCode(),
-				Stderr:   strings.Join(*stderrLines, "\n"),
+				Stderr:   stderr,
+				Details:  parseErrorDetails(stderr),
 			},
 			Fatal: true,
 		}
 		s.trackState(ev)
 		s.sendEvent(ev)
+	}
+}
+
+// setDoneState transitions to StateDone when readLoop exits (process ended).
+func (s *Session) setDoneState() {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.state != StateFailed {
+		s.state = StateDone
 	}
 }
 
@@ -346,7 +420,7 @@ func (s *Session) trackState(event Event) {
 	case *InitEvent:
 		s.state = StateRunning
 	case *ResultEvent:
-		s.state = StateDone
+		s.state = StateIdle
 		s.result = e
 	case *ErrorEvent:
 		if e.Fatal {

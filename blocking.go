@@ -23,6 +23,7 @@ type BlockingResult struct {
 	NumTurns         int
 	IsError          bool
 	Usage            Usage
+	Stderr           string
 }
 
 // RunBlocking runs a prompt with --output-format json (no streaming).
@@ -38,6 +39,7 @@ func (c *Client) RunBlocking(ctx context.Context, prompt string, opts ...Option)
 		Env:                     resolved.env,
 		WorkDir:                 resolved.workDir,
 		EnableFileCheckpointing: resolved.enableFileCheckpointing,
+		SkipVersionCheck:        resolved.skipVersionCheck,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("start: %w", err)
@@ -53,7 +55,19 @@ func (c *Client) RunBlocking(ctx context.Context, prompt string, opts ...Option)
 		return nil, fmt.Errorf("read stdout: %w", readErr)
 	}
 
-	return parseBlockingJSON(stdout)
+	stderrStr := strings.TrimSpace(string(stderrOut))
+	if stderrStr != "" && resolved.stderrCallback != nil {
+		for _, line := range strings.Split(stderrStr, "\n") {
+			resolved.stderrCallback(line)
+		}
+	}
+
+	result, err := parseBlockingJSON(stdout)
+	if err != nil {
+		return nil, err
+	}
+	result.Stderr = stderrStr
+	return result, nil
 }
 
 // RunBlockingJSON runs a prompt with --output-format json and unmarshals the result into T.
@@ -87,9 +101,11 @@ func blockingProcessError(err error, stderr []byte) error {
 	if !ok {
 		return err
 	}
+	s := strings.TrimSpace(string(stderr))
 	return &Error{
 		ExitCode: exitErr.ExitCode(),
-		Stderr:   strings.TrimSpace(string(stderr)),
+		Stderr:   s,
+		Details:  parseErrorDetails(s),
 	}
 }
 

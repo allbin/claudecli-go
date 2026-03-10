@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"slices"
 	"testing"
+	"time"
 )
 
 // argValue returns the value following flag in args, or "" if not found.
@@ -320,6 +321,22 @@ func TestBuildArgsPermissionPromptToolName(t *testing.T) {
 
 	if v, ok := argValue(args, "--permission-prompt-tool"); !ok || v != "custom-tool" {
 		t.Errorf("missing or wrong --permission-prompt-tool: %q", v)
+	}
+}
+
+func TestBuildArgsTimeout(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithTimeout(90 * time.Second)}).buildArgs()
+
+	if v, ok := argValue(args, "--timeout"); !ok || v != "90" {
+		t.Errorf("missing or wrong --timeout: %q", v)
+	}
+}
+
+func TestBuildArgsTimeoutZeroOmitted(t *testing.T) {
+	args := resolveOptions(nil, nil).buildArgs()
+
+	if slices.Contains(args, "--timeout") {
+		t.Error("--timeout should not appear when unset")
 	}
 }
 

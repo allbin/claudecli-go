@@ -3,6 +3,7 @@ package claudecli
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Option configures a Run call. Options set at call time
@@ -63,6 +64,7 @@ type options struct {
 	pluginDirs []string
 
 	// execution
+	timeout                time.Duration
 	addDirs                []string
 	workDir                string
 	effort                 string
@@ -75,6 +77,9 @@ type options struct {
 
 	// session callbacks
 	canUseTool ToolPermissionFunc
+
+	// version check
+	skipVersionCheck bool
 }
 
 // WithBinaryPath sets the Claude CLI binary path. Only effective when passed
@@ -145,8 +150,10 @@ func WithEnv(env map[string]string) Option         { return func(o *options) { o
 func WithResume(sessionID string) Option           { return func(o *options) { o.resume = sessionID } }
 func WithExtraArgs(args map[string]string) Option  { return func(o *options) { o.extraArgs = args } }
 func WithUser(user string) Option                  { return func(o *options) { o.user = user } }
+func WithTimeout(d time.Duration) Option             { return func(o *options) { o.timeout = d } }
 func WithStderrCallback(fn func(string)) Option    { return func(o *options) { o.stderrCallback = fn } }
 func WithFileCheckpointing() Option                { return func(o *options) { o.enableFileCheckpointing = true } }
+func WithSkipVersionCheck() Option                 { return func(o *options) { o.skipVersionCheck = true } }
 
 // WithCanUseTool registers a callback for tool permission requests.
 // Only effective with Connect() sessions.
@@ -297,6 +304,9 @@ func (o *options) appendSettingsArgs(args *[]string) {
 }
 
 func (o *options) appendExecArgs(args *[]string) {
+	if o.timeout > 0 {
+		*args = append(*args, "--timeout", fmt.Sprintf("%d", int(o.timeout.Seconds())))
+	}
 	for _, d := range o.addDirs {
 		*args = append(*args, "--add-dir", d)
 	}

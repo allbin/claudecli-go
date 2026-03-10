@@ -62,6 +62,7 @@ func (c *Client) Run(ctx context.Context, prompt string, opts ...Option) *Stream
 		Env:                     resolved.env,
 		WorkDir:                 resolved.workDir,
 		EnableFileCheckpointing: resolved.enableFileCheckpointing,
+		SkipVersionCheck:        resolved.skipVersionCheck,
 	})
 	if err != nil {
 		events <- &ErrorEvent{Err: fmt.Errorf("start: %w", err), Fatal: true}
@@ -111,10 +112,12 @@ func (c *Client) readProcess(proc *Process, events chan<- Event, stderrCallback 
 			events <- &ErrorEvent{Err: err, Fatal: true}
 			return
 		}
+		stderr := strings.Join(*stderrLines, "\n")
 		events <- &ErrorEvent{
 			Err: &Error{
 				ExitCode: exitErr.ExitCode(),
-				Stderr:   strings.Join(*stderrLines, "\n"),
+				Stderr:   stderr,
+				Details:  parseErrorDetails(stderr),
 			},
 			Fatal: true,
 		}
@@ -257,6 +260,7 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 		WorkDir:                 resolved.workDir,
 		KeepStdinOpen:           true,
 		EnableFileCheckpointing: resolved.enableFileCheckpointing,
+		SkipVersionCheck:        resolved.skipVersionCheck,
 	})
 	if err != nil {
 		cancel()

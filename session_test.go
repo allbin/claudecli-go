@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,6 +56,32 @@ func (s *sessionSim) readStdin(t *testing.T) map[string]any {
 	line, _ := s.reader.ReadBytes('\n')
 	var msg map[string]any
 	json.Unmarshal(line, &msg)
+	return msg
+}
+
+// respondSuccess reads a control request from stdin and sends a success response.
+func (s *sessionSim) respondSuccess(t *testing.T) map[string]any {
+	t.Helper()
+	msg := s.readStdin(t)
+	if msg["type"] != "control_request" {
+		t.Errorf("expected control_request, got %v", msg["type"])
+	}
+	requestID := msg["request_id"].(string)
+	resp := fmt.Sprintf(`{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}`, requestID)
+	s.send(resp)
+	return msg
+}
+
+// respondError reads a control request from stdin and sends an error response.
+func (s *sessionSim) respondError(t *testing.T, errMsg string) map[string]any {
+	t.Helper()
+	msg := s.readStdin(t)
+	if msg["type"] != "control_request" {
+		t.Errorf("expected control_request, got %v", msg["type"])
+	}
+	requestID := msg["request_id"].(string)
+	resp := fmt.Sprintf(`{"type":"control_response","response":{"subtype":"error","request_id":"%s","error":"%s"}}`, requestID, errMsg)
+	s.send(resp)
 	return msg
 }
 
@@ -385,11 +412,8 @@ func TestSessionStateTracking(t *testing.T) {
 		t.Error("missing ResultEvent")
 	}
 
-	session.stateMu.Lock()
-	st := session.state
-	session.stateMu.Unlock()
-	if st != StateDone {
-		t.Errorf("expected StateDone after all events, got %s", st)
+	if st := session.State(); st != StateDone {
+		t.Errorf("expected StateDone after process exit, got %s", st)
 	}
 }
 
@@ -494,11 +518,8 @@ func TestSessionRewindFiles(t *testing.T) {
 	go func() {
 		sim.handleInit(t)
 
-		ctrlReq := sim.readStdin(t)
-		if ctrlReq["type"] != "control_request" {
-			t.Errorf("expected control_request, got %v", ctrlReq["type"])
-		}
-		request := ctrlReq["request"].(map[string]any)
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
 		if request["subtype"] != "rewind_files" {
 			t.Errorf("expected rewind_files, got %v", request["subtype"])
 		}
@@ -532,11 +553,8 @@ func TestSessionGetMCPStatus(t *testing.T) {
 	go func() {
 		sim.handleInit(t)
 
-		ctrlReq := sim.readStdin(t)
-		if ctrlReq["type"] != "control_request" {
-			t.Errorf("expected control_request, got %v", ctrlReq["type"])
-		}
-		request := ctrlReq["request"].(map[string]any)
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
 		if request["subtype"] != "mcp_status" {
 			t.Errorf("expected mcp_status, got %v", request["subtype"])
 		}
@@ -557,5 +575,309 @@ func TestSessionGetMCPStatus(t *testing.T) {
 	_, err = session.Wait()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSessionStateAndSessionID(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+		sim.sendTextAndResult("hi")
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	for range session.Events() {
+	}
+
+	if id := session.SessionID(); id != "test-sess" {
+		t.Errorf("expected session ID 'test-sess', got %q", id)
+	}
+	if st := session.State(); st != StateDone {
+		t.Errorf("expected StateDone after process exit, got %s", st)
+	}
+}
+
+func TestSessionStateIdleTransition(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		sim.readStdin(t)
+		sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"first"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+
+		sim.readStdin(t)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"second"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.02,"usage":{"input_tokens":20,"output_tokens":10}}`)
+
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	session.Query("q1")
+	r1, err := session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.Text != "first" {
+		t.Errorf("first result = %q, want 'first'", r1.Text)
+	}
+
+	// After first result with readLoop still blocked on scanner.Scan(),
+	// state should be Idle (sim is blocked on readStdin, so no race).
+	if st := session.State(); st != StateIdle {
+		t.Errorf("expected StateIdle after first result, got %s", st)
+	}
+
+	// Query succeeds from Idle state
+	if err := session.Query("q2"); err != nil {
+		t.Fatalf("Query from Idle failed: %v", err)
+	}
+
+	r2, err := session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Text != "second" {
+		t.Errorf("second result = %q, want 'second'", r2.Text)
+	}
+}
+
+func TestSessionQueryRejectRunning(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+	secondQueryDone := make(chan struct{})
+
+	go func() {
+		sim.handleInit(t)
+		sim.readStdin(t)
+		// Wait until second query attempt is done before responding
+		<-secondQueryDone
+		sim.sendTextAndResult("done")
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.Query("q1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second query while first is running (sim hasn't responded yet)
+	err = session.Query("q2")
+	close(secondQueryDone)
+	if err == nil {
+		t.Fatal("expected error for query while running")
+	}
+	if !strings.Contains(err.Error(), "already in progress") {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	session.Wait()
+}
+
+func TestSessionQueryRejectFailed(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for readLoop to finish and set state
+	for range session.Events() {
+	}
+	<-session.done
+
+	err = session.Query("q1")
+	if err == nil {
+		t.Fatal("expected error for query on ended session")
+	}
+}
+
+func TestSessionWaitResetAcrossQueries(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		sim.readStdin(t)
+		sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"first"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+
+		sim.readStdin(t)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"second"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.02,"usage":{"input_tokens":20,"output_tokens":10}}`)
+
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	session.Query("q1")
+	r1, err := session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1.Text != "first" {
+		t.Errorf("first Wait() text = %q, want 'first'", r1.Text)
+	}
+
+	// Second Wait() after same query returns same result (idempotent)
+	r1b, err := session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r1b != r1 {
+		t.Error("Wait() not idempotent within same query")
+	}
+
+	session.Query("q2")
+	r2, err := session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r2.Text != "second" {
+		t.Errorf("second Wait() text = %q, want 'second'", r2.Text)
+	}
+	if r2 == r1 {
+		t.Error("Wait() returned stale result from first query")
+	}
+}
+
+func TestSessionControlRequestErrorPropagation(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+		sim.respondError(t, "model not available")
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	err = session.SetModel("invalid-model")
+	if err == nil {
+		t.Fatal("expected error from rejected control request")
+	}
+	if !strings.Contains(err.Error(), "model not available") {
+		t.Errorf("expected 'model not available' in error, got: %v", err)
+	}
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionControlRequestSuccess(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "set_model" {
+			t.Errorf("expected set_model, got %v", request["subtype"])
+		}
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.SetModel(ModelSonnet); err != nil {
+		t.Fatalf("SetModel failed: %v", err)
+	}
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionTextResetOnSystemEvent(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		sim.readStdin(t)
+		// System event + text + result for first query
+		sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"leak"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+
+		// Second query: new system event resets text accumulator
+		sim.readStdin(t)
+		sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"clean"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.02,"usage":{"input_tokens":20,"output_tokens":10}}`)
+
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	session.Query("q1")
+	r1, _ := session.Wait()
+	if r1.Text != "leak" {
+		t.Errorf("first result = %q, want 'leak'", r1.Text)
+	}
+
+	session.Query("q2")
+	r2, _ := session.Wait()
+	if r2.Text != "clean" {
+		t.Errorf("second result = %q, want 'clean' (text leaked from previous query)", r2.Text)
+	}
+}
+
+func TestStateIdleString(t *testing.T) {
+	if s := StateIdle.String(); s != "idle" {
+		t.Errorf("StateIdle.String() = %q, want 'idle'", s)
 	}
 }
