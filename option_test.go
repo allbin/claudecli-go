@@ -348,6 +348,61 @@ func TestBuildArgsEffort(t *testing.T) {
 	}
 }
 
+// Fix #12: EffortLevel typed constants work with WithEffort.
+func TestBuildArgsEffortTypedConstants(t *testing.T) {
+	for _, level := range []EffortLevel{EffortLow, EffortMedium, EffortHigh} {
+		args := resolveOptions(nil, []Option{WithEffort(level)}).buildArgs()
+		v, ok := argValue(args, "--effort")
+		if !ok {
+			t.Errorf("missing --effort for level %q", level)
+			continue
+		}
+		if v != string(level) {
+			t.Errorf("--effort = %q, want %q", v, level)
+		}
+	}
+}
+
+// Fix #14: extraArgs produce deterministic (sorted) order.
+func TestBuildArgsExtraArgsSorted(t *testing.T) {
+	extra := map[string]string{
+		"zzz-flag":   "z",
+		"aaa-flag":   "a",
+		"mmm-flag":   "m",
+	}
+	// Build args twice and verify identical order.
+	args1 := resolveOptions(nil, []Option{WithExtraArgs(extra)}).buildArgs()
+	args2 := resolveOptions(nil, []Option{WithExtraArgs(extra)}).buildArgs()
+
+	// Extract just the extra arg flags
+	var flags1, flags2 []string
+	for _, a := range args1 {
+		if a == "--aaa-flag" || a == "--mmm-flag" || a == "--zzz-flag" {
+			flags1 = append(flags1, a)
+		}
+	}
+	for _, a := range args2 {
+		if a == "--aaa-flag" || a == "--mmm-flag" || a == "--zzz-flag" {
+			flags2 = append(flags2, a)
+		}
+	}
+
+	if len(flags1) != 3 {
+		t.Fatalf("expected 3 extra flags, got %d", len(flags1))
+	}
+	// Verify sorted order
+	if flags1[0] != "--aaa-flag" || flags1[1] != "--mmm-flag" || flags1[2] != "--zzz-flag" {
+		t.Errorf("extra args not sorted: %v", flags1)
+	}
+	// Verify deterministic
+	for i := range flags1 {
+		if flags1[i] != flags2[i] {
+			t.Errorf("non-deterministic order: %v vs %v", flags1, flags2)
+			break
+		}
+	}
+}
+
 func TestBuildSessionArgsWithCanUseTool(t *testing.T) {
 	opts := resolveOptions(nil, []Option{
 		WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {

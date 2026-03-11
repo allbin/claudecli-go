@@ -65,7 +65,9 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 
 	if !cfg.SkipVersionCheck {
 		e.versionOnce.Do(func() {
-			err := CheckCLIVersion(ctx, binary)
+			vctx, vcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer vcancel()
+			err := CheckCLIVersion(vctx, binary)
 			if _, ok := err.(*VersionError); ok {
 				e.versionErr = err
 			}
@@ -124,8 +126,10 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 	}
 	cmd.Env = buildEnv(envOverrides)
 	if runtime.GOOS != "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Cancel = func() error {
-			return cmd.Process.Signal(syscall.SIGTERM)
+			// Signal the process group (negative PID) to kill children too.
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		}
 		cmd.WaitDelay = 5 * time.Second
 	}

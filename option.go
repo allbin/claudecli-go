@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -67,7 +68,7 @@ type options struct {
 	timeout                time.Duration
 	addDirs                []string
 	workDir                string
-	effort                 string
+	effort                 EffortLevel
 	env                    map[string]string
 	includePartialMessages  bool
 	extraArgs               map[string]string
@@ -146,7 +147,7 @@ func WithSettings(s string) Option               { return func(o *options) { o.s
 func WithSettingSources(sources ...string) Option { return func(o *options) { o.settingSources = sources } }
 func WithPluginDirs(dirs ...string) Option        { return func(o *options) { o.pluginDirs = dirs } }
 func WithWorkDir(dir string) Option               { return func(o *options) { o.workDir = dir } }
-func WithEffort(level string) Option              { return func(o *options) { o.effort = level } }
+func WithEffort(level EffortLevel) Option          { return func(o *options) { o.effort = level } }
 func WithEnv(env map[string]string) Option         { return func(o *options) { o.env = env } }
 func WithResume(sessionID string) Option           { return func(o *options) { o.resume = sessionID } }
 func WithExtraArgs(args map[string]string) Option  { return func(o *options) { o.extraArgs = args } }
@@ -319,14 +320,19 @@ func (o *options) appendExecArgs(args *[]string) {
 		*args = append(*args, "--add-dir", d)
 	}
 	if o.effort != "" {
-		*args = append(*args, "--effort", o.effort)
+		*args = append(*args, "--effort", string(o.effort))
 	}
 	if o.user != "" {
 		*args = append(*args, "--user", o.user)
 	}
-	for k, v := range o.extraArgs {
+	keys := make([]string, 0, len(o.extraArgs))
+	for k := range o.extraArgs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
 		*args = append(*args, "--"+k)
-		if v != "" {
+		if v := o.extraArgs[k]; v != "" {
 			*args = append(*args, v)
 		}
 	}

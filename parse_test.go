@@ -425,6 +425,68 @@ func TestParseResultStructuredOutput(t *testing.T) {
 	}
 }
 
+// Fix #2: RateLimitEvent reads from nested rate_limit_info JSON.
+func TestParseRateLimitEventNestedFields(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","utilization":0.82}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var rle *RateLimitEvent
+	for _, e := range events {
+		if r, ok := e.(*RateLimitEvent); ok {
+			rle = r
+		}
+	}
+	if rle == nil {
+		t.Fatal("no RateLimitEvent found")
+	}
+	if rle.Status != "allowed_warning" {
+		t.Errorf("Status = %q, want 'allowed_warning'", rle.Status)
+	}
+	if rle.Utilization != 0.82 {
+		t.Errorf("Utilization = %f, want 0.82", rle.Utilization)
+	}
+}
+
+// Verify rate_limit_event with extra fields still parses correctly.
+func TestParseRateLimitEventExtraFields(t *testing.T) {
+	input := `{"type":"rate_limit_event","rate_limit_info":{"status":"rate_limited","resetsAt":1772773200,"rateLimitType":"seven_day","utilization":0.95,"isUsingOverage":false,"surpassedThreshold":0.75}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var rle *RateLimitEvent
+	for e := range ch {
+		if r, ok := e.(*RateLimitEvent); ok {
+			rle = r
+		}
+	}
+	if rle == nil {
+		t.Fatal("no RateLimitEvent found")
+	}
+	if rle.Status != "rate_limited" {
+		t.Errorf("Status = %q", rle.Status)
+	}
+	if rle.Utilization != 0.95 {
+		t.Errorf("Utilization = %f", rle.Utilization)
+	}
+}
+
 func TestParseThinkingSignature(t *testing.T) {
 	input := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"let me think","signature":"sig_abc123"}]}}
 {"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}

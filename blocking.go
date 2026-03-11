@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,11 +47,19 @@ func (c *Client) RunBlocking(ctx context.Context, prompt string, opts ...Option)
 		return nil, fmt.Errorf("start: %w", err)
 	}
 
-	stdout, readErr := io.ReadAll(proc.Stdout)
-	stderrOut, _ := io.ReadAll(proc.Stderr)
+	var stdout, stderrOut []byte
+	var readErr error
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		stderrOut, _ = io.ReadAll(proc.Stderr)
+	}()
+	stdout, readErr = io.ReadAll(proc.Stdout)
+	wg.Wait()
 
 	if waitErr := proc.Wait(); waitErr != nil {
-		return nil, blockingProcessError(waitErr, stderrOut)
+		return nil, processExitError(waitErr, strings.TrimSpace(string(stderrOut)))
 	}
 	if readErr != nil {
 		return nil, fmt.Errorf("read stdout: %w", readErr)
@@ -97,16 +106,21 @@ func pickJSONSource(result *BlockingResult) []byte {
 	return []byte(stripCodeFence(result.Text))
 }
 
-func blockingProcessError(err error, stderr []byte) error {
+func processExitError(err error, stderr string) *Error {
 	exitErr, ok := err.(*exec.ExitError)
 	if !ok {
-		return err
+		return &Error{Stderr: stderr, Message: err.Error()}
 	}
-	s := strings.TrimSpace(string(stderr))
+	details := parseErrorDetails(stderr)
+	var msg string
+	if details != nil {
+		msg = details.Message
+	}
 	return &Error{
 		ExitCode: exitErr.ExitCode(),
-		Stderr:   s,
-		Details:  parseErrorDetails(s),
+		Stderr:   stderr,
+		Message:  msg,
+		Details:  details,
 	}
 }
 
@@ -167,11 +181,6 @@ func rawToBlocking(raw *rawBlockingResult) *BlockingResult {
 		Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
 		NumTurns:         raw.NumTurns,
 		IsError:          raw.IsError,
-		Usage: Usage{
-			InputTokens:       raw.Usage.InputTokens,
-			OutputTokens:      raw.Usage.OutputTokens,
-			CacheReadTokens:   raw.Usage.CacheReadInputTokens,
-			CacheCreateTokens: raw.Usage.CacheCreationInputTokens,
-		},
+		Usage:            raw.Usage.toUsage(),
 	}
 }

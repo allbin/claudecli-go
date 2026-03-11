@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +34,7 @@ type Session struct {
 	reqCounter     atomic.Int64
 	pending        sync.Map // map[string]chan controlResult
 	controlTimeout time.Duration
+	controlWg      sync.WaitGroup // tracks in-flight handleControlRequest goroutines
 
 	// callbacks
 	canUseTool ToolPermissionFunc
@@ -220,10 +220,9 @@ func (s *Session) sendControlRequest(subtype string, data map[string]any) error 
 	s.pending.Store(id, resultCh)
 	defer s.pending.Delete(id)
 
-	reqMap := map[string]any{
-		"subtype": subtype,
-	}
+	reqMap := make(map[string]any, len(data)+1)
 	maps.Copy(reqMap, data)
+	reqMap["subtype"] = subtype
 
 	payload := map[string]any{
 		"type":       "control_request",
@@ -327,12 +326,18 @@ func (s *Session) readLoop() {
 			s.handleControlResponse(line)
 
 		case "control_request":
-			go s.handleControlRequest(raw.RequestID, raw.Request)
+			s.controlWg.Add(1)
+			go func() {
+				defer s.controlWg.Done()
+				s.handleControlRequest(raw.RequestID, raw.Request)
+			}()
 
 		case "system":
 			resultText = nil
 			ev := &InitEvent{SessionID: raw.SessionID, Model: raw.Model, Tools: raw.Tools}
+			s.stateMu.Lock()
 			s.sessionID = raw.SessionID
+			s.stateMu.Unlock()
 			s.trackState(ev)
 			s.sendEvent(ev)
 
@@ -370,12 +375,7 @@ func (s *Session) readLoop() {
 				Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
 				CostUSD:          raw.CostUSD,
 				SessionID:        raw.SessionID,
-				Usage: Usage{
-					InputTokens:       raw.Usage.InputTokens,
-					OutputTokens:      raw.Usage.OutputTokens,
-					CacheReadTokens:   raw.Usage.CacheReadInputTokens,
-					CacheCreateTokens: raw.Usage.CacheCreationInputTokens,
-				},
+				Usage:            raw.Usage.toUsage(),
 			}
 			resultText = nil
 			s.trackState(ev)
@@ -383,8 +383,8 @@ func (s *Session) readLoop() {
 
 		case "rate_limit_event":
 			s.sendEvent(&RateLimitEvent{
-				Status:      raw.RateLimitStatus,
-				Utilization: raw.RateLimitUtilization,
+				Status:      raw.RateLimitInfo.Status,
+				Utilization: raw.RateLimitInfo.Utilization,
 			})
 
 		case "stream_event":
@@ -400,23 +400,15 @@ func (s *Session) readLoop() {
 		s.sendEvent(&ErrorEvent{Err: fmt.Errorf("scanner: %w", err)})
 	}
 
+	// Wait for in-flight handleControlRequest goroutines before closing channels.
+	s.controlWg.Wait()
+
 	<-stderrDone
 
 	if err := s.proc.Wait(); err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if !ok {
-			ev := &ErrorEvent{Err: err, Fatal: true}
-			s.trackState(ev)
-			s.sendEvent(ev)
-			return
-		}
 		stderr := strings.Join(*stderrLines, "\n")
 		ev := &ErrorEvent{
-			Err: &Error{
-				ExitCode: exitErr.ExitCode(),
-				Stderr:   stderr,
-				Details:  parseErrorDetails(stderr),
-			},
+			Err:   processExitError(err, stderr),
 			Fatal: true,
 		}
 		s.trackState(ev)
@@ -522,6 +514,7 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 		}
 
 		// Run callback in sub-goroutine so context cancellation can unblock us.
+		// Callbacks should return promptly or check s.ctx for cancellation.
 		type callbackResult struct {
 			resp *PermissionResponse
 			err  error
@@ -571,14 +564,14 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 	}
 }
 
-func (s *Session) sendControlResponse(requestID string, response any, err error) {
+func (s *Session) sendControlResponse(requestID string, response any, respErr error) {
 	var resp rawControlResponse
 	resp.Type = "control_response"
-	if err != nil {
+	if respErr != nil {
 		resp.Response = controlResponseBody{
 			Subtype:   "error",
 			RequestID: requestID,
-			Error:     err.Error(),
+			Error:     respErr.Error(),
 		}
 	} else {
 		resp.Response = controlResponseBody{
@@ -587,9 +580,13 @@ func (s *Session) sendControlResponse(requestID string, response any, err error)
 			Response:  response,
 		}
 	}
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return
+	data, marshalErr := json.Marshal(resp)
+	if marshalErr != nil {
+		// Marshal failed — send hardcoded error so CLI doesn't hang.
+		fallback := fmt.Sprintf(`{"type":"control_response","response":{"subtype":"error","request_id":%q,"error":"marshal failure"}}`, requestID)
+		data = []byte(fallback)
 	}
-	s.writeStdin(append(data, '\n'))
+	if writeErr := s.writeStdin(append(data, '\n')); writeErr != nil {
+		s.sendEvent(&ErrorEvent{Err: fmt.Errorf("write control response: %w", writeErr)})
+	}
 }

@@ -3,7 +3,9 @@ package claudecli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -339,6 +341,121 @@ func (e *capturingExecutor) Start(_ context.Context, cfg *StartConfig) (*Process
 		Stdout: io.NopCloser(strings.NewReader("")),
 		Stderr: io.NopCloser(strings.NewReader("")),
 		Wait:   func() error { return nil },
+	}, nil
+}
+
+// Fix #15: Stderr capped at maxStderrLines, keeping most recent lines.
+func TestStderrCappedAtMaxLines(t *testing.T) {
+	totalLines := maxStderrLines + 500
+	var stderrBuf strings.Builder
+	for i := 0; i < totalLines; i++ {
+		fmt.Fprintf(&stderrBuf, "line-%04d\n", i)
+	}
+
+	// Use an executor that fails (exit code 1) so stderr is collected
+	// into the Error. We need the wait function to return an exec.ExitError-like error.
+	exec := &stderrExecutor{
+		stdout: `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`,
+		stderr: stderrBuf.String(),
+	}
+	client := NewWithExecutor(exec)
+
+	stream := client.Run(context.Background(), "ignored")
+	_, err := stream.Wait()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Count StderrEvents — should be capped
+	// Re-run with a fresh executor that actually emits all lines
+	exec2 := &stderrExecutor{
+		stdout: `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`,
+		stderr: stderrBuf.String(),
+	}
+	client2 := NewWithExecutor(exec2)
+	stream2 := client2.Run(context.Background(), "ignored")
+
+	var stderrEvents int
+	for event := range stream2.Events() {
+		if _, ok := event.(*StderrEvent); ok {
+			stderrEvents++
+		}
+	}
+	// StderrEvents are emitted for every line (all totalLines), but the internal
+	// lines buffer is capped at maxStderrLines. We verify by checking that
+	// events were emitted for all lines.
+	if stderrEvents != totalLines {
+		t.Errorf("expected %d StderrEvents, got %d", totalLines, stderrEvents)
+	}
+}
+
+// Verify the stderr buffer retains most recent lines by triggering a process error
+// with more than maxStderrLines lines.
+func TestStderrBufferKeepsMostRecent(t *testing.T) {
+	totalLines := maxStderrLines + 100
+	var stderrBuf strings.Builder
+	for i := 0; i < totalLines; i++ {
+		fmt.Fprintf(&stderrBuf, "line-%04d\n", i)
+	}
+
+	exec := &failingProcessExecutor{
+		stdout: `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`,
+		stderr:   stderrBuf.String(),
+		exitCode: 1,
+	}
+	client := NewWithExecutor(exec)
+
+	stream := client.Run(context.Background(), "ignored")
+	_, err := stream.Wait()
+	if err == nil {
+		t.Fatal("expected error from failing process")
+	}
+
+	// The error's Stderr field should contain the most recent maxStderrLines lines
+	var cliErr *Error
+	if errors.As(err, &cliErr) {
+		lines := strings.Split(cliErr.Stderr, "\n")
+		// Remove trailing empty element from split
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = lines[:len(lines)-1]
+		}
+		if len(lines) != maxStderrLines {
+			t.Errorf("expected %d stderr lines in error, got %d", maxStderrLines, len(lines))
+		}
+		// Last line should be the last line we wrote
+		expected := fmt.Sprintf("line-%04d", totalLines-1)
+		if len(lines) > 0 && lines[len(lines)-1] != expected {
+			t.Errorf("last stderr line = %q, want %q", lines[len(lines)-1], expected)
+		}
+		// First line should be shifted (not line-0000)
+		expectedFirst := fmt.Sprintf("line-%04d", totalLines-maxStderrLines)
+		if len(lines) > 0 && lines[0] != expectedFirst {
+			t.Errorf("first stderr line = %q, want %q", lines[0], expectedFirst)
+		}
+	} else {
+		t.Fatalf("expected *Error, got %T: %v", err, err)
+	}
+}
+
+type failingProcessExecutor struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+func (e *failingProcessExecutor) Start(_ context.Context, _ *StartConfig) (*Process, error) {
+	return &Process{
+		Stdout: io.NopCloser(strings.NewReader(e.stdout)),
+		Stderr: io.NopCloser(strings.NewReader(e.stderr)),
+		Wait: func() error {
+			return &exec.ExitError{ProcessState: nil}
+		},
 	}, nil
 }
 

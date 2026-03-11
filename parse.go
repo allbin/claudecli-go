@@ -55,12 +55,7 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 				Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
 				CostUSD:          raw.CostUSD,
 				SessionID:        raw.SessionID,
-				Usage: Usage{
-					InputTokens:       raw.Usage.InputTokens,
-					OutputTokens:      raw.Usage.OutputTokens,
-					CacheReadTokens:   raw.Usage.CacheReadInputTokens,
-					CacheCreateTokens: raw.Usage.CacheCreationInputTokens,
-				},
+				Usage:            raw.Usage.toUsage(),
 			}
 			// Result is the terminal event. Return immediately to avoid
 			// blocking on scanner.Scan() if the CLI keeps stdout open (known bug).
@@ -68,8 +63,8 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 
 		case "rate_limit_event":
 			ch <- &RateLimitEvent{
-				Status:      raw.RateLimitStatus,
-				Utilization: raw.RateLimitUtilization,
+				Status:      raw.RateLimitInfo.Status,
+				Utilization: raw.RateLimitInfo.Utilization,
 			}
 
 		case "control_request":
@@ -174,8 +169,7 @@ type rawEvent struct {
 	Usage            rawUsage        `json:"usage,omitempty"`
 
 	// rate_limit_event
-	RateLimitStatus      string  `json:"status,omitempty"`
-	RateLimitUtilization float64 `json:"utilization,omitempty"`
+	RateLimitInfo rawRateLimitInfo `json:"rate_limit_info,omitempty"`
 
 	// control_request
 	RequestID string          `json:"request_id,omitempty"`
@@ -202,9 +196,23 @@ type rawContent struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 }
 
+type rawRateLimitInfo struct {
+	Status      string  `json:"status"`
+	Utilization float64 `json:"utilization"`
+}
+
 type rawUsage struct {
 	InputTokens              int `json:"input_tokens"`
 	OutputTokens             int `json:"output_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+}
+
+func (r rawUsage) toUsage() Usage {
+	return Usage{
+		InputTokens:       r.InputTokens,
+		OutputTokens:      r.OutputTokens,
+		CacheReadTokens:   r.CacheReadInputTokens,
+		CacheCreateTokens: r.CacheCreationInputTokens,
+	}
 }

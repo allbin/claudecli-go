@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -107,18 +106,9 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 	<-stderrDone
 
 	if err := proc.Wait(); err != nil {
-		exitErr, ok := err.(*exec.ExitError)
-		if !ok {
-			events <- &ErrorEvent{Err: err, Fatal: true}
-			return
-		}
 		stderr := strings.Join(*stderrLines, "\n")
 		events <- &ErrorEvent{
-			Err: &Error{
-				ExitCode: exitErr.ExitCode(),
-				Stderr:   stderr,
-				Details:  parseErrorDetails(stderr),
-			},
+			Err:   processExitError(err, stderr),
 			Fatal: true,
 		}
 		return
@@ -131,6 +121,8 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 		}
 	}
 }
+
+const maxStderrLines = 1000
 
 func scanStderr(ctx context.Context, proc *Process, events chan<- Event, callback func(string)) (*[]string, <-chan struct{}) {
 	var lines []string
@@ -151,7 +143,13 @@ func scanStderr(ctx context.Context, proc *Process, events chan<- Event, callbac
 		scanner := bufio.NewScanner(proc.Stderr)
 		for scanner.Scan() {
 			line := scanner.Text()
-			lines = append(lines, line)
+			if len(lines) < maxStderrLines {
+				lines = append(lines, line)
+			} else {
+				// Keep most recent lines by shifting.
+				copy(lines, lines[1:])
+				lines[len(lines)-1] = line
+			}
 			if callback != nil {
 				callback(line)
 			}

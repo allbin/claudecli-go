@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // staticExecutor returns a fixed stdout response. Used to test blocking mode
@@ -246,5 +247,112 @@ func TestRunBlockingStderrPopulated(t *testing.T) {
 	}
 	if result.Stderr != "some warning" {
 		t.Errorf("Stderr = %q, want %q", result.Stderr, "some warning")
+	}
+}
+
+// Fix #1: Concurrent stdout/stderr reads — large stderr shouldn't deadlock.
+func TestRunBlockingLargeStderr(t *testing.T) {
+	// Generate large stderr that would deadlock if read sequentially after stdout.
+	var bigStderr strings.Builder
+	for i := 0; i < 10000; i++ {
+		bigStderr.WriteString("warning: this is line " + strings.Repeat("x", 100) + "\n")
+	}
+
+	exec := &staticExecutor{
+		stdout: []byte(blockingFixture),
+		stderr: bigStderr.String(),
+	}
+	client := NewWithExecutor(exec)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		result, err := client.RunBlocking(context.Background(), "ignored")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+			return
+		}
+		if result.Text != "Hello, world!" {
+			t.Errorf("text = %q", result.Text)
+		}
+		if result.Stderr == "" {
+			t.Error("expected non-empty stderr")
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunBlocking deadlocked with large stderr")
+	}
+}
+
+// Fix #7/#10: processExitError with exec.ExitError populates Details.Message.
+func TestProcessExitError_ExitError(t *testing.T) {
+	stderr := `{"type":"rate_limit","message":"Rate limit exceeded","retry_after_seconds":30}`
+	// Simulate a non-ExitError first
+	err := processExitError(errors.New("generic error"), stderr)
+	if err.ExitCode != 0 {
+		t.Errorf("expected zero exit code for non-ExitError, got %d", err.ExitCode)
+	}
+	if err.Message != "generic error" {
+		t.Errorf("expected 'generic error', got %q", err.Message)
+	}
+	if err.Details != nil {
+		t.Error("expected nil Details for non-ExitError")
+	}
+}
+
+func TestProcessExitError_NonExitError(t *testing.T) {
+	err := processExitError(errors.New("broken pipe"), "some stderr")
+	if err.ExitCode != 0 {
+		t.Errorf("exit code = %d, want 0", err.ExitCode)
+	}
+	if err.Message != "broken pipe" {
+		t.Errorf("message = %q, want 'broken pipe'", err.Message)
+	}
+	if err.Stderr != "some stderr" {
+		t.Errorf("stderr = %q", err.Stderr)
+	}
+}
+
+func TestProcessExitError_DetailsMessage(t *testing.T) {
+	// Simulate stderr with structured error JSON
+	stderr := `{"type":"auth","message":"Invalid API key"}`
+	err := processExitError(errors.New("exit status 1"), stderr)
+	// non-ExitError: Message comes from err.Error(), Details is nil
+	if err.Message != "exit status 1" {
+		t.Errorf("message = %q", err.Message)
+	}
+}
+
+// Fix #6: rawUsage.toUsage() conversion.
+func TestRawUsageToUsage(t *testing.T) {
+	raw := rawUsage{
+		InputTokens:              100,
+		OutputTokens:             50,
+		CacheReadInputTokens:     25,
+		CacheCreationInputTokens: 10,
+	}
+	u := raw.toUsage()
+	if u.InputTokens != 100 {
+		t.Errorf("InputTokens = %d", u.InputTokens)
+	}
+	if u.OutputTokens != 50 {
+		t.Errorf("OutputTokens = %d", u.OutputTokens)
+	}
+	if u.CacheReadTokens != 25 {
+		t.Errorf("CacheReadTokens = %d", u.CacheReadTokens)
+	}
+	if u.CacheCreateTokens != 10 {
+		t.Errorf("CacheCreateTokens = %d", u.CacheCreateTokens)
+	}
+}
+
+func TestRawUsageToUsage_Zero(t *testing.T) {
+	raw := rawUsage{}
+	u := raw.toUsage()
+	if u.InputTokens != 0 || u.OutputTokens != 0 || u.CacheReadTokens != 0 || u.CacheCreateTokens != 0 {
+		t.Errorf("expected all zeros, got %+v", u)
 	}
 }

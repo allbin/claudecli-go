@@ -977,6 +977,85 @@ func TestSessionCanUseToolCallbackPanic(t *testing.T) {
 	}
 }
 
+// Fix #4: sendControlResponse error path sends error response to CLI.
+func TestSessionControlResponseErrorPath(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		// Send a can_use_tool request; callback returns an error
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+
+		// Read response — should be an error response
+		permResp := sim.readStdin(t)
+		response := permResp["response"].(map[string]any)
+		if response["subtype"] != "error" {
+			t.Errorf("expected error response from callback error, got %v", response["subtype"])
+		}
+		if response["request_id"] != "cli_req_1" {
+			t.Errorf("expected request_id 'cli_req_1', got %v", response["request_id"])
+		}
+
+		// Send result so session ends cleanly
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background(), WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {
+		return nil, fmt.Errorf("callback failed")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Fix #9: subtype set after maps.Copy — data with a "subtype" key shouldn't corrupt the request.
+func TestSessionControlRequestSubtypeNotCorrupted(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		// Read control request and verify subtype is correct despite data containing "subtype"
+		msg := sim.readStdin(t)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "rewind_files" {
+			t.Errorf("expected subtype 'rewind_files', got %v (corrupted by data)", request["subtype"])
+		}
+
+		requestID := msg["request_id"].(string)
+		resp := fmt.Sprintf(`{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}`, requestID)
+		sim.send(resp)
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	// RewindFiles sends data with user_message_id. We test that sendControlRequest
+	// correctly sets subtype after maps.Copy so data can't override it.
+	if err := session.RewindFiles("msg-123"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionCanUseToolCancelledDuringCallback(t *testing.T) {
 	sim := newSessionSim()
 	client := NewWithExecutor(sim.bidi)
