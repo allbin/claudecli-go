@@ -1,6 +1,7 @@
 package claudecli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -124,11 +125,39 @@ type rawBlockingResult struct {
 }
 
 func parseBlockingJSON(data []byte) (*BlockingResult, error) {
+	data = bytes.TrimSpace(data)
+
+	// Claude CLI may return a JSON array instead of a single object.
+	// When it does, find the result element (last with type "result",
+	// or just the last element).
+	if len(data) > 0 && data[0] == '[' {
+		var arr []rawBlockingResult
+		if err := json.Unmarshal(data, &arr); err != nil {
+			return nil, fmt.Errorf("unmarshal blocking result array: %w", err)
+		}
+		if len(arr) == 0 {
+			return nil, fmt.Errorf("empty blocking result array")
+		}
+		// Prefer the "result" typed element; fall back to last.
+		idx := len(arr) - 1
+		for i := len(arr) - 1; i >= 0; i-- {
+			if arr[i].Type == "result" {
+				idx = i
+				break
+			}
+		}
+		return rawToBlocking(&arr[idx]), nil
+	}
+
 	var raw rawBlockingResult
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("unmarshal blocking result: %w", err)
 	}
 
+	return rawToBlocking(&raw), nil
+}
+
+func rawToBlocking(raw *rawBlockingResult) *BlockingResult {
 	return &BlockingResult{
 		Text:             raw.Result,
 		StructuredOutput: raw.StructuredOutput,
@@ -144,5 +173,5 @@ func parseBlockingJSON(data []byte) (*BlockingResult, error) {
 			CacheReadTokens:   raw.Usage.CacheReadInputTokens,
 			CacheCreateTokens: raw.Usage.CacheCreationInputTokens,
 		},
-	}, nil
+	}
 }

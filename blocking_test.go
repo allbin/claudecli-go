@@ -123,6 +123,77 @@ func TestRunBlockingJSONStructuredOutput(t *testing.T) {
 	}
 }
 
+// CLI may return a JSON array wrapping the result object.
+const blockingArrayFixture = `[
+	{"type": "system", "session_id": "abc-789"},
+	{
+		"type": "result",
+		"subtype": "success",
+		"result": "array response",
+		"session_id": "abc-789",
+		"total_cost_usd": 0.003,
+		"duration_ms": 500,
+		"num_turns": 1,
+		"is_error": false,
+		"usage": {"input_tokens": 50, "output_tokens": 25}
+	}
+]`
+
+func TestRunBlockingArray(t *testing.T) {
+	client := NewWithExecutor(&staticExecutor{stdout: []byte(blockingArrayFixture)})
+
+	result, err := client.RunBlocking(context.Background(), "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != "array response" {
+		t.Errorf("text = %q, want %q", result.Text, "array response")
+	}
+	if result.SessionID != "abc-789" {
+		t.Errorf("session_id = %q", result.SessionID)
+	}
+	if result.CostUSD != 0.003 {
+		t.Errorf("cost = %f", result.CostUSD)
+	}
+	if result.Usage.InputTokens != 50 {
+		t.Errorf("input_tokens = %d", result.Usage.InputTokens)
+	}
+}
+
+func TestRunBlockingJSONArray(t *testing.T) {
+	fixture := `[
+		{"type": "system", "session_id": "s1"},
+		{
+			"type": "result",
+			"subtype": "success",
+			"result": "{\"name\":\"from-array\",\"count\":99}",
+			"session_id": "s1",
+			"total_cost_usd": 0.002,
+			"duration_ms": 300,
+			"num_turns": 1,
+			"is_error": false,
+			"usage": {"input_tokens": 30, "output_tokens": 15}
+		}
+	]`
+	client := NewWithExecutor(&staticExecutor{stdout: []byte(fixture)})
+
+	type Result struct {
+		Name  string `json:"name"`
+		Count int    `json:"count"`
+	}
+
+	val, _, err := RunBlockingJSON[Result](context.Background(), client, "ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if val.Name != "from-array" {
+		t.Errorf("name = %q", val.Name)
+	}
+	if val.Count != 99 {
+		t.Errorf("count = %d", val.Count)
+	}
+}
+
 func TestRunBlockingStartFailure(t *testing.T) {
 	client := NewWithExecutor(&failExecutor{err: errors.New("connection refused")})
 
