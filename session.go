@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const controlRequestTimeout = 5 * time.Second
+const defaultControlTimeout = 30 * time.Second
 
 // Session represents a long-lived interactive Claude CLI session with
 // bidirectional control protocol support.
@@ -28,11 +28,13 @@ type Session struct {
 	cancel context.CancelFunc
 
 	// stdin writer (protected by mu)
-	mu sync.Mutex
+	mu          sync.Mutex
+	stdinClosed bool // set on Close() or write failure
 
 	// control protocol state
-	reqCounter atomic.Int64
-	pending    sync.Map // map[string]chan controlResult
+	reqCounter     atomic.Int64
+	pending        sync.Map // map[string]chan controlResult
+	controlTimeout time.Duration
 
 	// callbacks
 	canUseTool ToolPermissionFunc
@@ -177,8 +179,16 @@ func (s *Session) GetMCPStatus() error {
 	return s.sendControlRequest("mcp_status", nil)
 }
 
-// Close terminates the session.
+// Close terminates the session. Closes stdin first (EOF signal to CLI),
+// then cancels the context (SIGTERM) as backup.
 func (s *Session) Close() error {
+	s.mu.Lock()
+	s.stdinClosed = true
+	if s.proc.Stdin != nil {
+		s.proc.Stdin.Close()
+	}
+	s.mu.Unlock()
+
 	s.cancel()
 	for range s.events {
 	}
@@ -190,10 +200,16 @@ func (s *Session) Close() error {
 func (s *Session) writeStdin(data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.stdinClosed {
+		return fmt.Errorf("session closed")
+	}
 	if s.proc.Stdin == nil {
 		return fmt.Errorf("stdin closed")
 	}
 	_, err := s.proc.Stdin.Write(data)
+	if err != nil {
+		s.stdinClosed = true
+	}
 	return err
 }
 
@@ -223,16 +239,20 @@ func (s *Session) sendControlRequest(subtype string, data map[string]any) error 
 		return err
 	}
 
+	ctx, cancel := context.WithTimeout(s.ctx, s.controlTimeout)
+	defer cancel()
+
 	select {
 	case result := <-resultCh:
 		if result.Err != nil {
 			return fmt.Errorf("%s: %w", subtype, result.Err)
 		}
 		return nil
-	case <-time.After(controlRequestTimeout):
-		return fmt.Errorf("%s: timeout after %s", subtype, controlRequestTimeout)
-	case <-s.ctx.Done():
-		return s.ctx.Err()
+	case <-ctx.Done():
+		if s.ctx.Err() != nil {
+			return s.ctx.Err()
+		}
+		return fmt.Errorf("%s: timeout after %s", subtype, s.controlTimeout)
 	}
 }
 
@@ -258,6 +278,9 @@ func (s *Session) initialize() error {
 		return fmt.Errorf("write initialize: %w", err)
 	}
 
+	ctx, cancel := context.WithTimeout(s.ctx, s.controlTimeout)
+	defer cancel()
+
 	select {
 	case result := <-resultCh:
 		if result.Err != nil {
@@ -265,8 +288,11 @@ func (s *Session) initialize() error {
 		}
 		s.serverInfo = result.Response
 		return nil
-	case <-s.ctx.Done():
-		return s.ctx.Err()
+	case <-ctx.Done():
+		if s.ctx.Err() != nil {
+			return s.ctx.Err()
+		}
+		return fmt.Errorf("initialize: timeout after %s", s.controlTimeout)
 	}
 }
 
@@ -275,8 +301,9 @@ func (s *Session) readLoop() {
 	defer close(s.done)
 	defer close(s.events)
 	defer s.setDoneState()
+	defer s.failPendingRequests()
 
-	stderrLines, stderrDone := scanStderr(s.proc, s.events, nil)
+	stderrLines, stderrDone := scanStderr(s.ctx, s.proc, s.events, nil)
 
 	scanner := bufio.NewScanner(s.proc.Stdout)
 	scanner.Buffer(make([]byte, 256*1024), 10*1024*1024)
@@ -406,6 +433,20 @@ func (s *Session) setDoneState() {
 	}
 }
 
+// failPendingRequests signals all pending control request waiters with an error.
+// Called when readLoop exits to prevent waiters from hanging until timeout.
+func (s *Session) failPendingRequests() {
+	s.pending.Range(func(key, value any) bool {
+		ch := value.(chan controlResult)
+		select {
+		case ch <- controlResult{Err: fmt.Errorf("session ended")}:
+		default:
+		}
+		s.pending.Delete(key)
+		return true
+	})
+}
+
 func (s *Session) sendEvent(ev Event) {
 	select {
 	case s.events <- ev:
@@ -456,6 +497,12 @@ func (s *Session) handleControlResponse(line []byte) {
 }
 
 func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.sendControlResponse(requestID, nil, fmt.Errorf("callback panic: %v", r))
+		}
+	}()
+
 	var req rawControlRequestBody
 	if err := json.Unmarshal(body, &req); err != nil {
 		s.sendControlResponse(requestID, nil, err)
@@ -473,11 +520,36 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 			s.sendControlResponse(requestID, nil, err)
 			return
 		}
-		resp, err := s.canUseTool(permReq.ToolName, permReq.Input)
-		if err != nil {
-			s.sendControlResponse(requestID, nil, err)
+
+		// Run callback in sub-goroutine so context cancellation can unblock us.
+		type callbackResult struct {
+			resp *PermissionResponse
+			err  error
+		}
+		ch := make(chan callbackResult, 1)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					ch <- callbackResult{err: fmt.Errorf("callback panic: %v", r)}
+				}
+			}()
+			resp, err := s.canUseTool(permReq.ToolName, permReq.Input)
+			ch <- callbackResult{resp, err}
+		}()
+
+		var resp *PermissionResponse
+		select {
+		case result := <-ch:
+			if result.err != nil {
+				s.sendControlResponse(requestID, nil, result.err)
+				return
+			}
+			resp = result.resp
+		case <-s.ctx.Done():
+			s.sendControlResponse(requestID, nil, s.ctx.Err())
 			return
 		}
+
 		if resp.Allow {
 			data := map[string]any{
 				"behavior":     "allow",

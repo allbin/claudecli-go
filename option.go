@@ -76,7 +76,8 @@ type options struct {
 	enableFileCheckpointing bool
 
 	// session callbacks
-	canUseTool ToolPermissionFunc
+	canUseTool     ToolPermissionFunc
+	controlTimeout time.Duration // timeout for control request responses
 
 	// version check
 	skipVersionCheck bool
@@ -159,6 +160,13 @@ func WithSkipVersionCheck() Option                 { return func(o *options) { o
 // Only effective with Connect() sessions.
 func WithCanUseTool(fn ToolPermissionFunc) Option {
 	return func(o *options) { o.canUseTool = fn }
+}
+
+// WithControlTimeout sets the timeout for control protocol request/response
+// round-trips (e.g. initialize, set_model, mcp operations). Defaults to 30s.
+// Only effective with Connect() sessions.
+func WithControlTimeout(d time.Duration) Option {
+	return func(o *options) { o.controlTimeout = d }
 }
 
 // WithIncludePartialMessages enables partial message chunks as they arrive.

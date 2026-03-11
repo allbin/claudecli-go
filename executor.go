@@ -93,16 +93,25 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 	}
 
 	if cfg.Stdin != nil {
-		if cfg.KeepStdinOpen {
-			go func() {
-				io.Copy(stdinPipe, cfg.Stdin)
-			}()
-		} else {
-			go func() {
-				io.Copy(stdinPipe, cfg.Stdin)
-				stdinPipe.Close()
-			}()
-		}
+		pipeClose := sync.OnceFunc(func() { stdinPipe.Close() })
+
+		// Close pipe on context cancel to unblock the copy goroutine.
+		copyDone := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				pipeClose()
+			case <-copyDone:
+			}
+		}()
+
+		go func() {
+			defer close(copyDone)
+			io.Copy(stdinPipe, cfg.Stdin)
+			if !cfg.KeepStdinOpen {
+				pipeClose()
+			}
+		}()
 	} else if !cfg.KeepStdinOpen {
 		stdinPipe.Close()
 	}

@@ -74,14 +74,14 @@ func (c *Client) Run(ctx context.Context, prompt string, opts ...Option) *Stream
 	go func() {
 		defer close(done)
 		defer close(events)
-		c.readProcess(proc, events, resolved.stderrCallback)
+		c.readProcess(ctx, proc, events, resolved.stderrCallback)
 	}()
 
 	return stream
 }
 
-func (c *Client) readProcess(proc *Process, events chan<- Event, stderrCallback func(string)) {
-	stderrLines, stderrDone := scanStderr(proc, events, stderrCallback)
+func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- Event, stderrCallback func(string)) {
+	stderrLines, stderrDone := scanStderr(ctx, proc, events, stderrCallback)
 
 	// Intercept parsed events to track whether a ResultEvent was emitted
 	parsed := make(chan Event, 64)
@@ -132,16 +132,19 @@ func (c *Client) readProcess(proc *Process, events chan<- Event, stderrCallback 
 	}
 }
 
-func scanStderr(proc *Process, events chan<- Event, callback func(string)) (*[]string, <-chan struct{}) {
+func scanStderr(ctx context.Context, proc *Process, events chan<- Event, callback func(string)) (*[]string, <-chan struct{}) {
 	var lines []string
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
-				events <- &ErrorEvent{
+				select {
+				case events <- &ErrorEvent{
 					Err:   fmt.Errorf("stderr goroutine panic: %v", r),
 					Fatal: true,
+				}:
+				case <-ctx.Done():
 				}
 			}
 		}()
@@ -152,7 +155,11 @@ func scanStderr(proc *Process, events chan<- Event, callback func(string)) (*[]s
 			if callback != nil {
 				callback(line)
 			}
-			events <- &StderrEvent{Content: line}
+			select {
+			case events <- &StderrEvent{Content: line}:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	return &lines, done
@@ -267,13 +274,19 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 		return nil, fmt.Errorf("start: %w", err)
 	}
 
+	controlTimeout := resolved.controlTimeout
+	if controlTimeout <= 0 {
+		controlTimeout = defaultControlTimeout
+	}
+
 	session := &Session{
-		proc:       proc,
-		events:     make(chan Event, 64),
-		done:       make(chan struct{}),
-		ctx:        ctx,
-		cancel:     cancel,
-		canUseTool: resolved.canUseTool,
+		proc:           proc,
+		events:         make(chan Event, 64),
+		done:           make(chan struct{}),
+		ctx:            ctx,
+		cancel:         cancel,
+		canUseTool:     resolved.canUseTool,
+		controlTimeout: controlTimeout,
 	}
 
 	go session.readLoop()

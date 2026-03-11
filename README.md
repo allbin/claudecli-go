@@ -375,6 +375,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithPluginDirs(...string)`          | Plugin directories.                                                                                   |
 | `WithResume(string)`                 | Resume a session by ID (mutually exclusive with `WithSessionID`/`WithContinue`).                      |
 | `WithCanUseTool(ToolPermissionFunc)` | Tool permission callback (sessions only).                                                             |
+| `WithControlTimeout(time.Duration)` | Timeout for control protocol round-trips (default: 30s). Sessions only.                               |
 | `WithPermissionPromptToolName(string)` | Custom permission prompt tool name (default: `"stdio"`). Sessions only.                             |
 | `WithEnv(map[string]string)`         | Additional environment variables.                                                                     |
 | `WithExtraArgs(map[string]string)`   | Arbitrary `--key value` flags for forward compatibility. Empty value emits flag only.                  |

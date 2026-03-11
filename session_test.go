@@ -881,3 +881,142 @@ func TestStateIdleString(t *testing.T) {
 		t.Errorf("StateIdle.String() = %q, want 'idle'", s)
 	}
 }
+
+func TestSessionPendingRequestsFailOnProcessExit(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+		// Read the control request from stdin but never respond — just close stdout.
+		sim.readStdin(t)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background(), WithControlTimeout(5*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- session.SetModel(ModelSonnet)
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error from pending request on process exit")
+		}
+		if !strings.Contains(err.Error(), "session ended") {
+			t.Errorf("expected 'session ended' error, got: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("pending request should fail fast on process exit, not wait for timeout")
+	}
+}
+
+func TestSessionWriteAfterClose(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	session.Close()
+
+	err = session.Query("should fail")
+	if err == nil {
+		t.Fatal("expected error writing to closed session")
+	}
+	// May hit state check ("session ended") or writeStdin guard ("session closed")
+	if !strings.Contains(err.Error(), "session") {
+		t.Errorf("expected session-related error, got: %v", err)
+	}
+}
+
+func TestSessionCanUseToolCallbackPanic(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		// Send a can_use_tool request — callback will panic
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+
+		// Read the error response (should be error from panic recovery)
+		permResp := sim.readStdin(t)
+		response := permResp["response"].(map[string]any)
+		if response["subtype"] != "error" {
+			t.Errorf("expected error response from panicking callback, got %v", response["subtype"])
+		}
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background(), WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {
+		panic("intentional test panic")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionCanUseToolCancelledDuringCallback(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	callbackStarted := make(chan struct{})
+
+	go func() {
+		sim.handleInit(t)
+
+		// Send a can_use_tool request — callback will block
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+
+		// Wait for callback to start, then close stdout to end session
+		<-callbackStarted
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session, err := client.Connect(ctx, WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {
+		close(callbackStarted)
+		// Block until context is cancelled
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Cancel context while callback is blocked
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		session.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close() hung — callback not cancelled by context")
+	}
+}
