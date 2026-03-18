@@ -313,9 +313,9 @@ func (o *options) appendSettingsArgs(args *[]string) {
 }
 
 func (o *options) appendExecArgs(args *[]string) {
-	if o.timeout > 0 {
-		*args = append(*args, "--timeout", fmt.Sprintf("%d", int(o.timeout.Seconds())))
-	}
+	// Note: --timeout is not a valid Claude CLI flag. Callers should use
+	// context.WithTimeout instead. WithTimeout is kept for backward compat
+	// but no longer emits a CLI argument.
 	for _, d := range o.addDirs {
 		*args = append(*args, "--add-dir", d)
 	}
