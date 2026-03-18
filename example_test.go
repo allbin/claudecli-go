@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/mdjarv/claudecli-go"
+	"github.com/allbin/claudecli-go"
 )
 
 func ExampleNewWithExecutor_fixture() {

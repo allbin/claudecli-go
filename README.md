@@ -7,7 +7,7 @@ Go package for invoking the [Claude Code CLI](https://docs.anthropic.com/en/docs
 ## Install
 
 ```
-go get github.com/mdjarv/claudecli-go
+go get github.com/allbin/claudecli-go
 ```
 
 ## Quick start
@@ -20,7 +20,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/mdjarv/claudecli-go"
+    "github.com/allbin/claudecli-go"
 )
 
 func main() {
