@@ -16,10 +16,10 @@ type rawControlResponse struct {
 }
 
 type controlResponseBody struct {
-	Subtype   string      `json:"subtype"`              // "success" or "error"
-	RequestID string      `json:"request_id"`
-	Response  any `json:"response,omitempty"`
-	Error     string      `json:"error,omitempty"`
+	Subtype   string `json:"subtype"` // "success" or "error"
+	RequestID string `json:"request_id"`
+	Response  any    `json:"response,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // ToolPermissionRequest is the data inside a "can_use_tool" control request.

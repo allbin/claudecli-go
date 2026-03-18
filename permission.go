@@ -4,10 +4,10 @@ package claudecli
 type PermissionMode string
 
 const (
-	PermissionDefault      PermissionMode = "default"
-	PermissionPlan         PermissionMode = "plan"
-	PermissionAcceptEdits  PermissionMode = "acceptEdits"
-	PermissionBypass       PermissionMode = "bypassPermissions"
-	PermissionDontAsk      PermissionMode = "dontAsk"
-	PermissionAuto         PermissionMode = "auto"
+	PermissionDefault     PermissionMode = "default"
+	PermissionPlan        PermissionMode = "plan"
+	PermissionAcceptEdits PermissionMode = "acceptEdits"
+	PermissionBypass      PermissionMode = "bypassPermissions"
+	PermissionDontAsk     PermissionMode = "dontAsk"
+	PermissionAuto        PermissionMode = "auto"
 )

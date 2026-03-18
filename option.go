@@ -65,11 +65,11 @@ type options struct {
 	pluginDirs []string
 
 	// execution
-	timeout                time.Duration
-	addDirs                []string
-	workDir                string
-	effort                 EffortLevel
-	env                    map[string]string
+	timeout                 time.Duration
+	addDirs                 []string
+	workDir                 string
+	effort                  EffortLevel
+	env                     map[string]string
 	includePartialMessages  bool
 	extraArgs               map[string]string
 	user                    string
@@ -90,10 +90,10 @@ func WithBinaryPath(path string) Option {
 	return func(o *options) { o.binaryPath = path }
 }
 
-func WithModel(m Model) Option            { return func(o *options) { o.model = m } }
-func WithFallbackModel(m Model) Option    { return func(o *options) { o.fallbackModel = m } }
-func WithBetas(betas ...string) Option    { return func(o *options) { o.betas = betas } }
-func WithMaxThinkingTokens(n int) Option  { return func(o *options) { o.maxThinkingTokens = n } }
+func WithModel(m Model) Option           { return func(o *options) { o.model = m } }
+func WithFallbackModel(m Model) Option   { return func(o *options) { o.fallbackModel = m } }
+func WithBetas(betas ...string) Option   { return func(o *options) { o.betas = betas } }
+func WithMaxThinkingTokens(n int) Option { return func(o *options) { o.maxThinkingTokens = n } }
 
 func WithSystemPrompt(p string) Option     { return func(o *options) { o.systemPrompt = p } }
 func WithSystemPromptFile(p string) Option { return func(o *options) { o.systemPromptFile = p } }
@@ -124,14 +124,14 @@ func WithPermissionMode(m PermissionMode) Option { return func(o *options) { o.p
 func WithPermissionPromptToolName(name string) Option {
 	return func(o *options) { o.permissionPromptToolName = name }
 }
-func WithJSONSchema(schema string) Option        { return func(o *options) { o.jsonSchema = schema } }
-func WithMaxBudget(usd float64) Option           { return func(o *options) { o.maxBudget = usd } }
-func WithMaxTurns(n int) Option                  { return func(o *options) { o.maxTurns = n } }
-func WithSessionID(id string) Option             { return func(o *options) { o.sessionID = id } }
-func WithForkSession() Option                    { return func(o *options) { o.forkSession = true } }
-func WithContinue() Option                       { return func(o *options) { o.continueSession = true } }
-func WithMCPConfig(configs ...string) Option     { return func(o *options) { o.mcpConfig = configs } }
-func WithStrictMCPConfig() Option                { return func(o *options) { o.strictMCPConfig = true } }
+func WithJSONSchema(schema string) Option    { return func(o *options) { o.jsonSchema = schema } }
+func WithMaxBudget(usd float64) Option       { return func(o *options) { o.maxBudget = usd } }
+func WithMaxTurns(n int) Option              { return func(o *options) { o.maxTurns = n } }
+func WithSessionID(id string) Option         { return func(o *options) { o.sessionID = id } }
+func WithForkSession() Option                { return func(o *options) { o.forkSession = true } }
+func WithContinue() Option                   { return func(o *options) { o.continueSession = true } }
+func WithMCPConfig(configs ...string) Option { return func(o *options) { o.mcpConfig = configs } }
+func WithStrictMCPConfig() Option            { return func(o *options) { o.strictMCPConfig = true } }
 
 // WithAgent selects a named agent for the session.
 func WithAgent(name string) Option { return func(o *options) { o.agent = name } }
@@ -143,19 +143,21 @@ func WithAgentDef(jsonDef string) Option { return func(o *options) { o.agentDef 
 // WithAddDirs adds directories the CLI tools can access beyond the working directory.
 func WithAddDirs(dirs ...string) Option { return func(o *options) { o.addDirs = dirs } }
 
-func WithSettings(s string) Option               { return func(o *options) { o.settings = s } }
-func WithSettingSources(sources ...string) Option { return func(o *options) { o.settingSources = sources } }
+func WithSettings(s string) Option { return func(o *options) { o.settings = s } }
+func WithSettingSources(sources ...string) Option {
+	return func(o *options) { o.settingSources = sources }
+}
 func WithPluginDirs(dirs ...string) Option        { return func(o *options) { o.pluginDirs = dirs } }
 func WithWorkDir(dir string) Option               { return func(o *options) { o.workDir = dir } }
-func WithEffort(level EffortLevel) Option          { return func(o *options) { o.effort = level } }
-func WithEnv(env map[string]string) Option         { return func(o *options) { o.env = env } }
-func WithResume(sessionID string) Option           { return func(o *options) { o.resume = sessionID } }
-func WithExtraArgs(args map[string]string) Option  { return func(o *options) { o.extraArgs = args } }
-func WithUser(user string) Option                  { return func(o *options) { o.user = user } }
-func WithTimeout(d time.Duration) Option             { return func(o *options) { o.timeout = d } }
-func WithStderrCallback(fn func(string)) Option    { return func(o *options) { o.stderrCallback = fn } }
-func WithFileCheckpointing() Option                { return func(o *options) { o.enableFileCheckpointing = true } }
-func WithSkipVersionCheck() Option                 { return func(o *options) { o.skipVersionCheck = true } }
+func WithEffort(level EffortLevel) Option         { return func(o *options) { o.effort = level } }
+func WithEnv(env map[string]string) Option        { return func(o *options) { o.env = env } }
+func WithResume(sessionID string) Option          { return func(o *options) { o.resume = sessionID } }
+func WithExtraArgs(args map[string]string) Option { return func(o *options) { o.extraArgs = args } }
+func WithUser(user string) Option                 { return func(o *options) { o.user = user } }
+func WithTimeout(d time.Duration) Option          { return func(o *options) { o.timeout = d } }
+func WithStderrCallback(fn func(string)) Option   { return func(o *options) { o.stderrCallback = fn } }
+func WithFileCheckpointing() Option               { return func(o *options) { o.enableFileCheckpointing = true } }
+func WithSkipVersionCheck() Option                { return func(o *options) { o.skipVersionCheck = true } }
 
 // WithCanUseTool registers a callback for tool permission requests.
 // Only effective with Connect() sessions.

@@ -133,9 +133,11 @@ type ErrorEvent struct {
 }
 
 func (*ErrorEvent) event() {}
-func (e *ErrorEvent) String() string { return fmt.Sprintf("ErrorEvent{Fatal: %v, Err: %v}", e.Fatal, e.Err) }
-func (e *ErrorEvent) Error() string  { return e.Err.Error() }
-func (e *ErrorEvent) Unwrap() error  { return e.Err }
+func (e *ErrorEvent) String() string {
+	return fmt.Sprintf("ErrorEvent{Fatal: %v, Err: %v}", e.Fatal, e.Err)
+}
+func (e *ErrorEvent) Error() string { return e.Err.Error() }
+func (e *ErrorEvent) Unwrap() error { return e.Err }
 
 // ControlRequestEvent is emitted when the CLI sends a control request.
 // In session mode, these are handled internally and not exposed.

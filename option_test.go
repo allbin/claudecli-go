@@ -358,9 +358,9 @@ func TestBuildArgsEffortTypedConstants(t *testing.T) {
 // Fix #14: extraArgs produce deterministic (sorted) order.
 func TestBuildArgsExtraArgsSorted(t *testing.T) {
 	extra := map[string]string{
-		"zzz-flag":   "z",
-		"aaa-flag":   "a",
-		"mmm-flag":   "m",
+		"zzz-flag": "z",
+		"aaa-flag": "a",
+		"mmm-flag": "m",
 	}
 	// Build args twice and verify identical order.
 	args1 := resolveOptions(nil, []Option{WithExtraArgs(extra)}).buildArgs()

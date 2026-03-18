@@ -28,9 +28,9 @@ type Process struct {
 
 // StartConfig holds parameters for starting a CLI process.
 type StartConfig struct {
-	Args          []string
-	Stdin         io.Reader
-	Env           map[string]string
+	Args                    []string
+	Stdin                   io.Reader
+	Env                     map[string]string
 	WorkDir                 string
 	KeepStdinOpen           bool // if true, don't close stdin after initial write
 	EnableFileCheckpointing bool
