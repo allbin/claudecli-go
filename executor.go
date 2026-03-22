@@ -86,16 +86,15 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 	if err != nil {
 		return nil, fmt.Errorf("stdin pipe: %w", err)
 	}
+	closeStdin := sync.OnceFunc(func() { stdinPipe.Close() })
 
 	if cfg.Stdin != nil {
-		pipeClose := sync.OnceFunc(func() { stdinPipe.Close() })
-
 		// Close pipe on context cancel to unblock the copy goroutine.
 		copyDone := make(chan struct{})
 		go func() {
 			select {
 			case <-ctx.Done():
-				pipeClose()
+				closeStdin()
 			case <-copyDone:
 			}
 		}()
@@ -104,11 +103,11 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 			defer close(copyDone)
 			io.Copy(stdinPipe, cfg.Stdin)
 			if !cfg.KeepStdinOpen {
-				pipeClose()
+				closeStdin()
 			}
 		}()
 	} else if !cfg.KeepStdinOpen {
-		stdinPipe.Close()
+		closeStdin()
 	}
 
 	envOverrides := cfg.Env
@@ -125,15 +124,21 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		closeStdin()
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		closeStdin()
+		stdout.Close()
 		return nil, fmt.Errorf("stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
+		closeStdin()
+		stdout.Close()
+		stderr.Close()
 		return nil, fmt.Errorf("start: %w", err)
 	}
 

@@ -107,14 +107,17 @@ func pickJSONSource(result *BlockingResult) []byte {
 }
 
 func processExitError(err error, stderr string) *Error {
-	exitErr, ok := err.(*exec.ExitError)
-	if !ok {
-		return &Error{Stderr: stderr, Message: err.Error()}
-	}
 	details := parseErrorDetails(stderr)
 	var msg string
 	if details != nil {
 		msg = details.Message
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		if msg == "" {
+			msg = err.Error()
+		}
+		return &Error{ExitCode: -1, Stderr: stderr, Message: msg, Details: details}
 	}
 	return &Error{
 		ExitCode: exitErr.ExitCode(),
@@ -161,6 +164,10 @@ func parseBlockingJSON(data []byte) (*BlockingResult, error) {
 			}
 		}
 		return rawToBlocking(&arr[idx]), nil
+	}
+
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty response from CLI (no stdout)")
 	}
 
 	var raw rawBlockingResult

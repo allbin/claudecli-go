@@ -42,13 +42,15 @@ type Session struct {
 	canUseTool ToolPermissionFunc
 
 	// state tracking
-	sessionID  string
-	serverInfo json.RawMessage
-	stateMu    sync.Mutex
-	state      State
-	result     *ResultEvent
-	err        error
-	waited     bool
+	sessionID       string
+	serverInfo      json.RawMessage
+	stateMu         sync.Mutex
+	state           State
+	result          *ResultEvent
+	err             error
+	waited          bool
+	resultReady     chan struct{} // closed when a ResultEvent or fatal error is tracked
+	resultCloseOnce sync.Once
 }
 
 // Events returns the event channel. Closed when session ends.
@@ -89,6 +91,8 @@ func (s *Session) Query(prompt string) error {
 	s.waited = false
 	s.result = nil
 	s.err = nil
+	s.resultReady = make(chan struct{})
+	s.resultCloseOnce = sync.Once{}
 	s.stateMu.Unlock()
 
 	msg := userMessage{
@@ -107,6 +111,7 @@ func (s *Session) Query(prompt string) error {
 // Wait blocks until a ResultEvent or error for the current query.
 // In multi-turn sessions, returns after each result (not at process exit).
 // Idempotent within a single query: multiple calls return the same result.
+// Safe to call concurrently with Events() -- Wait does not consume events.
 func (s *Session) Wait() (*ResultEvent, error) {
 	s.stateMu.Lock()
 	if s.waited {
@@ -114,18 +119,13 @@ func (s *Session) Wait() (*ResultEvent, error) {
 		s.stateMu.Unlock()
 		return result, err
 	}
+	ready := s.resultReady
 	s.stateMu.Unlock()
 
-	for ev := range s.events {
-		if _, ok := ev.(*ResultEvent); ok {
-			s.stateMu.Lock()
-			s.waited = true
-			result, err := s.result, s.err
-			s.stateMu.Unlock()
-			return result, err
-		}
+	select {
+	case <-ready:
+	case <-s.done:
 	}
-	<-s.done
 
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
@@ -300,13 +300,43 @@ func (s *Session) initialize() error {
 }
 
 // readLoop reads stdout, routes control messages, forwards events.
+//
+// An internal pump goroutine decouples stdout reading from event delivery:
+// stdout parsing writes to a buffered internal channel, and the pump drains
+// it into s.events. This prevents a slow event consumer from blocking the
+// stdout scanner, which would stall control response processing.
 func (s *Session) readLoop() {
 	defer close(s.done)
-	defer close(s.events)
 	defer s.setDoneState()
 	defer s.failPendingRequests()
 
-	stderrLines, stderrDone := scanStderr(s.ctx, s.proc, s.events, nil)
+	// Event pump: buffered intermediary so stdout reading never blocks
+	// on a slow event consumer.
+	pump := make(chan Event, 256)
+	pumpDone := make(chan struct{})
+	go func() {
+		defer close(pumpDone)
+		for ev := range pump {
+			select {
+			case s.events <- ev:
+			case <-s.ctx.Done():
+			}
+		}
+	}()
+	defer func() {
+		close(pump)
+		<-pumpDone
+		close(s.events)
+	}()
+
+	pumpSend := func(ev Event) {
+		select {
+		case pump <- ev:
+		case <-s.ctx.Done():
+		}
+	}
+
+	stderrLines, stderrDone := scanStderr(s.ctx, s.proc, pump, nil)
 
 	scanner := bufio.NewScanner(s.proc.Stdout)
 	scanner.Buffer(make([]byte, 256*1024), 10*1024*1024)
@@ -321,7 +351,7 @@ func (s *Session) readLoop() {
 
 		var raw rawEvent
 		if err := json.Unmarshal(line, &raw); err != nil {
-			s.sendEvent(&ErrorEvent{Err: fmt.Errorf("unmarshal JSONL: %w", err)})
+			pumpSend(&ErrorEvent{Err: fmt.Errorf("unmarshal JSONL: %w", err)})
 			continue
 		}
 
@@ -343,7 +373,7 @@ func (s *Session) readLoop() {
 			s.sessionID = raw.SessionID
 			s.stateMu.Unlock()
 			s.trackState(ev)
-			s.sendEvent(ev)
+			pumpSend(ev)
 
 		case "assistant":
 			if raw.Message == nil {
@@ -352,18 +382,18 @@ func (s *Session) readLoop() {
 			for _, block := range raw.Message.Content {
 				switch block.Type {
 				case "thinking":
-					s.sendEvent(&ThinkingEvent{Content: block.Thinking, Signature: block.Signature})
+					pumpSend(&ThinkingEvent{Content: block.Thinking, Signature: block.Signature})
 				case "text":
 					resultText = append(resultText, block.Text)
-					s.sendEvent(&TextEvent{Content: block.Text})
+					pumpSend(&TextEvent{Content: block.Text})
 				case "tool_use":
-					s.sendEvent(&ToolUseEvent{
+					pumpSend(&ToolUseEvent{
 						ID:    block.ID,
 						Name:  block.Name,
 						Input: block.Input,
 					})
 				case "tool_result":
-					s.sendEvent(&ToolResultEvent{
+					pumpSend(&ToolResultEvent{
 						ToolUseID: block.ToolUseID,
 						Content:   extractContent(block.Content),
 					})
@@ -383,16 +413,16 @@ func (s *Session) readLoop() {
 			}
 			resultText = nil
 			s.trackState(ev)
-			s.sendEvent(ev)
+			pumpSend(ev)
 
 		case "rate_limit_event":
-			s.sendEvent(&RateLimitEvent{
+			pumpSend(&RateLimitEvent{
 				Status:      raw.RateLimitInfo.Status,
 				Utilization: raw.RateLimitInfo.Utilization,
 			})
 
 		case "stream_event":
-			s.sendEvent(&StreamEvent{
+			pumpSend(&StreamEvent{
 				UUID:      raw.UUID,
 				SessionID: raw.SessionID,
 				Event:     raw.Event,
@@ -401,10 +431,10 @@ func (s *Session) readLoop() {
 	}
 
 	if err := scanner.Err(); err != nil {
-		s.sendEvent(&ErrorEvent{Err: fmt.Errorf("scanner: %w", err)})
+		pumpSend(&ErrorEvent{Err: fmt.Errorf("scanner: %w", err)})
 	}
 
-	// Wait for in-flight handleControlRequest goroutines before closing channels.
+	// Wait for in-flight handleControlRequest goroutines before closing pump.
 	s.controlWg.Wait()
 
 	<-stderrDone
@@ -416,7 +446,7 @@ func (s *Session) readLoop() {
 			Fatal: true,
 		}
 		s.trackState(ev)
-		s.sendEvent(ev)
+		pumpSend(ev)
 	}
 }
 
@@ -459,12 +489,14 @@ func (s *Session) trackState(event Event) {
 	case *ResultEvent:
 		s.state = StateIdle
 		s.result = e
+		s.resultCloseOnce.Do(func() { close(s.resultReady) })
 	case *ErrorEvent:
 		if e.Fatal {
 			s.state = StateFailed
 			if s.err == nil {
 				s.err = e.Err
 			}
+			s.resultCloseOnce.Do(func() { close(s.resultReady) })
 		}
 	}
 }

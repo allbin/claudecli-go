@@ -882,6 +882,49 @@ func TestStateIdleString(t *testing.T) {
 	}
 }
 
+func TestSessionWaitDoesNotConsumeEvents(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+		// Send a text event, then a result
+		sim.send(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}`)
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	// Consume events in one goroutine, call Wait in another.
+	// Both should complete without deadlock, and Wait should get the result.
+	var events []Event
+	eventsDone := make(chan struct{})
+	go func() {
+		defer close(eventsDone)
+		for ev := range session.Events() {
+			events = append(events, ev)
+		}
+	}()
+
+	result, err := session.Wait()
+	if err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	<-eventsDone
+	// The events consumer should have received the text and result events
+	if len(events) == 0 {
+		t.Error("expected events consumer to receive events")
+	}
+}
+
 func TestSessionInitTimeoutSeparateFromControlTimeout(t *testing.T) {
 	sim := newSessionSim()
 	client := NewWithExecutor(sim.bidi)

@@ -290,6 +290,7 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 		canUseTool:     resolved.canUseTool,
 		controlTimeout: controlTimeout,
 		initTimeout:    initTimeout,
+		resultReady:    make(chan struct{}),
 	}
 
 	go session.readLoop()

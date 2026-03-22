@@ -162,6 +162,11 @@ func WithSkipVersionCheck() Option                { return func(o *options) { o.
 
 // WithCanUseTool registers a callback for tool permission requests.
 // Only effective with Connect() sessions.
+//
+// The callback runs in a goroutine and must return promptly. If the session's
+// context is cancelled (e.g. via Close), the SDK stops waiting for the callback
+// but cannot forcibly terminate it. A callback that blocks indefinitely will
+// leak its goroutine. Long-running callbacks should select on ctx.Done().
 func WithCanUseTool(fn ToolPermissionFunc) Option {
 	return func(o *options) { o.canUseTool = fn }
 }

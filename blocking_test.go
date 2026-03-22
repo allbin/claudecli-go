@@ -204,6 +204,18 @@ func TestRunBlockingStartFailure(t *testing.T) {
 	}
 }
 
+func TestRunBlockingEmptyResponse(t *testing.T) {
+	exec := &staticExecutor{stdout: []byte{}}
+	client := NewWithExecutor(exec)
+	_, err := client.RunBlocking(context.Background(), "ignored")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "empty response") {
+		t.Errorf("expected 'empty response' error, got: %v", err)
+	}
+}
+
 func TestRunBlockingStderrCallback(t *testing.T) {
 	exec := &staticExecutor{
 		stdout: []byte(blockingFixture),
@@ -287,26 +299,29 @@ func TestRunBlockingLargeStderr(t *testing.T) {
 	}
 }
 
-// Fix #7/#10: processExitError with exec.ExitError populates Details.Message.
-func TestProcessExitError_ExitError(t *testing.T) {
+// processExitError always parses stderr for structured error details,
+// regardless of whether the underlying error is an *exec.ExitError.
+func TestProcessExitError_NonExitErrorWithDetails(t *testing.T) {
 	stderr := `{"type":"rate_limit","message":"Rate limit exceeded","retry_after_seconds":30}`
-	// Simulate a non-ExitError first
 	err := processExitError(errors.New("generic error"), stderr)
-	if err.ExitCode != 0 {
-		t.Errorf("expected zero exit code for non-ExitError, got %d", err.ExitCode)
+	if err.ExitCode != -1 {
+		t.Errorf("exit code = %d, want -1", err.ExitCode)
 	}
-	if err.Message != "generic error" {
-		t.Errorf("expected 'generic error', got %q", err.Message)
+	if err.Message != "Rate limit exceeded" {
+		t.Errorf("message = %q, want 'Rate limit exceeded'", err.Message)
 	}
-	if err.Details != nil {
-		t.Error("expected nil Details for non-ExitError")
+	if err.Details == nil {
+		t.Fatal("expected non-nil Details")
+	}
+	if !err.IsRateLimit() {
+		t.Error("expected IsRateLimit() = true")
 	}
 }
 
-func TestProcessExitError_NonExitError(t *testing.T) {
+func TestProcessExitError_NonExitErrorPlainStderr(t *testing.T) {
 	err := processExitError(errors.New("broken pipe"), "some stderr")
-	if err.ExitCode != 0 {
-		t.Errorf("exit code = %d, want 0", err.ExitCode)
+	if err.ExitCode != -1 {
+		t.Errorf("exit code = %d, want -1", err.ExitCode)
 	}
 	if err.Message != "broken pipe" {
 		t.Errorf("message = %q, want 'broken pipe'", err.Message)
@@ -316,13 +331,17 @@ func TestProcessExitError_NonExitError(t *testing.T) {
 	}
 }
 
-func TestProcessExitError_DetailsMessage(t *testing.T) {
-	// Simulate stderr with structured error JSON
+func TestProcessExitError_NonExitErrorDetailsMessage(t *testing.T) {
 	stderr := `{"type":"auth","message":"Invalid API key"}`
 	err := processExitError(errors.New("exit status 1"), stderr)
-	// non-ExitError: Message comes from err.Error(), Details is nil
-	if err.Message != "exit status 1" {
-		t.Errorf("message = %q", err.Message)
+	if err.Message != "Invalid API key" {
+		t.Errorf("message = %q, want 'Invalid API key'", err.Message)
+	}
+	if err.Details == nil {
+		t.Fatal("expected non-nil Details")
+	}
+	if !err.IsAuth() {
+		t.Error("expected IsAuth() = true")
 	}
 }
 
