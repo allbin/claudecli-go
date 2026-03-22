@@ -1,6 +1,9 @@
 package claudecli
 
-import "encoding/json"
+import (
+	"encoding/base64"
+	"encoding/json"
+)
 
 // Control message types for the bidirectional protocol.
 
@@ -56,5 +59,53 @@ type userMessage struct {
 
 type messageBody struct {
 	Role    string `json:"role"`
-	Content string `json:"content"`
+	Content any    `json:"content"` // string or []ContentBlock
+}
+
+// ContentBlock is an opaque content block for multimodal messages.
+// Create with TextBlock, ImageBlock, or DocumentBlock.
+type ContentBlock struct {
+	raw json.RawMessage
+}
+
+func (b ContentBlock) MarshalJSON() ([]byte, error) { return b.raw, nil }
+
+// TextBlock creates a text content block.
+func TextBlock(text string) ContentBlock {
+	data, _ := json.Marshal(struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}{"text", text})
+	return ContentBlock{raw: data}
+}
+
+// base64SourceBlock builds an image or document block with base64-encoded data.
+func base64SourceBlock(blockType, mediaType string, data []byte) ContentBlock {
+	raw, _ := json.Marshal(struct {
+		Type   string `json:"type"`
+		Source struct {
+			Type      string `json:"type"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+		} `json:"source"`
+	}{
+		Type: blockType,
+		Source: struct {
+			Type      string `json:"type"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+		}{"base64", mediaType, base64.StdEncoding.EncodeToString(data)},
+	})
+	return ContentBlock{raw: raw}
+}
+
+// ImageBlock creates an image content block.
+// mediaType: "image/png", "image/jpeg", "image/gif", or "image/webp".
+func ImageBlock(mediaType string, data []byte) ContentBlock {
+	return base64SourceBlock("image", mediaType, data)
+}
+
+// DocumentBlock creates a document content block (e.g. PDF).
+func DocumentBlock(mediaType string, data []byte) ContentBlock {
+	return base64SourceBlock("document", mediaType, data)
 }

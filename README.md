@@ -206,7 +206,8 @@ result, err := session.Wait()
 ```
 
 Session methods:
-- `Query(prompt)` — send a user message
+- `Query(prompt)` — send a text-only user message
+- `QueryWithContent(prompt, blocks...)` — send a message with text and multimodal content blocks
 - `Events()` — event channel
 - `Wait()` — block until result (idempotent)
 - `Interrupt()` — send interrupt signal
@@ -219,6 +220,24 @@ Session methods:
 - `StopTask(taskID)` — stop a running task
 - `GetMCPStatus()` — query MCP server status
 - `Close()` — terminate session
+
+## Multimodal input
+
+Send images and documents alongside text in interactive sessions:
+
+```go
+imgData, _ := os.ReadFile("screenshot.png")
+session.QueryWithContent("Describe this image",
+    claudecli.ImageBlock("image/png", imgData),
+)
+
+pdfData, _ := os.ReadFile("report.pdf")
+session.QueryWithContent("Summarize this document",
+    claudecli.DocumentBlock("application/pdf", pdfData),
+)
+```
+
+Content block constructors: `TextBlock`, `ImageBlock`, `DocumentBlock`. Base64 encoding is handled internally.
 
 ## Custom executor
 
@@ -426,7 +445,7 @@ claudecli-go/
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
   client.go      Client struct, Run/RunText/RunJSON/Connect, package-level shortcuts
   session.go     Interactive session with bidirectional control protocol
-  control.go     Control message types for the bidirectional protocol
+  control.go     Control message types, ContentBlock/ImageSource for multimodal input
   blocking.go    RunBlocking/RunBlockingJSON — non-streaming JSON output mode
   version.go     CLI version checking with semver parsing
   error.go       Typed Error (ExitCode, Stderr, Message), UnmarshalError (RawText)

@@ -108,6 +108,47 @@ func (s *Session) Query(prompt string) error {
 	return s.writeStdin(append(data, '\n'))
 }
 
+// QueryWithContent sends a user message with multimodal content blocks.
+// The prompt is prepended as a text block, followed by the provided blocks.
+func (s *Session) QueryWithContent(prompt string, blocks ...ContentBlock) error {
+	s.stateMu.Lock()
+	switch s.state {
+	case StateFailed:
+		err := s.err
+		s.stateMu.Unlock()
+		return fmt.Errorf("session failed: %w", err)
+	case StateRunning:
+		s.stateMu.Unlock()
+		return fmt.Errorf("query already in progress")
+	case StateDone:
+		s.stateMu.Unlock()
+		return fmt.Errorf("session ended")
+	}
+	s.state = StateRunning
+	s.waited = false
+	s.result = nil
+	s.err = nil
+	s.resultReady = make(chan struct{})
+	s.resultCloseOnce = sync.Once{}
+	s.stateMu.Unlock()
+
+	content := make([]ContentBlock, 0, 1+len(blocks))
+	content = append(content, TextBlock(prompt))
+	content = append(content, blocks...)
+
+	msg := userMessage{
+		Type:            "user",
+		SessionID:       s.sessionID,
+		Message:         messageBody{Role: "user", Content: content},
+		ParentToolUseID: nil,
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal user message: %w", err)
+	}
+	return s.writeStdin(append(data, '\n'))
+}
+
 // Wait blocks until a ResultEvent or error for the current query.
 // In multi-turn sessions, returns after each result (not at process exit).
 // Idempotent within a single query: multiple calls return the same result.
