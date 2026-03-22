@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -125,14 +124,7 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 		envOverrides["CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"] = "1"
 	}
 	cmd.Env = buildEnv(envOverrides)
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Cancel = func() error {
-			// Signal the process group (negative PID) to kill children too.
-			return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		}
-		cmd.WaitDelay = 5 * time.Second
-	}
+	setPlatformAttrs(cmd)
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
 	}

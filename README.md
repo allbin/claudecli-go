@@ -418,7 +418,9 @@ claudecli-go/
   model.go       Model constants
   permission.go  PermissionMode constants
   option.go      Functional options + CLI arg builder
-  executor.go    Executor interface, LocalExecutor, FixtureExecutor, BidiFixtureExecutor
+  executor.go         Executor interface, LocalExecutor, FixtureExecutor, BidiFixtureExecutor
+  executor_unix.go    Unix process group attrs (Setpgid, SIGTERM)
+  executor_windows.go Windows no-op (default cmd.Process.Kill behavior)
   parse.go       JSONL stream parser (decoupled from process lifecycle)
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
   client.go      Client struct, Run/RunText/RunJSON/Connect, package-level shortcuts
