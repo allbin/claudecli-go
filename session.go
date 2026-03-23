@@ -52,6 +52,8 @@ type Session struct {
 	waited          bool
 	resultReady     chan struct{} // closed when a ResultEvent or fatal error is tracked
 	resultCloseOnce sync.Once
+	readyCh         chan struct{} // closed on first system event (session ready for queries)
+	readyOnce       sync.Once
 }
 
 // Events returns the event channel. Closed when session ends.
@@ -84,8 +86,10 @@ func (s *Session) prepareQuery() error {
 		return fmt.Errorf("query already in progress")
 	case StateDone:
 		return fmt.Errorf("session ended")
+	case StateStarting:
+		return fmt.Errorf("session not ready")
 	}
-	// Valid: StateStarting (initial query), StateIdle (subsequent queries)
+	// Valid: StateIdle
 	s.state = StateRunning
 	s.waited = false
 	s.result = nil
@@ -395,6 +399,7 @@ func (s *Session) readLoop() {
 			s.sessionID = raw.SessionID
 			s.stateMu.Unlock()
 			s.trackState(ev)
+			s.readyOnce.Do(func() { close(s.readyCh) })
 			pumpSend(ev)
 
 		case "assistant":
@@ -479,6 +484,7 @@ func (s *Session) setDoneState() {
 	if s.state != StateFailed {
 		s.state = StateDone
 	}
+	s.readyOnce.Do(func() { close(s.readyCh) })
 }
 
 // failPendingRequests signals all pending control request waiters with an error.
@@ -507,7 +513,9 @@ func (s *Session) trackState(event Event) {
 	defer s.stateMu.Unlock()
 	switch e := event.(type) {
 	case *InitEvent:
-		s.state = StateRunning
+		if s.state == StateStarting {
+			s.state = StateIdle
+		}
 	case *ResultEvent:
 		s.state = StateIdle
 		s.result = e

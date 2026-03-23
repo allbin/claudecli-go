@@ -189,6 +189,7 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 		controlTimeout: controlTimeout,
 		initTimeout:    initTimeout,
 		resultReady:    make(chan struct{}),
+		readyCh:        make(chan struct{}),
 	}
 
 	go session.readLoop()
@@ -196,6 +197,15 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 	if err := session.initialize(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("initialize: %w", err)
+	}
+
+	// Wait for session to become ready (first system event) or process exit.
+	select {
+	case <-session.readyCh:
+	case <-session.done:
+	case <-ctx.Done():
+		cancel()
+		return nil, ctx.Err()
 	}
 
 	return session, nil

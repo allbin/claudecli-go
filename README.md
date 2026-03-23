@@ -134,6 +134,8 @@ result, err := stream.Wait() // idempotent, safe to call multiple times
 
 States: `StateStarting`, `StateRunning`, `StateDone`, `StateFailed`.
 
+Session lifecycle differs: `StateStarting` → `StateIdle` (after Connect) → `StateRunning` (during Query) → `StateIdle` (after result) → `StateDone` (after Close).
+
 ## Sessions
 
 ```go

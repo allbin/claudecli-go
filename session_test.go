@@ -31,6 +31,14 @@ func (s *sessionSim) handleInit(t *testing.T) {
 	s.handleInitWith(t, "{}")
 }
 
+// handleInitAndReady handles the init handshake and sends the system event,
+// matching real CLI behavior where the system event arrives right after init.
+func (s *sessionSim) handleInitAndReady(t *testing.T) {
+	t.Helper()
+	s.handleInit(t)
+	s.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
+}
+
 // handleInitWith reads and responds to the initialize control request
 // with a custom response body.
 func (s *sessionSim) handleInitWith(t *testing.T, responseJSON string) {
@@ -110,8 +118,7 @@ func TestSessionInitialize(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
-		sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
+		sim.handleInitAndReady(t)
 		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"Hello!"}]}}`)
 		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
 		sim.bidi.StdoutWriter.Close()
@@ -151,7 +158,7 @@ func TestSessionQuery(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		msg := sim.readStdin(t)
 		if msg["type"] != "user" {
@@ -192,7 +199,7 @@ func TestSessionMultiQuery(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// First query
 		sim.readStdin(t)
@@ -246,7 +253,7 @@ func TestSessionCanUseTool(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Send a can_use_tool control request
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
@@ -294,7 +301,7 @@ func TestSessionCanUseToolDeny(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -rf /"}}}`)
 
@@ -330,7 +337,7 @@ func TestSessionClose(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		time.Sleep(50 * time.Millisecond)
 		sim.bidi.StdoutWriter.Close()
 	}()
@@ -360,7 +367,7 @@ func TestSessionWaitIdempotent(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		sim.sendResult()
 	}()
 
@@ -385,7 +392,7 @@ func TestSessionStateTracking(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		sim.sendTextAndResult("hi")
 	}()
 
@@ -488,6 +495,7 @@ func TestSessionGetServerInfo(t *testing.T) {
 
 	go func() {
 		sim.handleInitWith(t, `{"version":"1.2.3","tools":["Bash","Read"]}`)
+		sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
 		sim.sendResult()
 	}()
 
@@ -516,7 +524,7 @@ func TestSessionRewindFiles(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		msg := sim.respondSuccess(t)
 		request := msg["request"].(map[string]any)
@@ -551,7 +559,7 @@ func TestSessionGetMCPStatus(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		msg := sim.respondSuccess(t)
 		request := msg["request"].(map[string]any)
@@ -583,7 +591,7 @@ func TestSessionStateAndSessionID(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		sim.sendTextAndResult("hi")
 	}()
 
@@ -609,7 +617,7 @@ func TestSessionStateIdleTransition(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		sim.readStdin(t)
 		sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
@@ -658,13 +666,49 @@ func TestSessionStateIdleTransition(t *testing.T) {
 	}
 }
 
+func TestSessionQueryAfterDelay(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+
+		sim.readStdin(t)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	// Simulate delay — control requests, app logic, etc.
+	time.Sleep(50 * time.Millisecond)
+
+	// This must not fail with "query already in progress"
+	if err := session.Query("hello"); err != nil {
+		t.Fatalf("Query after delay failed: %v", err)
+	}
+	r, err := session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Text != "ok" {
+		t.Errorf("result = %q, want 'ok'", r.Text)
+	}
+}
+
 func TestSessionQueryRejectRunning(t *testing.T) {
 	sim := newSessionSim()
 	client := NewWithExecutor(sim.bidi)
 	secondQueryDone := make(chan struct{})
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		sim.readStdin(t)
 		// Wait until second query attempt is done before responding
 		<-secondQueryDone
@@ -699,7 +743,7 @@ func TestSessionQueryRejectFailed(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		sim.bidi.StdoutWriter.Close()
 	}()
 
@@ -724,7 +768,7 @@ func TestSessionWaitResetAcrossQueries(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		sim.readStdin(t)
 		sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
@@ -780,7 +824,7 @@ func TestSessionControlRequestErrorPropagation(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		sim.respondError(t, "model not available")
 		sim.sendResult()
 	}()
@@ -810,7 +854,7 @@ func TestSessionControlRequestSuccess(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		msg := sim.respondSuccess(t)
 		request := msg["request"].(map[string]any)
 		if request["subtype"] != "set_model" {
@@ -840,7 +884,7 @@ func TestSessionTextResetOnSystemEvent(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		sim.readStdin(t)
 		// System event + text + result for first query
@@ -887,7 +931,7 @@ func TestSessionWaitDoesNotConsumeEvents(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		// Send a text event, then a result
 		sim.send(`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}`)
 		sim.sendResult()
@@ -986,7 +1030,7 @@ func TestSessionPendingRequestsFailOnProcessExit(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		// Read the control request from stdin but never respond — just close stdout.
 		sim.readStdin(t)
 		sim.bidi.StdoutWriter.Close()
@@ -1021,7 +1065,7 @@ func TestSessionWriteAfterClose(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 		sim.bidi.StdoutWriter.Close()
 	}()
 
@@ -1047,7 +1091,7 @@ func TestSessionCanUseToolCallbackPanic(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Send a can_use_tool request — callback will panic
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
@@ -1082,7 +1126,7 @@ func TestSessionControlResponseErrorPath(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Send a can_use_tool request; callback returns an error
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
@@ -1121,7 +1165,7 @@ func TestSessionControlRequestSubtypeNotCorrupted(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Read control request and verify subtype is correct despite data containing "subtype"
 		msg := sim.readStdin(t)
@@ -1162,7 +1206,7 @@ func TestSessionCanUseToolCancelledDuringCallback(t *testing.T) {
 	callbackStarted := make(chan struct{})
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Send a can_use_tool request — callback will block
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
@@ -1205,7 +1249,7 @@ func TestSessionUserInputRouting(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Send AskUserQuestion via can_use_tool
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?","header":"Strategy","options":[{"label":"A","description":"Fast"},{"label":"B","description":"Safe"}],"multiSelect":false}]}}}`)
@@ -1271,7 +1315,7 @@ func TestSessionUserInputFallsThroughToCanUseTool(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Send AskUserQuestion — no userInput registered, should go to canUseTool
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Pick one"}]}}}`)
@@ -1315,7 +1359,7 @@ func TestSessionUserInputDoesNotInterceptOtherTools(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Send a Bash tool request — should go to canUseTool, not userInput
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
@@ -1361,7 +1405,7 @@ func TestSessionUserInputOnlyNoCanUseTool(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		// Send a Bash tool request — no canUseTool registered, should get error
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
@@ -1394,7 +1438,7 @@ func TestSessionUserInputCallbackPanic(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Pick one"}]}}}`)
 
@@ -1426,7 +1470,7 @@ func TestSessionUserInputCallbackError(t *testing.T) {
 	client := NewWithExecutor(sim.bidi)
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Pick one"}]}}}`)
 
@@ -1460,7 +1504,7 @@ func TestSessionUserInputCancelledDuringCallback(t *testing.T) {
 	callbackStarted := make(chan struct{})
 
 	go func() {
-		sim.handleInit(t)
+		sim.handleInitAndReady(t)
 
 		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Pick one"}]}}}`)
 
@@ -1519,7 +1563,7 @@ func TestPrepareQueryEdgeCases(t *testing.T) {
 
 		checked := make(chan struct{})
 		go func() {
-			sim.handleInit(t)
+			sim.handleInitAndReady(t)
 			sim.readStdin(t) // consume the query
 			// Keep stdout open until assertion completes
 			<-checked
@@ -1548,7 +1592,7 @@ func TestPrepareQueryEdgeCases(t *testing.T) {
 		client := NewWithExecutor(sim.bidi)
 
 		go func() {
-			sim.handleInit(t)
+			sim.handleInitAndReady(t)
 			sim.sendResult()
 		}()
 
@@ -1575,9 +1619,8 @@ func TestPrepareQueryEdgeCases(t *testing.T) {
 		client := NewWithExecutor(sim.bidi)
 
 		go func() {
-			sim.handleInit(t)
-			// Send system + result to transition to Idle
-			sim.send(`{"type":"system","session_id":"test-sess","model":"sonnet"}`)
+			sim.handleInitAndReady(t)
+			// Send result to produce a ResultEvent (state stays Idle)
 			sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
 			// Read the query that prepareQuery + sendUserMessage will produce
 			sim.readStdin(t)
