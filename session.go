@@ -40,6 +40,7 @@ type Session struct {
 
 	// callbacks
 	canUseTool ToolPermissionFunc
+	userInput  UserInputFunc
 
 	// state tracking
 	sessionID       string
@@ -560,13 +561,20 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 
 	switch req.Subtype {
 	case "can_use_tool":
-		if s.canUseTool == nil {
-			s.sendControlResponse(requestID, nil, fmt.Errorf("no canUseTool callback registered"))
-			return
-		}
 		var permReq ToolPermissionRequest
 		if err := json.Unmarshal(body, &permReq); err != nil {
 			s.sendControlResponse(requestID, nil, err)
+			return
+		}
+
+		// Route AskUserQuestion to userInput callback when available.
+		if permReq.ToolName == "AskUserQuestion" && s.userInput != nil {
+			s.handleUserInput(requestID, permReq)
+			return
+		}
+
+		if s.canUseTool == nil {
+			s.sendControlResponse(requestID, nil, fmt.Errorf("no canUseTool callback registered"))
 			return
 		}
 
@@ -618,6 +626,53 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 
 	default:
 		s.sendControlResponse(requestID, nil, fmt.Errorf("unsupported control request: %s", req.Subtype))
+	}
+}
+
+// handleUserInput routes AskUserQuestion requests to the userInput callback.
+func (s *Session) handleUserInput(requestID string, permReq ToolPermissionRequest) {
+	var input struct {
+		Questions []Question `json:"questions"`
+	}
+	if err := json.Unmarshal(permReq.Input, &input); err != nil {
+		s.sendControlResponse(requestID, nil, err)
+		return
+	}
+
+	type callbackResult struct {
+		answers map[string]string
+		err     error
+	}
+	ch := make(chan callbackResult, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				ch <- callbackResult{err: fmt.Errorf("callback panic: %v", r)}
+			}
+		}()
+		answers, err := s.userInput(input.Questions)
+		ch <- callbackResult{answers, err}
+	}()
+
+	select {
+	case result := <-ch:
+		if result.err != nil {
+			s.sendControlResponse(requestID, nil, result.err)
+			return
+		}
+		answers := result.answers
+		if answers == nil {
+			answers = make(map[string]string)
+		}
+		s.sendControlResponse(requestID, map[string]any{
+			"behavior": "allow",
+			"updatedInput": map[string]any{
+				"questions": input.Questions,
+				"answers":   answers,
+			},
+		}, nil)
+	case <-s.ctx.Done():
+		s.sendControlResponse(requestID, nil, s.ctx.Err())
 	}
 }
 

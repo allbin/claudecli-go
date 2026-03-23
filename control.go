@@ -42,6 +42,24 @@ type PermissionResponse struct {
 // ToolPermissionFunc is called when the CLI requests permission to use a tool.
 type ToolPermissionFunc func(toolName string, input json.RawMessage) (*PermissionResponse, error)
 
+// Question represents a single question from an AskUserQuestion tool call.
+type Question struct {
+	Question    string           `json:"question"`
+	Header      string           `json:"header,omitempty"`
+	Options     []QuestionOption `json:"options,omitempty"`
+	MultiSelect bool             `json:"multiSelect,omitempty"`
+}
+
+// QuestionOption is a selectable option within a Question.
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// UserInputFunc receives parsed questions and returns a map of question text -> selected answer(s).
+// For multiSelect questions, multiple answers can be joined with newlines or returned as a JSON array.
+type UserInputFunc func(questions []Question) (answers map[string]string, err error)
+
 // controlResult is used internally for tracking pending control request responses.
 type controlResult struct {
 	Response json.RawMessage

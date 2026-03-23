@@ -78,6 +78,7 @@ type options struct {
 
 	// session callbacks
 	canUseTool     ToolPermissionFunc
+	userInput      UserInputFunc
 	controlTimeout time.Duration // timeout for control request responses
 	initTimeout    time.Duration // timeout for initialize handshake (includes MCP startup)
 
@@ -169,6 +170,16 @@ func WithSkipVersionCheck() Option                { return func(o *options) { o.
 // leak its goroutine. Long-running callbacks should select on ctx.Done().
 func WithCanUseTool(fn ToolPermissionFunc) Option {
 	return func(o *options) { o.canUseTool = fn }
+}
+
+// WithUserInput registers a callback for AskUserQuestion tool requests.
+// Only effective with Connect() sessions.
+//
+// When registered, AskUserQuestion requests route here instead of the
+// ToolPermissionFunc callback. Other tool permission requests are unaffected.
+// Also adds --permission-prompt-tool (same as WithCanUseTool).
+func WithUserInput(fn UserInputFunc) Option {
+	return func(o *options) { o.userInput = fn }
 }
 
 // WithControlTimeout sets the timeout for control protocol request/response
@@ -380,7 +391,7 @@ func (o *options) buildSessionArgs() []string {
 		args = append(args, "--continue")
 	}
 
-	if o.canUseTool != nil {
+	if o.canUseTool != nil || o.userInput != nil {
 		toolName := "stdio"
 		if o.permissionPromptToolName != "" {
 			toolName = o.permissionPromptToolName

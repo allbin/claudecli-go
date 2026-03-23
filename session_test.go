@@ -1199,6 +1199,319 @@ func TestSessionCanUseToolCancelledDuringCallback(t *testing.T) {
 	}
 }
 
+func TestSessionUserInputRouting(t *testing.T) {
+	sim := newSessionSim()
+	callbackCalled := make(chan bool, 1)
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		// Send AskUserQuestion via can_use_tool
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which approach?","header":"Strategy","options":[{"label":"A","description":"Fast"},{"label":"B","description":"Safe"}],"multiSelect":false}]}}}`)
+
+		permResp := sim.readStdin(t)
+		response := permResp["response"].(map[string]any)
+		if response["subtype"] != "success" {
+			t.Errorf("expected success, got %v", response["subtype"])
+		}
+		inner := response["response"].(map[string]any)
+		if inner["behavior"] != "allow" {
+			t.Errorf("expected allow, got %v", inner["behavior"])
+		}
+		updatedInput := inner["updatedInput"].(map[string]any)
+		answers := updatedInput["answers"].(map[string]any)
+		if answers["Which approach?"] != "A" {
+			t.Errorf("expected answer 'A', got %v", answers["Which approach?"])
+		}
+		questions := updatedInput["questions"].([]any)
+		if len(questions) != 1 {
+			t.Errorf("expected 1 question in updatedInput, got %d", len(questions))
+		}
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background(), WithUserInput(func(questions []Question) (map[string]string, error) {
+		callbackCalled <- true
+		if len(questions) != 1 {
+			t.Errorf("expected 1 question, got %d", len(questions))
+		}
+		if questions[0].Question != "Which approach?" {
+			t.Errorf("expected 'Which approach?', got %q", questions[0].Question)
+		}
+		if questions[0].Header != "Strategy" {
+			t.Errorf("expected header 'Strategy', got %q", questions[0].Header)
+		}
+		if len(questions[0].Options) != 2 {
+			t.Errorf("expected 2 options, got %d", len(questions[0].Options))
+		}
+		return map[string]string{"Which approach?": "A"}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-callbackCalled:
+	default:
+		t.Error("userInput callback was not called")
+	}
+}
+
+func TestSessionUserInputFallsThroughToCanUseTool(t *testing.T) {
+	sim := newSessionSim()
+	canUseToolCalled := make(chan bool, 1)
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		// Send AskUserQuestion — no userInput registered, should go to canUseTool
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Pick one"}]}}}`)
+
+		permResp := sim.readStdin(t)
+		response := permResp["response"].(map[string]any)
+		if response["subtype"] != "success" {
+			t.Errorf("expected success, got %v", response["subtype"])
+		}
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background(), WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {
+		canUseToolCalled <- true
+		if name != "AskUserQuestion" {
+			t.Errorf("expected AskUserQuestion, got %q", name)
+		}
+		return &PermissionResponse{Allow: true}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-canUseToolCalled:
+	default:
+		t.Error("canUseTool callback was not called for AskUserQuestion without userInput")
+	}
+}
+
+func TestSessionUserInputDoesNotInterceptOtherTools(t *testing.T) {
+	sim := newSessionSim()
+	canUseToolCalled := make(chan bool, 1)
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		// Send a Bash tool request — should go to canUseTool, not userInput
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+
+		permResp := sim.readStdin(t)
+		response := permResp["response"].(map[string]any)
+		if response["subtype"] != "success" {
+			t.Errorf("expected success, got %v", response["subtype"])
+		}
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background(),
+		WithUserInput(func(questions []Question) (map[string]string, error) {
+			t.Error("userInput should not be called for Bash tool")
+			return nil, nil
+		}),
+		WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {
+			canUseToolCalled <- true
+			return &PermissionResponse{Allow: true}, nil
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-canUseToolCalled:
+	default:
+		t.Error("canUseTool was not called for Bash tool")
+	}
+}
+
+func TestSessionUserInputOnlyNoCanUseTool(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		// Send a Bash tool request — no canUseTool registered, should get error
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+
+		permResp := sim.readStdin(t)
+		response := permResp["response"].(map[string]any)
+		if response["subtype"] != "error" {
+			t.Errorf("expected error for non-AskUserQuestion without canUseTool, got %v", response["subtype"])
+		}
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background(), WithUserInput(func(questions []Question) (map[string]string, error) {
+		return map[string]string{}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionUserInputCallbackPanic(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Pick one"}]}}}`)
+
+		permResp := sim.readStdin(t)
+		response := permResp["response"].(map[string]any)
+		if response["subtype"] != "error" {
+			t.Errorf("expected error from panicking callback, got %v", response["subtype"])
+		}
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background(), WithUserInput(func(questions []Question) (map[string]string, error) {
+		panic("intentional test panic")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionUserInputCallbackError(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInit(t)
+
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Pick one"}]}}}`)
+
+		permResp := sim.readStdin(t)
+		response := permResp["response"].(map[string]any)
+		if response["subtype"] != "error" {
+			t.Errorf("expected error from failing callback, got %v", response["subtype"])
+		}
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background(), WithUserInput(func(questions []Question) (map[string]string, error) {
+		return nil, fmt.Errorf("user cancelled")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionUserInputCancelledDuringCallback(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	callbackStarted := make(chan struct{})
+
+	go func() {
+		sim.handleInit(t)
+
+		sim.send(`{"type":"control_request","request_id":"cli_req_1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Pick one"}]}}}`)
+
+		<-callbackStarted
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session, err := client.Connect(ctx, WithUserInput(func(questions []Question) (map[string]string, error) {
+		close(callbackStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		session.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close() hung — userInput callback not cancelled by context")
+	}
+}
+
+func TestBuildSessionArgsWithUserInputOnly(t *testing.T) {
+	opts := resolveOptions(nil, []Option{
+		WithUserInput(func(questions []Question) (map[string]string, error) {
+			return nil, nil
+		}),
+	})
+	args := opts.buildSessionArgs()
+
+	var hasPermTool bool
+	for i, a := range args {
+		if a == "--permission-prompt-tool" && i+1 < len(args) && args[i+1] == "stdio" {
+			hasPermTool = true
+		}
+	}
+	if !hasPermTool {
+		t.Error("WithUserInput alone should add --permission-prompt-tool stdio")
+	}
+}
+
 func TestPrepareQueryEdgeCases(t *testing.T) {
 	t.Run("running rejects", func(t *testing.T) {
 		sim := newSessionSim()

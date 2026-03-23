@@ -185,6 +185,7 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 		ctx:            ctx,
 		cancel:         cancel,
 		canUseTool:     resolved.canUseTool,
+		userInput:      resolved.userInput,
 		controlTimeout: controlTimeout,
 		initTimeout:    initTimeout,
 		resultReady:    make(chan struct{}),

@@ -221,6 +221,31 @@ Session methods:
 - `GetMCPStatus()` — query MCP server status
 - `Close()` — terminate session
 
+### User input (AskUserQuestion)
+
+When Claude calls the `AskUserQuestion` tool, it arrives as a `can_use_tool` control request. Use `WithUserInput` to handle these with a dedicated callback instead of routing them through `WithCanUseTool`:
+
+```go
+session, err := client.Connect(ctx,
+    claudecli.WithUserInput(func(questions []claudecli.Question) (map[string]string, error) {
+        answers := make(map[string]string)
+        for _, q := range questions {
+            // Present q.Header, q.Question, q.Options to your UI
+            answers[q.Question] = getUserSelection(q)
+        }
+        return answers, nil
+    }),
+    claudecli.WithCanUseTool(func(name string, input json.RawMessage) (*claudecli.PermissionResponse, error) {
+        return &claudecli.PermissionResponse{Allow: true}, nil
+    }),
+)
+```
+
+Routing rules:
+- Both registered: `AskUserQuestion` → `userInput`, other tools → `canUseTool`
+- Only `WithCanUseTool`: `AskUserQuestion` falls through to `canUseTool` (backward compatible)
+- Only `WithUserInput`: `AskUserQuestion` → `userInput`, other tools get error response
+
 ## Multimodal input
 
 Send images and documents alongside text in interactive sessions:
@@ -394,6 +419,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithPluginDirs(...string)`          | Plugin directories.                                                                                   |
 | `WithResume(string)`                 | Resume a session by ID (mutually exclusive with `WithSessionID`/`WithContinue`).                      |
 | `WithCanUseTool(ToolPermissionFunc)` | Tool permission callback (sessions only).                                                             |
+| `WithUserInput(UserInputFunc)`       | Dedicated callback for `AskUserQuestion` tool requests (sessions only).                               |
 | `WithControlTimeout(time.Duration)` | Timeout for control protocol round-trips (default: 30s). Sessions only.                               |
 | `WithInitTimeout(time.Duration)`   | Timeout for the initialize handshake (default: 60s). Increase if MCP servers are slow to connect. Sessions only. |
 | `WithPermissionPromptToolName(string)` | Custom permission prompt tool name (default: `"stdio"`). Sessions only.                             |
