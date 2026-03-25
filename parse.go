@@ -62,10 +62,7 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 			return
 
 		case "rate_limit_event":
-			ch <- &RateLimitEvent{
-				Status:      raw.RateLimitInfo.Status,
-				Utilization: raw.RateLimitInfo.Utilization,
-			}
+			ch <- parseRateLimitEvent(&raw)
 
 		case "control_request":
 			var body rawControlRequestBody
@@ -147,6 +144,27 @@ func extractContent(raw json.RawMessage) string {
 	return string(raw)
 }
 
+func parseRateLimitEvent(raw *rawEvent) *RateLimitEvent {
+	// Build raw map for forward compat. Use the pre-parsed struct fields
+	// plus the original JSON map if available.
+	rawMap := raw.RateLimitInfo.Raw
+	if rawMap == nil {
+		rawMap = make(map[string]any)
+	}
+	return &RateLimitEvent{
+		Status:                raw.RateLimitInfo.Status,
+		Utilization:           raw.RateLimitInfo.Utilization,
+		ResetsAt:              raw.RateLimitInfo.ResetsAt,
+		RateLimitType:         raw.RateLimitInfo.RateLimitType,
+		OverageStatus:         raw.RateLimitInfo.OverageStatus,
+		OverageResetsAt:       raw.RateLimitInfo.OverageResetsAt,
+		OverageDisabledReason: raw.RateLimitInfo.OverageDisabledReason,
+		UUID:                  raw.UUID,
+		SessionID:             raw.SessionID,
+		Raw:                   rawMap,
+	}
+}
+
 // rawEvent is the internal representation of a JSONL line from the CLI.
 type rawEvent struct {
 	Type    string `json:"type"`
@@ -197,8 +215,25 @@ type rawContent struct {
 }
 
 type rawRateLimitInfo struct {
-	Status      string  `json:"status"`
-	Utilization float64 `json:"utilization"`
+	Status                string         `json:"status"`
+	Utilization           float64        `json:"utilization"`
+	ResetsAt              int64          `json:"resetsAt"`
+	RateLimitType         string         `json:"rateLimitType"`
+	OverageStatus         string         `json:"overageStatus"`
+	OverageResetsAt       int64          `json:"overageResetsAt"`
+	OverageDisabledReason string         `json:"overageDisabledReason"`
+	Raw                   map[string]any `json:"-"`
+}
+
+func (r *rawRateLimitInfo) UnmarshalJSON(data []byte) error {
+	// Unmarshal known fields via alias to avoid recursion.
+	type alias rawRateLimitInfo
+	if err := json.Unmarshal(data, (*alias)(r)); err != nil {
+		return err
+	}
+	// Preserve full raw map for forward compat.
+	_ = json.Unmarshal(data, &r.Raw)
+	return nil
 }
 
 type rawUsage struct {

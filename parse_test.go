@@ -428,7 +428,7 @@ func TestParseResultStructuredOutput(t *testing.T) {
 // Fix #2: RateLimitEvent reads from nested rate_limit_info JSON.
 func TestParseRateLimitEventNestedFields(t *testing.T) {
 	input := `{"type":"system","session_id":"test","model":"sonnet"}
-{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","utilization":0.82}}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","utilization":0.82},"uuid":"abc-123","session_id":"test"}
 {"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
 `
 	ch := make(chan Event, 64)
@@ -457,11 +457,17 @@ func TestParseRateLimitEventNestedFields(t *testing.T) {
 	if rle.Utilization != 0.82 {
 		t.Errorf("Utilization = %f, want 0.82", rle.Utilization)
 	}
+	if rle.UUID != "abc-123" {
+		t.Errorf("UUID = %q, want 'abc-123'", rle.UUID)
+	}
+	if rle.SessionID != "test" {
+		t.Errorf("SessionID = %q, want 'test'", rle.SessionID)
+	}
 }
 
-// Verify rate_limit_event with extra fields still parses correctly.
-func TestParseRateLimitEventExtraFields(t *testing.T) {
-	input := `{"type":"rate_limit_event","rate_limit_info":{"status":"rate_limited","resetsAt":1772773200,"rateLimitType":"seven_day","utilization":0.95,"isUsingOverage":false,"surpassedThreshold":0.75}}
+// Verify rate_limit_event with all fields parses correctly.
+func TestParseRateLimitEventAllFields(t *testing.T) {
+	input := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1772773200,"rateLimitType":"seven_day","utilization":0.95,"overageStatus":"rejected","overageResetsAt":1772780000,"overageDisabledReason":"out_of_credits","isUsingOverage":false,"surpassedThreshold":0.75},"uuid":"def-456","session_id":"sess-1"}
 {"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
 `
 	ch := make(chan Event, 64)
@@ -479,11 +485,70 @@ func TestParseRateLimitEventExtraFields(t *testing.T) {
 	if rle == nil {
 		t.Fatal("no RateLimitEvent found")
 	}
-	if rle.Status != "rate_limited" {
+	if rle.Status != "rejected" {
 		t.Errorf("Status = %q", rle.Status)
 	}
 	if rle.Utilization != 0.95 {
 		t.Errorf("Utilization = %f", rle.Utilization)
+	}
+	if rle.ResetsAt != 1772773200 {
+		t.Errorf("ResetsAt = %d, want 1772773200", rle.ResetsAt)
+	}
+	if rle.RateLimitType != "seven_day" {
+		t.Errorf("RateLimitType = %q", rle.RateLimitType)
+	}
+	if rle.OverageStatus != "rejected" {
+		t.Errorf("OverageStatus = %q", rle.OverageStatus)
+	}
+	if rle.OverageResetsAt != 1772780000 {
+		t.Errorf("OverageResetsAt = %d", rle.OverageResetsAt)
+	}
+	if rle.OverageDisabledReason != "out_of_credits" {
+		t.Errorf("OverageDisabledReason = %q", rle.OverageDisabledReason)
+	}
+	if rle.UUID != "def-456" {
+		t.Errorf("UUID = %q", rle.UUID)
+	}
+	if rle.SessionID != "sess-1" {
+		t.Errorf("SessionID = %q", rle.SessionID)
+	}
+	// Raw map should include unmodeled fields
+	if rle.Raw["isUsingOverage"] != false {
+		t.Errorf("Raw[isUsingOverage] = %v", rle.Raw["isUsingOverage"])
+	}
+	if rle.Raw["surpassedThreshold"] != 0.75 {
+		t.Errorf("Raw[surpassedThreshold] = %v", rle.Raw["surpassedThreshold"])
+	}
+}
+
+// Minimal rate_limit_event — only status required.
+func TestParseRateLimitEventMinimal(t *testing.T) {
+	input := `{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"},"uuid":"u","session_id":"s"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var rle *RateLimitEvent
+	for e := range ch {
+		if r, ok := e.(*RateLimitEvent); ok {
+			rle = r
+		}
+	}
+	if rle == nil {
+		t.Fatal("no RateLimitEvent found")
+	}
+	if rle.Status != "allowed" {
+		t.Errorf("Status = %q", rle.Status)
+	}
+	if rle.ResetsAt != 0 {
+		t.Errorf("ResetsAt should be 0 when absent, got %d", rle.ResetsAt)
+	}
+	if rle.RateLimitType != "" {
+		t.Errorf("RateLimitType should be empty when absent, got %q", rle.RateLimitType)
 	}
 }
 

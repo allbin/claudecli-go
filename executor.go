@@ -148,6 +148,8 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 }
 
 // buildEnv merges the current environment with overrides, deduplicating keys.
+// CLAUDE_CODE_ENTRYPOINT defaults to "sdk-go" but can be overridden via
+// options.env. CLAUDE_AGENT_SDK_VERSION is always set by the SDK.
 func buildEnv(overrides map[string]string) []string {
 	env := make([]string, 0, len(os.Environ())+len(overrides)+2)
 	for _, e := range os.Environ() {
@@ -163,7 +165,11 @@ func buildEnv(overrides map[string]string) []string {
 	for k, v := range overrides {
 		env = append(env, k+"="+v)
 	}
-	env = append(env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
+	// Default entrypoint; user overrides win.
+	if _, ok := overrides["CLAUDE_CODE_ENTRYPOINT"]; !ok {
+		env = append(env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
+	}
+	// SDK version is always set (not overridable).
 	env = append(env, "CLAUDE_AGENT_SDK_VERSION="+SDKVersion)
 	return env
 }

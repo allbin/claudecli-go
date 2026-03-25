@@ -378,7 +378,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*TextEvent`       | Assistant text output.                                                                                                      |
 | `*ToolUseEvent`    | Tool invocation with name and input.                                                                                        |
 | `*ToolResultEvent` | Result from a tool invocation.                                                                                              |
-| `*RateLimitEvent`  | Rate limit status and utilization.                                                                                          |
+| `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
 | `*ResultEvent`     | Session complete. Text, cost, duration, usage, `StopReason`, `StructuredOutput`. Synthesized if CLI exits cleanly without one. |
 | `*ControlRequestEvent` | Control request from CLI (handled internally in sessions).                                                              |
@@ -425,7 +425,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithControlTimeout(time.Duration)` | Timeout for control protocol round-trips (default: 30s). Sessions only.                               |
 | `WithInitTimeout(time.Duration)`   | Timeout for the initialize handshake (default: 60s). Increase if MCP servers are slow to connect. Sessions only. |
 | `WithPermissionPromptToolName(string)` | Custom permission prompt tool name (default: `"stdio"`). Sessions only.                             |
-| `WithEnv(map[string]string)`         | Additional environment variables.                                                                     |
+| `WithEnv(map[string]string)`         | Additional environment variables. Can override `CLAUDE_CODE_ENTRYPOINT` (default: `"sdk-go"`).        |
 | `WithExtraArgs(map[string]string)`   | Arbitrary `--key value` flags for forward compatibility. Empty value emits flag only.                  |
 | `WithUser(string)`                   | User identifier passed to the CLI.                                                                    |
 | `WithStderrCallback(func(string))`   | Called per stderr line in addition to `StderrEvent` emission.                                         |
@@ -501,6 +501,6 @@ claudecli-go/
 ## Known limitations / TODO
 
 - **JSONL format is unversioned** — Claude CLI's `stream-json` output format is not formally versioned by Anthropic. Tested with Claude Code CLI 2.x. Breaking changes across CLI versions are possible.
-- **No retry/backoff** — `RateLimitEvent` is emitted but the package does not automatically retry or backoff. Consumers must implement their own retry logic.
+- **No retry/backoff** — `RateLimitEvent` is emitted (with `ResetsAt` timestamp and `RateLimitType`) but the package does not automatically retry or backoff. Consumers must implement their own retry logic.
 - **`stdbuf` recommended on Linux** — `LocalExecutor` uses `stdbuf -oL` for line-buffered stdout on Linux when available, falling back to direct execution without it.
 - **MCP server startup can be slow** — The CLI waits for MCP server connections during the initialize handshake. With many MCP servers configured, this can take 30+ seconds. The `WithInitTimeout` option (default 60s) controls this; increase it if `Connect()` times out.

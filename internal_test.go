@@ -77,6 +77,56 @@ func TestProcessExitError_ExitCode(t *testing.T) {
 	}
 }
 
+func TestBuildEnv_EntrypointDefault(t *testing.T) {
+	env := buildEnv(nil)
+	var found bool
+	for _, e := range env {
+		if e == "CLAUDE_CODE_ENTRYPOINT=sdk-go" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("CLAUDE_CODE_ENTRYPOINT=sdk-go not set as default")
+	}
+}
+
+func TestBuildEnv_EntrypointUserOverride(t *testing.T) {
+	env := buildEnv(map[string]string{"CLAUDE_CODE_ENTRYPOINT": "custom-caller"})
+	var found string
+	for _, e := range env {
+		if len(e) > len("CLAUDE_CODE_ENTRYPOINT=") && e[:len("CLAUDE_CODE_ENTRYPOINT=")] == "CLAUDE_CODE_ENTRYPOINT=" {
+			found = e
+		}
+	}
+	if found != "CLAUDE_CODE_ENTRYPOINT=custom-caller" {
+		t.Errorf("expected user override, got %q", found)
+	}
+	// Should not contain duplicate sdk-go entry
+	var count int
+	for _, e := range env {
+		if len(e) > len("CLAUDE_CODE_ENTRYPOINT=") && e[:len("CLAUDE_CODE_ENTRYPOINT=")] == "CLAUDE_CODE_ENTRYPOINT=" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 CLAUDE_CODE_ENTRYPOINT entry, got %d", count)
+	}
+}
+
+func TestBuildEnv_SDKVersionAlwaysSet(t *testing.T) {
+	// SDK version should be set even when user provides CLAUDE_CODE_ENTRYPOINT
+	env := buildEnv(map[string]string{"CLAUDE_CODE_ENTRYPOINT": "custom"})
+	var found bool
+	for _, e := range env {
+		if len(e) > len("CLAUDE_AGENT_SDK_VERSION=") && e[:len("CLAUDE_AGENT_SDK_VERSION=")] == "CLAUDE_AGENT_SDK_VERSION=" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("CLAUDE_AGENT_SDK_VERSION not set")
+	}
+}
+
 func TestProcessExitError_SterrPassthrough(t *testing.T) {
 	cmd := exec.Command("sh", "-c", "exit 1")
 	exitErr := cmd.Run()

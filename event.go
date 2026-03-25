@@ -81,10 +81,19 @@ func (e *ToolResultEvent) String() string {
 	return fmt.Sprintf("ToolResultEvent{ToolUseID: %s}", e.ToolUseID)
 }
 
-// RateLimitEvent is emitted when the CLI reports rate limit status.
+// RateLimitEvent is emitted when the CLI reports rate limit status changes.
+// Status is "allowed", "allowed_warning" (approaching limit), or "rejected" (limit hit).
 type RateLimitEvent struct {
-	Status      string
-	Utilization float64
+	Status                string
+	Utilization           float64
+	ResetsAt              int64  // unix timestamp when rate limit window resets (0 if absent)
+	RateLimitType         string // e.g. "five_hour", "seven_day", "seven_day_opus"
+	OverageStatus         string // overage/pay-as-you-go status if applicable
+	OverageResetsAt       int64
+	OverageDisabledReason string
+	UUID                  string
+	SessionID             string
+	Raw                   map[string]any // full raw dict for forward compat
 }
 
 func (*RateLimitEvent) event() {}

@@ -210,8 +210,10 @@ func (s *Session) GetMCPStatus() error {
 	return s.sendControlRequest("mcp_status", nil)
 }
 
-// Close terminates the session. Closes stdin first (EOF signal to CLI),
-// then cancels the context (SIGTERM) as backup.
+// Close terminates the session. Closes stdin (EOF signal) and waits up to
+// 5 seconds for the CLI to exit gracefully before canceling the context
+// (SIGTERM). The grace period prevents interrupting session file writes
+// which can lose the last assistant message.
 func (s *Session) Close() error {
 	s.mu.Lock()
 	s.stdinClosed = true
@@ -220,7 +222,15 @@ func (s *Session) Close() error {
 	}
 	s.mu.Unlock()
 
-	s.cancel()
+	// Give the CLI time to flush after stdin EOF before sending SIGTERM.
+	select {
+	case <-s.done:
+		// Process exited gracefully within the grace period.
+	case <-time.After(5 * time.Second):
+		// Grace period expired — force terminate.
+		s.cancel()
+	}
+
 	for range s.events {
 	}
 	<-s.done
@@ -446,10 +456,7 @@ func (s *Session) readLoop() {
 			pumpSend(ev)
 
 		case "rate_limit_event":
-			pumpSend(&RateLimitEvent{
-				Status:      raw.RateLimitInfo.Status,
-				Utilization: raw.RateLimitInfo.Utilization,
-			})
+			pumpSend(parseRateLimitEvent(&raw))
 
 		case "stream_event":
 			pumpSend(&StreamEvent{
