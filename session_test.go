@@ -879,6 +879,74 @@ func TestSessionControlRequestSuccess(t *testing.T) {
 	}
 }
 
+func TestSetMaxThinkingTokens(t *testing.T) {
+	t.Run("enable", func(t *testing.T) {
+		sim := newSessionSim()
+		client := NewWithExecutor(sim.bidi)
+
+		go func() {
+			sim.handleInitAndReady(t)
+			msg := sim.respondSuccess(t)
+			request := msg["request"].(map[string]any)
+			if request["subtype"] != "set_max_thinking_tokens" {
+				t.Errorf("expected set_max_thinking_tokens, got %v", request["subtype"])
+			}
+			if v, ok := request["max_thinking_tokens"].(float64); !ok || v != 8000 {
+				t.Errorf("expected max_thinking_tokens=8000, got %v", request["max_thinking_tokens"])
+			}
+			sim.sendResult()
+		}()
+
+		session, err := client.Connect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+
+		if err := session.SetMaxThinkingTokens(8000); err != nil {
+			t.Fatalf("SetMaxThinkingTokens failed: %v", err)
+		}
+
+		_, err = session.Wait()
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("disable", func(t *testing.T) {
+		sim := newSessionSim()
+		client := NewWithExecutor(sim.bidi)
+
+		go func() {
+			sim.handleInitAndReady(t)
+			msg := sim.respondSuccess(t)
+			request := msg["request"].(map[string]any)
+			if request["subtype"] != "set_max_thinking_tokens" {
+				t.Errorf("expected set_max_thinking_tokens, got %v", request["subtype"])
+			}
+			if v, ok := request["max_thinking_tokens"].(float64); !ok || v != 0 {
+				t.Errorf("expected max_thinking_tokens=0, got %v", request["max_thinking_tokens"])
+			}
+			sim.sendResult()
+		}()
+
+		session, err := client.Connect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+
+		if err := session.SetMaxThinkingTokens(0); err != nil {
+			t.Fatalf("SetMaxThinkingTokens(0) failed: %v", err)
+		}
+
+		_, err = session.Wait()
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestSessionTextResetOnSystemEvent(t *testing.T) {
 	sim := newSessionSim()
 	client := NewWithExecutor(sim.bidi)

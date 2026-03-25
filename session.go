@@ -177,6 +177,12 @@ func (s *Session) SetModel(model Model) error {
 	return s.sendControlRequest("set_model", map[string]any{"model": string(model)})
 }
 
+// SetMaxThinkingTokens changes the thinking token budget mid-session.
+// n=0 disables thinking; positive values enable extended thinking with that budget.
+func (s *Session) SetMaxThinkingTokens(n int) error {
+	return s.sendControlRequest("set_max_thinking_tokens", map[string]any{"max_thinking_tokens": n})
+}
+
 // GetServerInfo returns the raw JSON from the initialize response.
 func (s *Session) GetServerInfo() json.RawMessage {
 	return s.serverInfo
