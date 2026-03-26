@@ -85,6 +85,28 @@ func TestParseBasicStream(t *testing.T) {
 	if result.SessionID == "" {
 		t.Error("ResultEvent missing session ID")
 	}
+	if len(result.ModelUsage) == 0 {
+		t.Fatal("ResultEvent has no ModelUsage")
+	}
+	mu, ok := result.ModelUsage["claude-haiku-4-5-20251001"]
+	if !ok {
+		t.Fatal("ModelUsage missing claude-haiku-4-5-20251001 entry")
+	}
+	if mu.ContextWindow != 200000 {
+		t.Errorf("ContextWindow = %d, want 200000", mu.ContextWindow)
+	}
+	if mu.MaxOutputTokens != 32000 {
+		t.Errorf("MaxOutputTokens = %d, want 32000", mu.MaxOutputTokens)
+	}
+	if mu.InputTokens != 9 {
+		t.Errorf("InputTokens = %d, want 9", mu.InputTokens)
+	}
+	if mu.OutputTokens != 997 {
+		t.Errorf("OutputTokens = %d, want 997", mu.OutputTokens)
+	}
+	if mu.CostUSD <= 0 {
+		t.Error("ModelUsage CostUSD is zero")
+	}
 }
 
 func TestParseToolUseStream(t *testing.T) {

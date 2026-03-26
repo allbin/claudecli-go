@@ -456,6 +456,7 @@ func (s *Session) readLoop() {
 				CostUSD:          raw.CostUSD,
 				SessionID:        raw.SessionID,
 				Usage:            raw.Usage.toUsage(),
+				ModelUsage:       convertModelUsage(raw.ModelUsage),
 			}
 			resultText = nil
 			s.trackState(ev)
