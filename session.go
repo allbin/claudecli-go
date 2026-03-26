@@ -412,14 +412,28 @@ func (s *Session) readLoop() {
 			}()
 
 		case "system":
-			resultText = nil
-			ev := &InitEvent{SessionID: raw.SessionID, Model: raw.Model, Tools: raw.Tools}
-			s.stateMu.Lock()
-			s.sessionID = raw.SessionID
-			s.stateMu.Unlock()
-			s.trackState(ev)
-			s.readyOnce.Do(func() { close(s.readyCh) })
-			pumpSend(ev)
+			switch raw.Subtype {
+			case "init", "":
+				resultText = nil
+				ev := &InitEvent{SessionID: raw.SessionID, Model: raw.Model, Tools: raw.Tools}
+				s.stateMu.Lock()
+				s.sessionID = raw.SessionID
+				s.stateMu.Unlock()
+				s.trackState(ev)
+				s.readyOnce.Do(func() { close(s.readyCh) })
+				pumpSend(ev)
+			case "status":
+				status := ""
+				if raw.Status != nil {
+					status = *raw.Status
+				}
+				pumpSend(&CompactStatusEvent{
+					SessionID: raw.SessionID,
+					Status:    status,
+				})
+			case "compact_boundary":
+				pumpSend(parseCompactBoundaryEvent(&raw))
+			}
 
 		case "assistant":
 			if raw.Message == nil {

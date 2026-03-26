@@ -32,10 +32,24 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 
 		switch raw.Type {
 		case "system":
-			ch <- &InitEvent{
-				SessionID: raw.SessionID,
-				Model:     raw.Model,
-				Tools:     raw.Tools,
+			switch raw.Subtype {
+			case "init", "":
+				ch <- &InitEvent{
+					SessionID: raw.SessionID,
+					Model:     raw.Model,
+					Tools:     raw.Tools,
+				}
+			case "status":
+				status := ""
+				if raw.Status != nil {
+					status = *raw.Status
+				}
+				ch <- &CompactStatusEvent{
+					SessionID: raw.SessionID,
+					Status:    status,
+				}
+			case "compact_boundary":
+				ch <- parseCompactBoundaryEvent(&raw)
 			}
 
 		case "assistant":
@@ -183,15 +197,39 @@ func parseRateLimitEvent(raw *rawEvent) *RateLimitEvent {
 	}
 }
 
+func parseCompactBoundaryEvent(raw *rawEvent) *CompactBoundaryEvent {
+	ev := &CompactBoundaryEvent{
+		SessionID: raw.SessionID,
+		Raw:       raw.CompactMetadata,
+	}
+	if len(raw.CompactMetadata) > 0 {
+		var meta struct {
+			Trigger   string `json:"trigger"`
+			PreTokens int    `json:"pre_tokens"`
+		}
+		if err := json.Unmarshal(raw.CompactMetadata, &meta); err == nil {
+			ev.Trigger = meta.Trigger
+			ev.PreTokens = meta.PreTokens
+		}
+	}
+	return ev
+}
+
 // rawEvent is the internal representation of a JSONL line from the CLI.
 type rawEvent struct {
 	Type    string `json:"type"`
 	Subtype string `json:"subtype,omitempty"`
 
-	// system event
+	// system event (init subtype)
 	SessionID string   `json:"session_id,omitempty"`
 	Model     string   `json:"model,omitempty"`
 	Tools     []string `json:"tools,omitempty"`
+
+	// system event (status subtype)
+	Status *string `json:"status"`
+
+	// system event (compact_boundary subtype)
+	CompactMetadata json.RawMessage `json:"compact_metadata,omitempty"`
 
 	// assistant event
 	Message *rawMessage `json:"message,omitempty"`
