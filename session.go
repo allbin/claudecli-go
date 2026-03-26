@@ -445,6 +445,9 @@ func (s *Session) readLoop() {
 					})
 				}
 			}
+			if len(raw.Message.ContextManagement) > 0 && string(raw.Message.ContextManagement) != "null" {
+				pumpSend(&ContextManagementEvent{Raw: raw.Message.ContextManagement})
+			}
 
 		case "result":
 			ev := &ResultEvent{
