@@ -38,6 +38,34 @@ func (e *InitEvent) String() string {
 	return fmt.Sprintf("InitEvent{SessionID: %s, Model: %s}", e.SessionID, e.Model)
 }
 
+// CompactStatusEvent is emitted when the CLI's compaction status changes.
+// Status is "compacting" when compaction starts, or "" when cleared.
+type CompactStatusEvent struct {
+	SessionID string
+	Status    string
+}
+
+func (*CompactStatusEvent) event() {}
+func (e *CompactStatusEvent) String() string {
+	return fmt.Sprintf("CompactStatusEvent{Status: %q}", e.Status)
+}
+
+// CompactBoundaryEvent marks the compaction boundary.
+// Trigger is "manual" (user invoked /compact) or "auto" (context limit).
+// PreTokens is the token count before compaction.
+// Raw contains the full compact_metadata JSON for forward compatibility.
+type CompactBoundaryEvent struct {
+	SessionID string
+	Trigger   string
+	PreTokens int
+	Raw       json.RawMessage
+}
+
+func (*CompactBoundaryEvent) event() {}
+func (e *CompactBoundaryEvent) String() string {
+	return fmt.Sprintf("CompactBoundaryEvent{Trigger: %s, PreTokens: %d}", e.Trigger, e.PreTokens)
+}
+
 // ThinkingEvent contains extended thinking output.
 type ThinkingEvent struct {
 	Content   string

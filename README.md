@@ -374,6 +374,8 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `*StartEvent`      | Emitted before process launch. Contains resolved model, args, working dir.                                                  |
 | `*InitEvent`       | CLI session started. Session ID, model, available tools.                                                                    |
+| `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
+| `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
 | `*ThinkingEvent`   | Extended thinking content. Includes `Signature` for verification.                                                            |
 | `*TextEvent`       | Assistant text output.                                                                                                      |
 | `*ToolUseEvent`    | Tool invocation with name and input.                                                                                        |

@@ -679,6 +679,199 @@ func TestParseThinkingSignature(t *testing.T) {
 	}
 }
 
+func TestParseCompactStatusEvent(t *testing.T) {
+	input := `{"type":"system","subtype":"init","session_id":"test","model":"sonnet"}
+{"type":"system","subtype":"status","status":"compacting","session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var cs *CompactStatusEvent
+	for e := range ch {
+		if c, ok := e.(*CompactStatusEvent); ok {
+			cs = c
+		}
+	}
+	if cs == nil {
+		t.Fatal("no CompactStatusEvent found")
+	}
+	if cs.Status != "compacting" {
+		t.Errorf("expected status 'compacting', got %q", cs.Status)
+	}
+	if cs.SessionID != "test" {
+		t.Errorf("expected session_id 'test', got %q", cs.SessionID)
+	}
+}
+
+func TestParseCompactStatusNull(t *testing.T) {
+	input := `{"type":"system","subtype":"init","session_id":"test","model":"sonnet"}
+{"type":"system","subtype":"status","status":null,"session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var cs *CompactStatusEvent
+	for e := range ch {
+		if c, ok := e.(*CompactStatusEvent); ok {
+			cs = c
+		}
+	}
+	if cs == nil {
+		t.Fatal("no CompactStatusEvent found for null status")
+	}
+	if cs.Status != "" {
+		t.Errorf("expected empty status for null, got %q", cs.Status)
+	}
+}
+
+func TestParseCompactBoundaryEvent(t *testing.T) {
+	input := `{"type":"system","subtype":"init","session_id":"test","model":"sonnet"}
+{"type":"system","subtype":"compact_boundary","session_id":"test","compact_metadata":{"trigger":"manual","pre_tokens":19030}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var cb *CompactBoundaryEvent
+	for e := range ch {
+		if c, ok := e.(*CompactBoundaryEvent); ok {
+			cb = c
+		}
+	}
+	if cb == nil {
+		t.Fatal("no CompactBoundaryEvent found")
+	}
+	if cb.Trigger != "manual" {
+		t.Errorf("expected trigger 'manual', got %q", cb.Trigger)
+	}
+	if cb.PreTokens != 19030 {
+		t.Errorf("expected pre_tokens 19030, got %d", cb.PreTokens)
+	}
+	if cb.SessionID != "test" {
+		t.Errorf("expected session_id 'test', got %q", cb.SessionID)
+	}
+	if len(cb.Raw) == 0 {
+		t.Error("CompactBoundaryEvent has empty Raw")
+	}
+}
+
+func TestParseSystemInitSubtype(t *testing.T) {
+	// Explicit subtype:"init" should still emit InitEvent.
+	input := `{"type":"system","subtype":"init","session_id":"test","model":"sonnet","tools":["Bash"]}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var init *InitEvent
+	for e := range ch {
+		if i, ok := e.(*InitEvent); ok {
+			init = i
+		}
+	}
+	if init == nil {
+		t.Fatal("no InitEvent found for subtype 'init'")
+	}
+	if init.SessionID != "test" {
+		t.Errorf("expected session_id 'test', got %q", init.SessionID)
+	}
+}
+
+func TestParseSystemNoSubtype(t *testing.T) {
+	// Old-style system event without subtype should still emit InitEvent.
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var init *InitEvent
+	for e := range ch {
+		if i, ok := e.(*InitEvent); ok {
+			init = i
+		}
+	}
+	if init == nil {
+		t.Fatal("no InitEvent found for missing subtype")
+	}
+}
+
+func TestParseCompactionSequence(t *testing.T) {
+	// Full compaction sequence as observed from real CLI.
+	input := `{"type":"system","subtype":"init","session_id":"s1","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}],"context_management":null}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+{"type":"system","subtype":"status","status":"compacting","session_id":"s1"}
+{"type":"system","subtype":"status","status":null,"session_id":"s1"}
+{"type":"system","subtype":"init","session_id":"s1","model":"sonnet"}
+{"type":"system","subtype":"compact_boundary","session_id":"s1","compact_metadata":{"trigger":"manual","pre_tokens":19030}}
+{"type":"user","message":{"role":"user","content":"summary..."}}
+{"type":"result","subtype":"success","total_cost_usd":0.02,"usage":{"input_tokens":20,"output_tokens":10}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	// Expected: InitEvent, TextEvent, ResultEvent (parser returns after first result).
+	// The compaction events come after the first result, which terminates ParseEvents.
+	// In session mode (readLoop) they would all be received.
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 events, got %d", len(events))
+	}
+	if _, ok := events[0].(*InitEvent); !ok {
+		t.Errorf("event[0]: expected InitEvent, got %T", events[0])
+	}
+	if _, ok := events[1].(*TextEvent); !ok {
+		t.Errorf("event[1]: expected TextEvent, got %T", events[1])
+	}
+	if _, ok := events[2].(*ResultEvent); !ok {
+		t.Errorf("event[2]: expected ResultEvent, got %T", events[2])
+	}
+}
+
+func TestParseUnknownSystemSubtype(t *testing.T) {
+	input := `{"type":"system","subtype":"init","session_id":"test","model":"sonnet"}
+{"type":"system","subtype":"future_thing","session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	for e := range ch {
+		switch e.(type) {
+		case *CompactStatusEvent, *CompactBoundaryEvent:
+			t.Errorf("unexpected compact event for unknown subtype: %T", e)
+		}
+	}
+}
+
 func TestParseContextManagementEvent(t *testing.T) {
 	input := `{"type":"system","session_id":"test","model":"sonnet"}
 {"type":"assistant","message":{"content":[{"type":"text","text":"hello"}],"context_management":{"type":"summarized","summary":"prior conversation summary","tokens_before":180000,"tokens_after":120000}}}
