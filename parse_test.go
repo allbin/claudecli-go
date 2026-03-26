@@ -107,6 +107,9 @@ func TestParseBasicStream(t *testing.T) {
 	if mu.CostUSD <= 0 {
 		t.Error("ModelUsage CostUSD is zero")
 	}
+	if mu.WebSearchRequests != 0 {
+		t.Errorf("WebSearchRequests = %d, want 0", mu.WebSearchRequests)
+	}
 }
 
 func TestParseToolUseStream(t *testing.T) {
@@ -673,5 +676,81 @@ func TestParseThinkingSignature(t *testing.T) {
 	}
 	if thinking.Signature != "sig_abc123" {
 		t.Errorf("expected signature 'sig_abc123', got %q", thinking.Signature)
+	}
+}
+
+func TestParseContextManagementEvent(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}],"context_management":{"type":"summarized","summary":"prior conversation summary","tokens_before":180000,"tokens_after":120000}}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var cm *ContextManagementEvent
+	for _, e := range events {
+		if c, ok := e.(*ContextManagementEvent); ok {
+			cm = c
+		}
+	}
+	if cm == nil {
+		t.Fatal("no ContextManagementEvent found")
+	}
+	if len(cm.Raw) == 0 {
+		t.Error("ContextManagementEvent has empty Raw")
+	}
+	// Verify the raw JSON is parseable and contains expected fields.
+	var parsed map[string]any
+	if err := json.Unmarshal(cm.Raw, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal Raw: %v", err)
+	}
+	if parsed["type"] != "summarized" {
+		t.Errorf("expected type 'summarized', got %v", parsed["type"])
+	}
+}
+
+func TestParseContextManagementNull(t *testing.T) {
+	// context_management: null should NOT emit an event.
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}],"context_management":null}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	for e := range ch {
+		if _, ok := e.(*ContextManagementEvent); ok {
+			t.Error("ContextManagementEvent should not be emitted for null context_management")
+		}
+	}
+}
+
+func TestParseContextManagementAbsent(t *testing.T) {
+	// No context_management field at all should NOT emit an event.
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	for e := range ch {
+		if _, ok := e.(*ContextManagementEvent); ok {
+			t.Error("ContextManagementEvent should not be emitted when field is absent")
+		}
 	}
 }

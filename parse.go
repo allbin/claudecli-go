@@ -45,6 +45,9 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 			for _, block := range raw.Message.Content {
 				parseContentBlock(block, &resultText, ch)
 			}
+			if len(raw.Message.ContextManagement) > 0 && string(raw.Message.ContextManagement) != "null" {
+				ch <- &ContextManagementEvent{Raw: raw.Message.ContextManagement}
+			}
 
 		case "result":
 			ch <- &ResultEvent{
@@ -215,7 +218,8 @@ type rawEvent struct {
 }
 
 type rawMessage struct {
-	Content []rawContent `json:"content"`
+	Content           []rawContent    `json:"content"`
+	ContextManagement json.RawMessage `json:"context_management,omitempty"`
 }
 
 type rawContent struct {
@@ -276,6 +280,8 @@ type rawModelUsage struct {
 	CostUSD                  float64 `json:"costUSD"`
 	ContextWindow            int     `json:"contextWindow"`
 	MaxOutputTokens          int     `json:"maxOutputTokens"`
+	WebSearchRequests        int     `json:"webSearchRequests"`
+	WebFetchRequests         int     `json:"webFetchRequests"`
 }
 
 func convertModelUsage(raw map[string]rawModelUsage) map[string]ModelUsage {
@@ -292,6 +298,8 @@ func convertModelUsage(raw map[string]rawModelUsage) map[string]ModelUsage {
 			CostUSD:           v.CostUSD,
 			ContextWindow:     v.ContextWindow,
 			MaxOutputTokens:   v.MaxOutputTokens,
+			WebSearchRequests: v.WebSearchRequests,
+			WebFetchRequests:  v.WebFetchRequests,
 		}
 	}
 	return out

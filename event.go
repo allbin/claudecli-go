@@ -218,4 +218,18 @@ type ModelUsage struct {
 	CostUSD           float64
 	ContextWindow     int
 	MaxOutputTokens   int
+	WebSearchRequests int
+	WebFetchRequests  int
+}
+
+// ContextManagementEvent is emitted when the CLI compresses or summarizes
+// older conversation turns to stay within the context window.
+// Raw contains the full JSON payload for forward compatibility.
+type ContextManagementEvent struct {
+	Raw json.RawMessage
+}
+
+func (*ContextManagementEvent) event() {}
+func (e *ContextManagementEvent) String() string {
+	return fmt.Sprintf("ContextManagementEvent{len: %d}", len(e.Raw))
 }

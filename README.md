@@ -380,7 +380,8 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
-| `*ResultEvent`     | Session complete. Text, cost, duration, usage, `StopReason`, `StructuredOutput`, `ModelUsage` (per-model context window and token limits). Synthesized if CLI exits cleanly without one. |
+| `*ResultEvent`     | Session complete. Text, cost, duration, usage, `StopReason`, `StructuredOutput`, `ModelUsage` (per-model context window, token limits, web search/fetch counts). Synthesized if CLI exits cleanly without one. |
+| `*ContextManagementEvent` | Emitted when the CLI compresses or summarizes older turns to fit the context window. `Raw` contains the full JSON payload. |
 | `*ControlRequestEvent` | Control request from CLI (handled internally in sessions).                                                              |
 | `*StreamEvent`     | Partial message update (when `WithIncludePartialMessages` is on).                                                            |
 | `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal parse errors. |
@@ -410,7 +411,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithSessionID(string)`              | Resume a specific session.                                                                            |
 | `WithForkSession()`                  | Fork from the session (requires `WithSessionID`).                                                     |
 | `WithContinue()`                     | Continue the most recent session.                                                                     |
-| `WithEffort(string)`                 | Effort level (`"low"`, `"medium"`, `"high"`).                                                         |
+| `WithEffort(EffortLevel)`            | Effort level (`EffortLow`, `EffortMedium`, `EffortHigh`, `EffortMax`).                                |
 | `WithMCPConfig(...string)`           | MCP server configs — file paths or inline JSON strings.                                               |
 | `WithStrictMCPConfig()`              | Only use MCP servers from `WithMCPConfig`, ignoring all other MCP configurations.                     |
 | `WithAgent(string)`                  | Named agent for the session.                                                                          |
