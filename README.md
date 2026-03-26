@@ -377,7 +377,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*ThinkingEvent`   | Extended thinking content. Includes `Signature` for verification.                                                            |
 | `*TextEvent`       | Assistant text output.                                                                                                      |
 | `*ToolUseEvent`    | Tool invocation with name and input.                                                                                        |
-| `*ToolResultEvent` | Result from a tool invocation.                                                                                              |
+| `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
 | `*ResultEvent`     | Session complete. Text, cost, duration, usage, `StopReason`, `StructuredOutput`. Synthesized if CLI exits cleanly without one. |

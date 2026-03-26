@@ -202,11 +202,14 @@ func TestParseToolResultArrayContent(t *testing.T) {
 	for _, e := range events {
 		if tr, ok := e.(*ToolResultEvent); ok {
 			gotToolResult = true
-			if tr.Content != "mcp result text" {
-				t.Errorf("expected 'mcp result text', got %q", tr.Content)
+			if tr.Text() != "mcp result text" {
+				t.Errorf("expected 'mcp result text', got %q", tr.Text())
 			}
 			if tr.ToolUseID != "tu_123" {
 				t.Errorf("expected tool_use_id 'tu_123', got %q", tr.ToolUseID)
+			}
+			if len(tr.Content) != 1 || tr.Content[0].Type != "text" {
+				t.Errorf("expected 1 text block, got %v", tr.Content)
 			}
 		}
 	}
@@ -243,13 +246,80 @@ func TestParseToolResultStringContent(t *testing.T) {
 	for _, e := range events {
 		if tr, ok := e.(*ToolResultEvent); ok {
 			gotToolResult = true
-			if tr.Content != "plain string result" {
-				t.Errorf("expected 'plain string result', got %q", tr.Content)
+			if tr.Text() != "plain string result" {
+				t.Errorf("expected 'plain string result', got %q", tr.Text())
+			}
+			if len(tr.Content) != 1 || tr.Content[0].Type != "text" {
+				t.Errorf("expected 1 text block, got %v", tr.Content)
 			}
 		}
 	}
 	if !gotToolResult {
 		t.Error("no ToolResultEvent found")
+	}
+
+	for _, e := range events {
+		if err, ok := e.(*ErrorEvent); ok {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+}
+
+func TestParseToolResultMixedContent(t *testing.T) {
+	// Tool result with both text and image content blocks (e.g. Playwright screenshot).
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"tool_result","tool_use_id":"tu_789","content":[{"type":"text","text":"Screenshot taken"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var tr *ToolResultEvent
+	for _, e := range events {
+		if r, ok := e.(*ToolResultEvent); ok {
+			tr = r
+		}
+	}
+	if tr == nil {
+		t.Fatal("no ToolResultEvent found")
+	}
+	if tr.ToolUseID != "tu_789" {
+		t.Errorf("ToolUseID = %q, want tu_789", tr.ToolUseID)
+	}
+	if len(tr.Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(tr.Content))
+	}
+
+	// First block: text
+	if tr.Content[0].Type != "text" {
+		t.Errorf("block[0].Type = %q, want text", tr.Content[0].Type)
+	}
+	if tr.Content[0].Text != "Screenshot taken" {
+		t.Errorf("block[0].Text = %q", tr.Content[0].Text)
+	}
+
+	// Second block: image
+	if tr.Content[1].Type != "image" {
+		t.Errorf("block[1].Type = %q, want image", tr.Content[1].Type)
+	}
+	if tr.Content[1].MediaType != "image/png" {
+		t.Errorf("block[1].MediaType = %q", tr.Content[1].MediaType)
+	}
+	if tr.Content[1].Data != "iVBORw0KGgo=" {
+		t.Errorf("block[1].Data = %q", tr.Content[1].Data)
+	}
+
+	// Text() should return only text blocks.
+	if tr.Text() != "Screenshot taken" {
+		t.Errorf("Text() = %q, want 'Screenshot taken'", tr.Text())
 	}
 
 	for _, e := range events {
