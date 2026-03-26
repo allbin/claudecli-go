@@ -56,6 +56,7 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 				CostUSD:          raw.CostUSD,
 				SessionID:        raw.SessionID,
 				Usage:            raw.Usage.toUsage(),
+				ModelUsage:       convertModelUsage(raw.ModelUsage),
 			}
 			// Result is the terminal event. Return immediately to avoid
 			// blocking on scanner.Scan() if the CLI keeps stdout open (known bug).
@@ -198,7 +199,8 @@ type rawEvent struct {
 	CostUSD          float64         `json:"total_cost_usd,omitempty"`
 	StopReason       string          `json:"stop_reason,omitempty"`
 	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
-	Usage            rawUsage        `json:"usage,omitempty"`
+	Usage            rawUsage                   `json:"usage,omitempty"`
+	ModelUsage       map[string]rawModelUsage   `json:"modelUsage,omitempty"`
 
 	// rate_limit_event
 	RateLimitInfo rawRateLimitInfo `json:"rate_limit_info,omitempty"`
@@ -264,4 +266,33 @@ func (r rawUsage) toUsage() Usage {
 		CacheReadTokens:   r.CacheReadInputTokens,
 		CacheCreateTokens: r.CacheCreationInputTokens,
 	}
+}
+
+type rawModelUsage struct {
+	InputTokens              int     `json:"inputTokens"`
+	OutputTokens             int     `json:"outputTokens"`
+	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
+	CostUSD                  float64 `json:"costUSD"`
+	ContextWindow            int     `json:"contextWindow"`
+	MaxOutputTokens          int     `json:"maxOutputTokens"`
+}
+
+func convertModelUsage(raw map[string]rawModelUsage) map[string]ModelUsage {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]ModelUsage, len(raw))
+	for k, v := range raw {
+		out[k] = ModelUsage{
+			InputTokens:       v.InputTokens,
+			OutputTokens:      v.OutputTokens,
+			CacheReadTokens:   v.CacheReadInputTokens,
+			CacheCreateTokens: v.CacheCreationInputTokens,
+			CostUSD:           v.CostUSD,
+			ContextWindow:     v.ContextWindow,
+			MaxOutputTokens:   v.MaxOutputTokens,
+		}
+	}
+	return out
 }

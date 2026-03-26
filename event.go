@@ -146,6 +146,8 @@ type ResultEvent struct {
 	CostUSD          float64
 	SessionID        string
 	Usage            Usage
+	// ModelUsage contains per-model usage keyed by model ID.
+	ModelUsage map[string]ModelUsage
 }
 
 func (*ResultEvent) event() {}
@@ -204,4 +206,16 @@ type Usage struct {
 	OutputTokens      int
 	CacheReadTokens   int
 	CacheCreateTokens int
+}
+
+// ModelUsage contains per-model usage statistics including context window metadata.
+// The result event reports one entry per model used during the session.
+type ModelUsage struct {
+	InputTokens       int
+	OutputTokens      int
+	CacheReadTokens   int
+	CacheCreateTokens int
+	CostUSD           float64
+	ContextWindow     int
+	MaxOutputTokens   int
 }
