@@ -113,35 +113,49 @@ func parseContentBlock(block rawContent, resultText *[]string, ch chan<- Event) 
 
 // extractContent handles both string and array forms of tool result content.
 // String form: "some text"
-// Array form:  [{"type":"text","text":"some text"}, ...]
-func extractContent(raw json.RawMessage) string {
+// Array form:  [{"type":"text","text":"..."}, {"type":"image","source":{...}}, ...]
+func extractContent(raw json.RawMessage) []ToolContent {
 	if len(raw) == 0 {
-		return ""
+		return nil
 	}
 
 	// Try string first.
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
+		return []ToolContent{{Type: "text", Text: s}}
 	}
 
 	// Try array of content blocks.
 	var blocks []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type   string `json:"type"`
+		Text   string `json:"text,omitempty"`
+		Source *struct {
+			Type      string `json:"type"`
+			MediaType string `json:"media_type"`
+			Data      string `json:"data"`
+		} `json:"source,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &blocks); err == nil {
-		var parts []string
+		var result []ToolContent
 		for _, b := range blocks {
-			if b.Text != "" {
-				parts = append(parts, b.Text)
+			switch b.Type {
+			case "text":
+				result = append(result, ToolContent{Type: "text", Text: b.Text})
+			case "image":
+				if b.Source != nil {
+					result = append(result, ToolContent{
+						Type:      "image",
+						MediaType: b.Source.MediaType,
+						Data:      b.Source.Data,
+					})
+				}
 			}
 		}
-		return strings.Join(parts, "")
+		return result
 	}
 
-	// Fallback: return raw JSON as-is.
-	return string(raw)
+	// Fallback: wrap raw JSON as text.
+	return []ToolContent{{Type: "text", Text: string(raw)}}
 }
 
 func parseRateLimitEvent(raw *rawEvent) *RateLimitEvent {

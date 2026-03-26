@@ -3,6 +3,7 @@ package claudecli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -70,15 +71,39 @@ func (e *ToolUseEvent) String() string {
 	return fmt.Sprintf("ToolUseEvent{Name: %s, ID: %s}", e.Name, e.ID)
 }
 
+// ToolContent represents a single content block inside a tool result.
+// Use the Type field to distinguish between block kinds.
+type ToolContent struct {
+	Type string // "text" or "image"
+
+	// Text block fields.
+	Text string // populated when Type == "text"
+
+	// Image block fields.
+	MediaType string // e.g. "image/png"; populated when Type == "image"
+	Data      string // base64-encoded image data; populated when Type == "image"
+}
+
 // ToolResultEvent contains the result of a tool invocation.
 type ToolResultEvent struct {
 	ToolUseID string
-	Content   string
+	Content   []ToolContent
 }
 
 func (*ToolResultEvent) event() {}
 func (e *ToolResultEvent) String() string {
-	return fmt.Sprintf("ToolResultEvent{ToolUseID: %s}", e.ToolUseID)
+	return fmt.Sprintf("ToolResultEvent{ToolUseID: %s, Blocks: %d}", e.ToolUseID, len(e.Content))
+}
+
+// Text returns the concatenated text of all text content blocks.
+func (e *ToolResultEvent) Text() string {
+	var parts []string
+	for _, b := range e.Content {
+		if b.Type == "text" && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "")
 }
 
 // RateLimitEvent is emitted when the CLI reports rate limit status changes.
