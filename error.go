@@ -11,10 +11,15 @@ import (
 // Sentinel errors for CLI error classification.
 // Use errors.Is to check from any error in the chain (Error, ErrorEvent, etc).
 var (
-	ErrRateLimit  = errors.New("rate limit")
-	ErrAuth       = errors.New("authentication failed")
-	ErrOverloaded = errors.New("API overloaded")
-	ErrAPI        = errors.New("API error")
+	ErrInvalidRequest  = errors.New("invalid request")
+	ErrAuth            = errors.New("authentication failed")
+	ErrBilling         = errors.New("billing error")
+	ErrPermission      = errors.New("permission denied")
+	ErrNotFound        = errors.New("not found")
+	ErrRequestTooLarge = errors.New("request too large")
+	ErrRateLimit       = errors.New("rate limit")
+	ErrAPI             = errors.New("API error")
+	ErrOverloaded      = errors.New("API overloaded")
 )
 
 // RateLimitError carries retry timing for rate limit errors.
@@ -125,12 +130,24 @@ func tryParseErrorJSON(s string) *errorDetails {
 // to the short codes used by classifyError.
 func normalizeAPIErrorType(apiType string) string {
 	switch apiType {
-	case "overloaded_error":
-		return "overloaded"
-	case "rate_limit_error":
-		return "rate_limit"
+	case "invalid_request_error":
+		return "invalid_request"
 	case "authentication_error":
 		return "auth"
+	case "billing_error":
+		return "billing"
+	case "permission_error":
+		return "permission"
+	case "not_found_error":
+		return "not_found"
+	case "request_too_large":
+		return "request_too_large"
+	case "rate_limit_error":
+		return "rate_limit"
+	case "api_error":
+		return "api"
+	case "overloaded_error":
+		return "overloaded"
 	default:
 		return apiType
 	}
@@ -138,12 +155,24 @@ func normalizeAPIErrorType(apiType string) string {
 
 func classifyError(d *errorDetails) error {
 	switch d.typ {
+	case "invalid_request":
+		return fmt.Errorf("%w: %s", ErrInvalidRequest, d.message)
+	case "auth":
+		return fmt.Errorf("%w: %s", ErrAuth, d.message)
+	case "billing":
+		return fmt.Errorf("%w: %s", ErrBilling, d.message)
+	case "permission":
+		return fmt.Errorf("%w: %s", ErrPermission, d.message)
+	case "not_found":
+		return fmt.Errorf("%w: %s", ErrNotFound, d.message)
+	case "request_too_large":
+		return fmt.Errorf("%w: %s", ErrRequestTooLarge, d.message)
 	case "rate_limit":
 		return &RateLimitError{RetryAfter: d.retryAfter, Message: d.message}
-	case "auth":
-		return ErrAuth
+	case "api":
+		return fmt.Errorf("%w: %s", ErrAPI, d.message)
 	case "overloaded":
-		return ErrOverloaded
+		return fmt.Errorf("%w: %s", ErrOverloaded, d.message)
 	default:
 		return nil
 	}
