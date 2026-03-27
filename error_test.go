@@ -105,6 +105,32 @@ func TestErrorIs_NilClass(t *testing.T) {
 	}
 }
 
+func TestErrorIs_AllSentinels(t *testing.T) {
+	tests := []struct {
+		name  string
+		class error
+		want  error
+	}{
+		{"invalid_request", ErrInvalidRequest, ErrInvalidRequest},
+		{"billing", ErrBilling, ErrBilling},
+		{"permission", ErrPermission, ErrPermission},
+		{"not_found", ErrNotFound, ErrNotFound},
+		{"request_too_large", ErrRequestTooLarge, ErrRequestTooLarge},
+		{"api", ErrAPI, ErrAPI},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &Error{ExitCode: 1, class: tt.class}
+			if !errors.Is(e, tt.want) {
+				t.Errorf("expected errors.Is to match %v", tt.want)
+			}
+			if errors.Is(e, ErrRateLimit) {
+				t.Error("unexpected match with ErrRateLimit")
+			}
+		})
+	}
+}
+
 func TestErrorAs_RateLimitError(t *testing.T) {
 	e := &Error{ExitCode: 1, class: &RateLimitError{
 		RetryAfter: 30 * time.Second,
@@ -141,10 +167,15 @@ func TestNormalizeAPIErrorType(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"overloaded_error", "overloaded"},
-		{"rate_limit_error", "rate_limit"},
+		{"invalid_request_error", "invalid_request"},
 		{"authentication_error", "auth"},
-		{"api_error", "api_error"},
+		{"billing_error", "billing"},
+		{"permission_error", "permission"},
+		{"not_found_error", "not_found"},
+		{"request_too_large", "request_too_large"},
+		{"rate_limit_error", "rate_limit"},
+		{"api_error", "api"},
+		{"overloaded_error", "overloaded"},
 		{"", ""},
 		{"some_future_type", "some_future_type"},
 	}
@@ -162,8 +193,14 @@ func TestClassifyError(t *testing.T) {
 		wantNil bool
 		target  error
 	}{
-		{"rate_limit", false, ErrRateLimit},
+		{"invalid_request", false, ErrInvalidRequest},
 		{"auth", false, ErrAuth},
+		{"billing", false, ErrBilling},
+		{"permission", false, ErrPermission},
+		{"not_found", false, ErrNotFound},
+		{"request_too_large", false, ErrRequestTooLarge},
+		{"rate_limit", false, ErrRateLimit},
+		{"api", false, ErrAPI},
 		{"overloaded", false, ErrOverloaded},
 		{"unknown_type", true, nil},
 	}

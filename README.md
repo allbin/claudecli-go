@@ -386,7 +386,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*ContextManagementEvent` | Emitted when the CLI compresses or summarizes older turns to fit the context window. `Raw` contains the full JSON payload. |
 | `*ControlRequestEvent` | Control request from CLI (handled internally in sessions).                                                              |
 | `*StreamEvent`     | Partial message update (when `WithIncludePartialMessages` is on).                                                            |
-| `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal errors (parse errors, API errors). API errors are classified via `errors.Is` with `ErrAPI`, `ErrRateLimit`, `ErrAuth`, `ErrOverloaded`. |
+| `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal errors (parse errors, API errors). API errors are classified via `errors.Is` with sentinel errors (see error handling below). |
 
 ## Options
 
@@ -447,10 +447,15 @@ text, _, err := client.RunText(ctx, prompt)
 if errors.Is(err, claudecli.ErrEmptyOutput) { ... }
 
 // Classify API errors with sentinel errors
-if errors.Is(err, claudecli.ErrAPI) { ... }        // generic API error (e.g. HTTP 500)
-if errors.Is(err, claudecli.ErrRateLimit) { ... }
-if errors.Is(err, claudecli.ErrAuth) { ... }
-if errors.Is(err, claudecli.ErrOverloaded) { ... }
+if errors.Is(err, claudecli.ErrInvalidRequest) { ... }  // 400 bad request
+if errors.Is(err, claudecli.ErrAuth) { ... }             // 401 authentication
+if errors.Is(err, claudecli.ErrBilling) { ... }           // 402 billing/payment
+if errors.Is(err, claudecli.ErrPermission) { ... }        // 403 permission denied
+if errors.Is(err, claudecli.ErrNotFound) { ... }          // 404 not found
+if errors.Is(err, claudecli.ErrRequestTooLarge) { ... }   // 413 request too large
+if errors.Is(err, claudecli.ErrRateLimit) { ... }         // 429 rate limited
+if errors.Is(err, claudecli.ErrAPI) { ... }               // 500 internal API error
+if errors.Is(err, claudecli.ErrOverloaded) { ... }        // 529 API overloaded
 
 // Extract retry timing from rate limit errors
 var rlErr *claudecli.RateLimitError
@@ -491,7 +496,7 @@ claudecli-go/
   control.go     Control message types, ContentBlock/ImageSource for multimodal input
   blocking.go    RunBlocking/RunBlockingJSON — non-streaming JSON output mode
   version.go     SDKVersion, MinCLIVersion, CLI version checking with semver parsing
-  error.go       Sentinel errors (ErrRateLimit, ErrAuth, ErrOverloaded), RateLimitError, Error, UnmarshalError
+  error.go       Sentinel errors (ErrInvalidRequest, ErrAuth, ErrBilling, ErrPermission, ErrNotFound, ErrRequestTooLarge, ErrRateLimit, ErrAPI, ErrOverloaded), RateLimitError, Error, UnmarshalError
 ```
 
 **Layers:**
