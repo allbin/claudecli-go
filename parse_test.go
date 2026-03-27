@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -945,5 +946,147 @@ func TestParseContextManagementAbsent(t *testing.T) {
 		if _, ok := e.(*ContextManagementEvent); ok {
 			t.Error("ContextManagementEvent should not be emitted when field is absent")
 		}
+	}
+}
+
+func TestParseErrorEvent(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"error","error":{"type":"api_error","message":"Internal server error"}}
+{"type":"result","subtype":"error","total_cost_usd":0.001,"usage":{"input_tokens":10,"output_tokens":0}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var gotError bool
+	for _, e := range events {
+		if ee, ok := e.(*ErrorEvent); ok {
+			gotError = true
+			if ee.Fatal {
+				t.Error("error event should be non-fatal")
+			}
+			if !errors.Is(ee.Err, ErrAPI) {
+				t.Errorf("expected errors.Is(_, ErrAPI), got %v", ee.Err)
+			}
+			if !strings.Contains(ee.Err.Error(), "Internal server error") {
+				t.Errorf("error message missing, got %q", ee.Err.Error())
+			}
+		}
+	}
+	if !gotError {
+		t.Error("no ErrorEvent found for type:error event")
+	}
+}
+
+func TestParseErrorEventClassified(t *testing.T) {
+	tests := []struct {
+		name    string
+		errType string
+		target  error
+	}{
+		{"rate_limit", "rate_limit_error", ErrRateLimit},
+		{"overloaded", "overloaded_error", ErrOverloaded},
+		{"auth", "authentication_error", ErrAuth},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `{"type":"error","error":{"type":"` + tt.errType + `","message":"test"}}
+{"type":"result","subtype":"error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}
+`
+			ch := make(chan Event, 64)
+			go func() {
+				ParseEvents(strings.NewReader(input), ch)
+				close(ch)
+			}()
+
+			var found bool
+			for e := range ch {
+				if ee, ok := e.(*ErrorEvent); ok {
+					found = true
+					if !errors.Is(ee.Err, tt.target) {
+						t.Errorf("expected errors.Is(_, %v), got %v", tt.target, ee.Err)
+					}
+					if ee.Fatal {
+						t.Error("classified error event should be non-fatal")
+					}
+				}
+			}
+			if !found {
+				t.Error("no ErrorEvent found")
+			}
+		})
+	}
+}
+
+func TestParseErrorEventMinimal(t *testing.T) {
+	// Empty error object and missing error field should not panic.
+	inputs := []string{
+		`{"type":"error","error":{}}` + "\n" + `{"type":"result","subtype":"error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}`,
+		`{"type":"error"}` + "\n" + `{"type":"result","subtype":"error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}`,
+	}
+	for i, input := range inputs {
+		ch := make(chan Event, 64)
+		go func() {
+			ParseEvents(strings.NewReader(input), ch)
+			close(ch)
+		}()
+
+		var gotError bool
+		for e := range ch {
+			if ee, ok := e.(*ErrorEvent); ok {
+				gotError = true
+				if ee.Fatal {
+					t.Errorf("case %d: expected non-fatal", i)
+				}
+				if ee.Err == nil {
+					t.Errorf("case %d: Err should not be nil", i)
+				}
+			}
+		}
+		if !gotError {
+			t.Errorf("case %d: no ErrorEvent found", i)
+		}
+	}
+}
+
+func TestParseErrorEventFixture(t *testing.T) {
+	events := collectEvents(t, "testdata/error.jsonl")
+
+	if len(events) == 0 {
+		t.Fatal("no events parsed")
+	}
+
+	// Should have InitEvent, ErrorEvent, ResultEvent.
+	if _, ok := events[0].(*InitEvent); !ok {
+		t.Fatalf("expected InitEvent first, got %T", events[0])
+	}
+
+	var gotError bool
+	for _, e := range events {
+		if ee, ok := e.(*ErrorEvent); ok {
+			gotError = true
+			if !errors.Is(ee.Err, ErrAPI) {
+				t.Errorf("expected ErrAPI, got %v", ee.Err)
+			}
+			if ee.Fatal {
+				t.Error("expected non-fatal")
+			}
+		}
+	}
+	if !gotError {
+		t.Error("no ErrorEvent from fixture")
+	}
+
+	// Last event should be ResultEvent.
+	last := events[len(events)-1]
+	if _, ok := last.(*ResultEvent); !ok {
+		t.Fatalf("expected ResultEvent last, got %T", last)
 	}
 }

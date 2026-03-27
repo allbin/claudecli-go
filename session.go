@@ -488,6 +488,9 @@ func (s *Session) readLoop() {
 				SessionID: raw.SessionID,
 				Event:     raw.Event,
 			})
+
+		case "error":
+			pumpSend(parseErrorEvent(&raw))
 		}
 	}
 

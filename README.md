@@ -386,7 +386,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*ContextManagementEvent` | Emitted when the CLI compresses or summarizes older turns to fit the context window. `Raw` contains the full JSON payload. |
 | `*ControlRequestEvent` | Control request from CLI (handled internally in sessions).                                                              |
 | `*StreamEvent`     | Partial message update (when `WithIncludePartialMessages` is on).                                                            |
-| `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal parse errors. |
+| `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal errors (parse errors, API errors). API errors are classified via `errors.Is` with `ErrAPI`, `ErrRateLimit`, `ErrAuth`, `ErrOverloaded`. |
 
 ## Options
 
@@ -447,6 +447,7 @@ text, _, err := client.RunText(ctx, prompt)
 if errors.Is(err, claudecli.ErrEmptyOutput) { ... }
 
 // Classify API errors with sentinel errors
+if errors.Is(err, claudecli.ErrAPI) { ... }        // generic API error (e.g. HTTP 500)
 if errors.Is(err, claudecli.ErrRateLimit) { ... }
 if errors.Is(err, claudecli.ErrAuth) { ... }
 if errors.Is(err, claudecli.ErrOverloaded) { ... }

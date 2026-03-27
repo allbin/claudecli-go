@@ -136,6 +136,26 @@ func TestRateLimitError_Error(t *testing.T) {
 	}
 }
 
+func TestNormalizeAPIErrorType(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"overloaded_error", "overloaded"},
+		{"rate_limit_error", "rate_limit"},
+		{"authentication_error", "auth"},
+		{"api_error", "api_error"},
+		{"", ""},
+		{"some_future_type", "some_future_type"},
+	}
+	for _, tt := range tests {
+		got := normalizeAPIErrorType(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeAPIErrorType(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestClassifyError(t *testing.T) {
 	tests := []struct {
 		typ     string

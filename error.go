@@ -14,6 +14,7 @@ var (
 	ErrRateLimit  = errors.New("rate limit")
 	ErrAuth       = errors.New("authentication failed")
 	ErrOverloaded = errors.New("API overloaded")
+	ErrAPI        = errors.New("API error")
 )
 
 // RateLimitError carries retry timing for rate limit errors.
@@ -118,6 +119,21 @@ func tryParseErrorJSON(s string) *errorDetails {
 		d.retryAfter = time.Duration(raw.RetryAfterSeconds * float64(time.Second))
 	}
 	return d
+}
+
+// normalizeAPIErrorType maps Anthropic streaming API error type strings
+// to the short codes used by classifyError.
+func normalizeAPIErrorType(apiType string) string {
+	switch apiType {
+	case "overloaded_error":
+		return "overloaded"
+	case "rate_limit_error":
+		return "rate_limit"
+	case "authentication_error":
+		return "auth"
+	default:
+		return apiType
+	}
 }
 
 func classifyError(d *errorDetails) error {

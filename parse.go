@@ -100,6 +100,9 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 				SessionID: raw.SessionID,
 				Event:     raw.Event,
 			}
+
+		case "error":
+			ch <- parseErrorEvent(&raw)
 		}
 	}
 
@@ -215,6 +218,32 @@ func parseCompactBoundaryEvent(raw *rawEvent) *CompactBoundaryEvent {
 	return ev
 }
 
+func parseErrorEvent(raw *rawEvent) *ErrorEvent {
+	var errObj struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	if len(raw.ErrorData) > 0 {
+		_ = json.Unmarshal(raw.ErrorData, &errObj)
+	}
+
+	msg := errObj.Message
+	if msg == "" {
+		msg = "unknown error"
+	}
+
+	d := &errorDetails{
+		typ:     normalizeAPIErrorType(errObj.Type),
+		message: msg,
+	}
+	classified := classifyError(d)
+	if classified == nil {
+		classified = fmt.Errorf("%w: %s: %s", ErrAPI, errObj.Type, msg)
+	}
+
+	return &ErrorEvent{Err: classified, Fatal: false}
+}
+
 // rawEvent is the internal representation of a JSONL line from the CLI.
 type rawEvent struct {
 	Type    string `json:"type"`
@@ -253,6 +282,9 @@ type rawEvent struct {
 	// stream_event
 	UUID  string          `json:"uuid,omitempty"`
 	Event json.RawMessage `json:"event,omitempty"`
+
+	// error event
+	ErrorData json.RawMessage `json:"error,omitempty"`
 }
 
 type rawMessage struct {
