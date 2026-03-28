@@ -267,6 +267,56 @@ Routing rules:
 - Only `WithCanUseTool`: `AskUserQuestion` falls through to `canUseTool` (backward compatible)
 - Only `WithUserInput`: `AskUserQuestion` → `userInput`, other tools get error response
 
+## Multi-session pool
+
+`Pool` is a registry that tracks multiple sessions and multiplexes their events into a single channel, tagged by session ID. The pool is purely additive — it doesn't modify Session or Client APIs.
+
+```go
+pool := claudecli.NewPool()
+defer pool.Close()
+
+s1, _ := client.Connect(ctx)
+s1.Query("start task A")
+// Wait for InitEvent so SessionID is set...
+
+s2, _ := client.Connect(ctx)
+s2.Query("start task B")
+
+pool.Add(s1, claudecli.SessionMeta{Name: "task-a", Labels: map[string]string{"role": "worker"}})
+pool.Add(s2, claudecli.SessionMeta{Name: "task-b"})
+
+// Single event loop for all sessions
+for pe := range pool.Events() {
+    fmt.Printf("[%s] %T\n", pe.SessionID, pe.Event)
+}
+```
+
+Pool methods: `Add`, `Remove`, `Get`, `List`, `Events`, `Close`. All are thread-safe.
+
+### Inter-agent messaging
+
+`FormatAgentMessage` wraps content in a structured format that Claude recognizes as peer communication. `Pool.SendAgentMessage` is a convenience that looks up sessions and calls `SendMessage` on the target.
+
+```go
+// Direct formatting
+msg := claudecli.FormatAgentMessage("task-a", "I finished the auth refactor")
+session.SendMessage(msg)
+
+// Via pool — uses sender's SessionMeta.Name automatically
+pool.SendAgentMessage(s1.SessionID(), s2.SessionID(), "I finished the auth refactor")
+```
+
+### Typed Agent tool input
+
+When a session spawns a sub-agent, the `ToolUseEvent` has `Name: "Agent"`. Use `ParseAgentInput()` to extract structured fields without manual JSON parsing:
+
+```go
+case *claudecli.ToolUseEvent:
+    if agent := e.ParseAgentInput(); agent != nil {
+        fmt.Printf("Agent: %s (%s) — %s\n", agent.Name, agent.SubagentType, agent.Description)
+    }
+```
+
 ## Multimodal input
 
 Send images and documents alongside text in interactive sessions:
@@ -392,12 +442,12 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | Type               | Description                                                                                                                 |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `*StartEvent`      | Emitted before process launch. Contains resolved model, args, working dir.                                                  |
-| `*InitEvent`       | CLI session started. Session ID, model, available tools.                                                                    |
+| `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers.                                       |
 | `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
 | `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
 | `*ThinkingEvent`   | Extended thinking content. Includes `Signature` for verification.                                                            |
 | `*TextEvent`       | Assistant text output.                                                                                                      |
-| `*ToolUseEvent`    | Tool invocation with name and input.                                                                                        |
+| `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls.                  |
 | `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
@@ -514,6 +564,7 @@ claudecli-go/
   session.go     Interactive session with bidirectional control protocol
   control.go     Control message types, ContentBlock/ImageSource for multimodal input
   blocking.go    RunBlocking/RunBlockingJSON — non-streaming JSON output mode
+  pool.go        Pool multi-session registry, FormatAgentMessage, SendAgentMessage
   version.go     SDKVersion, MinCLIVersion, CLI version checking with semver parsing
   error.go       Sentinel errors (ErrInvalidRequest, ErrAuth, ErrBilling, ErrPermission, ErrNotFound, ErrRequestTooLarge, ErrRateLimit, ErrAPI, ErrOverloaded), RateLimitError, Error, UnmarshalError
 ```
