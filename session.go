@@ -99,6 +99,22 @@ func (s *Session) prepareQuery() error {
 	return nil
 }
 
+// validateSendable checks that the session can accept a message.
+// Unlike prepareQuery, it allows StateRunning (for mid-turn injection).
+func (s *Session) validateSendable() error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	switch s.state {
+	case StateFailed:
+		return fmt.Errorf("session failed: %w", s.err)
+	case StateDone:
+		return fmt.Errorf("session ended")
+	case StateStarting:
+		return fmt.Errorf("session not ready")
+	}
+	return nil
+}
+
 // sendUserMessage marshals and writes a user message with the given content.
 func (s *Session) sendUserMessage(content any) error {
 	s.stateMu.Lock()
@@ -129,6 +145,29 @@ func (s *Session) Query(prompt string) error {
 // The prompt is prepended as a text block, followed by the provided blocks.
 func (s *Session) QueryWithContent(prompt string, blocks ...ContentBlock) error {
 	if err := s.prepareQuery(); err != nil {
+		return err
+	}
+	content := make([]ContentBlock, 0, 1+len(blocks))
+	content = append(content, TextBlock(prompt))
+	content = append(content, blocks...)
+	return s.sendUserMessage(content)
+}
+
+// SendMessage sends a user message without result tracking.
+// Unlike Query, it can be called while another query is in progress,
+// allowing mid-turn message injection. The CLI folds injected messages
+// into the current turn's result.
+func (s *Session) SendMessage(prompt string) error {
+	if err := s.validateSendable(); err != nil {
+		return err
+	}
+	return s.sendUserMessage(prompt)
+}
+
+// SendMessageWithContent sends a multimodal user message without result tracking.
+// See SendMessage for usage details.
+func (s *Session) SendMessageWithContent(prompt string, blocks ...ContentBlock) error {
+	if err := s.validateSendable(); err != nil {
 		return err
 	}
 	content := make([]ContentBlock, 0, 1+len(blocks))

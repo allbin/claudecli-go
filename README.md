@@ -208,8 +208,10 @@ result, err := session.Wait()
 ```
 
 Session methods:
-- `Query(prompt)` — send a text-only user message
+- `Query(prompt)` — send a text-only user message (sets up result tracking for `Wait()`)
 - `QueryWithContent(prompt, blocks...)` — send a message with text and multimodal content blocks
+- `SendMessage(prompt)` — send a message without result tracking (can be called mid-turn)
+- `SendMessageWithContent(prompt, blocks...)` — multimodal variant of SendMessage
 - `Events()` — event channel
 - `Wait()` — block until result (idempotent)
 - `Interrupt()` — send interrupt signal
