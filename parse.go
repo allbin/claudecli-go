@@ -37,9 +37,12 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 			switch raw.Subtype {
 			case "init", "":
 				ch <- &InitEvent{
-					SessionID: raw.SessionID,
-					Model:     raw.Model,
-					Tools:     raw.Tools,
+					SessionID:  raw.SessionID,
+					Model:      raw.Model,
+					Tools:      raw.Tools,
+					Agents:     raw.Agents,
+					Skills:     raw.Skills,
+					MCPServers: raw.MCPServers,
 				}
 			case "status":
 				status := ""
@@ -260,9 +263,12 @@ type rawEvent struct {
 	Subtype string `json:"subtype,omitempty"`
 
 	// system event (init subtype)
-	SessionID string   `json:"session_id,omitempty"`
-	Model     string   `json:"model,omitempty"`
-	Tools     []string `json:"tools,omitempty"`
+	SessionID  string            `json:"session_id,omitempty"`
+	Model      string            `json:"model,omitempty"`
+	Tools      []string          `json:"tools,omitempty"`
+	Agents     []string          `json:"agents,omitempty"`
+	Skills     []string          `json:"skills,omitempty"`
+	MCPServers []MCPServerStatus `json:"mcp_servers,omitempty"`
 
 	// system event (status subtype)
 	Status *string `json:"status"`

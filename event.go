@@ -26,11 +26,20 @@ func (e *StartEvent) String() string {
 	return fmt.Sprintf("StartEvent{Model: %s, WorkDir: %s}", e.Model, e.WorkDir)
 }
 
+// MCPServerStatus describes a connected MCP server and its connection state.
+type MCPServerStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
 // InitEvent is emitted by the CLI at the start of a session.
 type InitEvent struct {
-	SessionID string
-	Model     string
-	Tools     []string
+	SessionID  string
+	Model      string
+	Tools      []string
+	Agents     []string
+	Skills     []string
+	MCPServers []MCPServerStatus
 }
 
 func (*InitEvent) event() {}
@@ -97,6 +106,29 @@ type ToolUseEvent struct {
 func (*ToolUseEvent) event() {}
 func (e *ToolUseEvent) String() string {
 	return fmt.Sprintf("ToolUseEvent{Name: %s, ID: %s}", e.Name, e.ID)
+}
+
+// AgentInput contains the parsed fields from an Agent tool invocation.
+type AgentInput struct {
+	Description     string `json:"description"`
+	Prompt          string `json:"prompt"`
+	SubagentType    string `json:"subagent_type"`
+	Name            string `json:"name"`
+	RunInBackground bool   `json:"run_in_background"`
+	Model           string `json:"model"`
+}
+
+// ParseAgentInput extracts structured fields from an Agent tool_use event.
+// Returns nil if the event is not an Agent tool call or input is malformed.
+func (e *ToolUseEvent) ParseAgentInput() *AgentInput {
+	if e.Name != "Agent" {
+		return nil
+	}
+	var a AgentInput
+	if err := json.Unmarshal(e.Input, &a); err != nil {
+		return nil
+	}
+	return &a
 }
 
 // ToolContent represents a single content block inside a tool result.

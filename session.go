@@ -458,7 +458,14 @@ func (s *Session) readLoop() {
 				resultText = nil
 				snapshot = nil
 				lastModel = ""
-				ev := &InitEvent{SessionID: raw.SessionID, Model: raw.Model, Tools: raw.Tools}
+				ev := &InitEvent{
+					SessionID:  raw.SessionID,
+					Model:      raw.Model,
+					Tools:      raw.Tools,
+					Agents:     raw.Agents,
+					Skills:     raw.Skills,
+					MCPServers: raw.MCPServers,
+				}
 				s.stateMu.Lock()
 				s.sessionID = raw.SessionID
 				s.stateMu.Unlock()
