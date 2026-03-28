@@ -225,6 +225,23 @@ Session methods:
 - `GetMCPStatus()` — query MCP server status
 - `Close()` — terminate session
 
+### Mid-turn message injection
+
+`Query` rejects while a turn is running ("query already in progress") because it manages result tracking for `Wait()`. Use `SendMessage` to inject a message mid-turn — it writes directly to stdin without state gating:
+
+```go
+session.Query("Refactor the auth module")
+
+// Later, while the agent is still working:
+session.SendMessage("Also update the tests")
+```
+
+The CLI receives the message immediately but processes it at a safe boundary (between tool calls, not mid-generation). The injected message is folded into the current turn — the next `ResultEvent` from `Wait()` covers both the original query and injected messages.
+
+`SendMessage` does not set up result tracking. If called without a prior `Query`, `Wait()` will hang. Use `Query` to start a turn, `SendMessage` to inject into it.
+
+**Concurrency**: writes to stdin are mutex-serialized, so concurrent `SendMessage` calls are safe. Under extreme write volume the OS pipe buffer (64KB on Linux) provides natural backpressure — `SendMessage` blocks until the CLI drains stdin. If the pipe fills while the CLI is waiting for a control response (permission prompt), this could theoretically deadlock. In practice this requires dozens of queued messages and is unlikely for normal usage patterns.
+
 ### User input (AskUserQuestion)
 
 When Claude calls the `AskUserQuestion` tool, it arrives as a `can_use_tool` control request. Use `WithUserInput` to handle these with a dedicated callback instead of routing them through `WithCanUseTool`:
