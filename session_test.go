@@ -1716,3 +1716,99 @@ func TestPrepareQueryEdgeCases(t *testing.T) {
 		session.sendUserMessage("cleanup")
 	})
 }
+
+func TestSessionSendMessageDuringRunning(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		// Read the first query (from Query)
+		q1 := sim.readStdin(t)
+		if q1["type"] != "user" {
+			t.Errorf("expected user message, got %v", q1["type"])
+		}
+		// Read the injected message (from SendMessage)
+		q2 := sim.readStdin(t)
+		if q2["type"] != "user" {
+			t.Errorf("expected user message, got %v", q2["type"])
+		}
+		msg := q2["message"].(map[string]any)
+		if msg["content"] != "injected" {
+			t.Errorf("expected 'injected', got %v", msg["content"])
+		}
+		sim.sendTextAndResult("done")
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.Query("q1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// SendMessage should succeed even though Query is in progress
+	if err := session.SendMessage("injected"); err != nil {
+		t.Fatalf("SendMessage during running should succeed: %v", err)
+	}
+
+	session.Wait()
+}
+
+func TestSessionSendMessageRejectFailed(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for readLoop to finish and set state
+	for range session.Events() {
+	}
+	<-session.done
+
+	err = session.SendMessage("should fail")
+	if err == nil {
+		t.Fatal("expected error for SendMessage on ended session")
+	}
+}
+
+func TestSessionSendMessageFromIdle(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		// Read the message sent from idle
+		msg := sim.readStdin(t)
+		if msg["type"] != "user" {
+			t.Errorf("expected user message, got %v", msg["type"])
+		}
+		m := msg["message"].(map[string]any)
+		if m["content"] != "from idle" {
+			t.Errorf("expected 'from idle', got %v", m["content"])
+		}
+		sim.sendTextAndResult("ok")
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	// SendMessage from Idle without a prior Query
+	if err := session.SendMessage("from idle"); err != nil {
+		t.Fatalf("SendMessage from idle should succeed: %v", err)
+	}
+}
