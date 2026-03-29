@@ -55,14 +55,25 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 				}
 			case "compact_boundary":
 				ch <- parseCompactBoundaryEvent(&raw)
+			case "task_started", "task_progress", "task_notification":
+				ch <- parseTaskEvent(&raw, line)
+			default:
+				ch <- &UnknownEvent{
+					Type: "system/" + raw.Subtype,
+					Raw:  append(json.RawMessage(nil), line...),
+				}
 			}
 
 		case "assistant":
 			if raw.Message == nil {
 				continue
 			}
+			parentToolUseID := ""
+			if raw.ParentToolUseID != nil {
+				parentToolUseID = *raw.ParentToolUseID
+			}
 			for _, block := range raw.Message.Content {
-				parseContentBlock(block, &resultText, ch)
+				parseContentBlock(block, parentToolUseID, &resultText, ch)
 			}
 			if len(raw.Message.ContextManagement) > 0 && string(raw.Message.ContextManagement) != "null" {
 				ch <- &ContextManagementEvent{Raw: raw.Message.ContextManagement}
@@ -133,23 +144,25 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 	}
 }
 
-func parseContentBlock(block rawContent, resultText *[]string, ch chan<- Event) {
+func parseContentBlock(block rawContent, parentToolUseID string, resultText *[]string, ch chan<- Event) {
 	switch block.Type {
 	case "thinking":
-		ch <- &ThinkingEvent{Content: block.Thinking, Signature: block.Signature}
+		ch <- &ThinkingEvent{Content: block.Thinking, Signature: block.Signature, ParentToolUseID: parentToolUseID}
 	case "text":
 		*resultText = append(*resultText, block.Text)
-		ch <- &TextEvent{Content: block.Text}
+		ch <- &TextEvent{Content: block.Text, ParentToolUseID: parentToolUseID}
 	case "tool_use":
 		ch <- &ToolUseEvent{
-			ID:    block.ID,
-			Name:  block.Name,
-			Input: block.Input,
+			ID:              block.ID,
+			Name:            block.Name,
+			Input:           block.Input,
+			ParentToolUseID: parentToolUseID,
 		}
 	case "tool_result":
 		ch <- &ToolResultEvent{
-			ToolUseID: block.ToolUseID,
-			Content:   extractContent(block.Content),
+			ToolUseID:       block.ToolUseID,
+			Content:         extractContent(block.Content),
+			ParentToolUseID: parentToolUseID,
 		}
 	}
 }
@@ -285,6 +298,15 @@ type rawEvent struct {
 	// system event (compact_boundary subtype)
 	CompactMetadata json.RawMessage `json:"compact_metadata,omitempty"`
 
+	// system task subtypes (task_started, task_progress, task_notification)
+	TaskID       string `json:"task_id,omitempty"`
+	ToolUseID    string `json:"tool_use_id,omitempty"`
+	Description  string `json:"description,omitempty"`
+	TaskType     string `json:"task_type,omitempty"`
+	Prompt       string `json:"prompt,omitempty"`
+	LastToolName string `json:"last_tool_name,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+
 	// assistant + user events
 	Message         *rawMessage     `json:"message,omitempty"`
 	ParentToolUseID *string         `json:"parent_tool_use_id,omitempty"`
@@ -359,6 +381,10 @@ type rawUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	// Task event fields (task_progress, task_notification).
+	TotalTokens int `json:"total_tokens"`
+	ToolUses    int `json:"tool_uses"`
+	DurationMs  int `json:"duration_ms"`
 }
 
 func (r rawUsage) toUsage() Usage {
@@ -523,4 +549,27 @@ func parseAgentResult(data json.RawMessage) *AgentResult {
 		}
 	}
 	return ar
+}
+
+func parseTaskEvent(raw *rawEvent, line []byte) *TaskEvent {
+	status := ""
+	if raw.Status != nil {
+		status = *raw.Status
+	}
+	return &TaskEvent{
+		Subtype:      raw.Subtype,
+		TaskID:       raw.TaskID,
+		ToolUseID:    raw.ToolUseID,
+		SessionID:    raw.SessionID,
+		Description:  raw.Description,
+		TaskType:     raw.TaskType,
+		Prompt:       raw.Prompt,
+		LastToolName: raw.LastToolName,
+		Status:       status,
+		Summary:      raw.Summary,
+		TotalTokens:  raw.Usage.TotalTokens,
+		ToolUses:     raw.Usage.ToolUses,
+		DurationMs:   raw.Usage.DurationMs,
+		Raw:          append(json.RawMessage(nil), line...),
+	}
 }

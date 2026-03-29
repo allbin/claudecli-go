@@ -333,6 +333,16 @@ case *claudecli.UserEvent:
             e.AgentResult.TotalTokens, e.AgentResult.TotalDurationMs,
             e.AgentResult.TotalToolUseCount)
     }
+case *claudecli.TaskEvent:
+    // Real-time subagent lifecycle: task_started → task_progress → task_notification
+    fmt.Printf("  [task %s] %s (tokens: %d, tools: %d, %dms)\n",
+        e.Subtype, e.Description, e.TotalTokens, e.ToolUses, e.DurationMs)
+case *claudecli.ToolUseEvent:
+    if e.ParentToolUseID != "" {
+        fmt.Printf("  [subagent] tool: %s\n", e.Name) // from a subagent
+    } else {
+        fmt.Printf("[tool: %s]\n", e.Name) // top-level
+    }
 ```
 
 ## Multimodal input
@@ -463,10 +473,11 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers.                                       |
 | `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
 | `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
-| `*ThinkingEvent`   | Extended thinking content. Includes `Signature` for verification.                                                            |
-| `*TextEvent`       | Assistant text output.                                                                                                      |
-| `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls.                  |
-| `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. |
+| `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`. |
+| `*ThinkingEvent`   | Extended thinking content. Includes `Signature` for verification. `ParentToolUseID` set when from a subagent.                |
+| `*TextEvent`       | Assistant text output. `ParentToolUseID` set when from a subagent.                                                           |
+| `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent. |
+| `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. `ParentToolUseID` set when from a subagent. |
 | `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil on subagent completion) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `Text()` returns concatenated text. |
 | `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string, `Raw` is the full JSON line. Forward-compat catch-all. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |

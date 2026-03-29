@@ -483,29 +483,42 @@ func (s *Session) readLoop() {
 				})
 			case "compact_boundary":
 				pumpSend(parseCompactBoundaryEvent(&raw))
+			case "task_started", "task_progress", "task_notification":
+				pumpSend(parseTaskEvent(&raw, line))
+			default:
+				pumpSend(&UnknownEvent{
+					Type: "system/" + raw.Subtype,
+					Raw:  append(json.RawMessage(nil), line...),
+				})
 			}
 
 		case "assistant":
 			if raw.Message == nil {
 				continue
 			}
+			parentToolUseID := ""
+			if raw.ParentToolUseID != nil {
+				parentToolUseID = *raw.ParentToolUseID
+			}
 			for _, block := range raw.Message.Content {
 				switch block.Type {
 				case "thinking":
-					pumpSend(&ThinkingEvent{Content: block.Thinking, Signature: block.Signature})
+					pumpSend(&ThinkingEvent{Content: block.Thinking, Signature: block.Signature, ParentToolUseID: parentToolUseID})
 				case "text":
 					resultText = append(resultText, block.Text)
-					pumpSend(&TextEvent{Content: block.Text})
+					pumpSend(&TextEvent{Content: block.Text, ParentToolUseID: parentToolUseID})
 				case "tool_use":
 					pumpSend(&ToolUseEvent{
-						ID:    block.ID,
-						Name:  block.Name,
-						Input: block.Input,
+						ID:              block.ID,
+						Name:            block.Name,
+						Input:           block.Input,
+						ParentToolUseID: parentToolUseID,
 					})
 				case "tool_result":
 					pumpSend(&ToolResultEvent{
-						ToolUseID: block.ToolUseID,
-						Content:   extractContent(block.Content),
+						ToolUseID:       block.ToolUseID,
+						Content:         extractContent(block.Content),
+						ParentToolUseID: parentToolUseID,
 					})
 				}
 			}

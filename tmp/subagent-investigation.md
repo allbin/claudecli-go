@@ -88,27 +88,21 @@ Three system subtypes are emitted during subagent execution but dropped by the i
 
 These are dropped because they match `case "system":` in the outer switch but have no matching inner subtype case. The `UnknownEvent` default doesn't catch them.
 
-## Also not captured: `parent_tool_use_id` on assistant events
-
-Line 7 shows `assistant` events with `parent_tool_use_id` set — identifying that the ToolUseEvent came from a subagent. Currently this field is ignored when parsing assistant events; ToolUseEvent/TextEvent/ThinkingEvent have no ParentToolUseID field.
-
 ## Correlation mechanism
 
 ```
 parent Agent ToolUseEvent.ID = "toolu_01Fgk..."
-  ├─ system/task_started:     tool_use_id matches
-  ├─ user (prompt):           parent_tool_use_id matches
-  ├─ assistant (subagent):    parent_tool_use_id matches
-  ├─ user (tool result):      parent_tool_use_id matches
-  ├─ system/task_progress:    tool_use_id matches
-  ├─ system/task_notification: tool_use_id matches
-  └─ user (completion):       content[].tool_use_id matches, tool_use_result.agentId set
+  ├─ TaskEvent(task_started):   ToolUseID matches          ✅ parsed
+  ├─ UserEvent(prompt):         ParentToolUseID matches     ✅ parsed
+  ├─ ToolUseEvent(subagent):    ParentToolUseID matches     ✅ parsed
+  ├─ UserEvent(tool result):    ParentToolUseID matches     ✅ parsed
+  ├─ TaskEvent(task_progress):  ToolUseID matches           ✅ parsed
+  ├─ TaskEvent(task_notification): ToolUseID matches        ✅ parsed
+  └─ UserEvent(completion):     AgentResult set             ✅ parsed
 ```
 
-## Recommended follow-up
+All event types from the raw trace are now parsed. No subagent events are silently dropped.
 
-1. **System subtype events** — add `task_started`, `task_progress`, `task_notification` as proper event types (or a generic `TaskEvent`). These provide real-time subagent progress without waiting for completion.
+## Possible follow-up
 
-2. **`parent_tool_use_id` on assistant events** — add a `ParentToolUseID` field to `ToolUseEvent`, `TextEvent`, `ThinkingEvent` to distinguish subagent activity from top-level. This is a breaking-ish change (new field, no API breakage).
-
-3. **Subagent lifecycle abstraction** — a higher-level API that correlates all events for a given subagent (task_started → progress → user events → task_notification → completion) into a coherent view.
+1. **Subagent lifecycle abstraction** — a higher-level API that correlates all events for a given subagent (task_started → progress → user events → task_notification → completion) into a coherent view.

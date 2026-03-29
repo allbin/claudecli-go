@@ -865,11 +865,21 @@ func TestParseUnknownSystemSubtype(t *testing.T) {
 		close(ch)
 	}()
 
+	var unknown *UnknownEvent
 	for e := range ch {
 		switch e.(type) {
 		case *CompactStatusEvent, *CompactBoundaryEvent:
 			t.Errorf("unexpected compact event for unknown subtype: %T", e)
 		}
+		if u, ok := e.(*UnknownEvent); ok {
+			unknown = u
+		}
+	}
+	if unknown == nil {
+		t.Fatal("expected UnknownEvent for unknown system subtype")
+	}
+	if unknown.Type != "system/future_thing" {
+		t.Errorf("Type = %q, want %q", unknown.Type, "system/future_thing")
 	}
 }
 
@@ -1445,5 +1455,122 @@ func TestParseUserEventAgentCompletion(t *testing.T) {
 	// The tool_result content block should also be parsed.
 	if len(ue.Content) != 1 || ue.Content[0].ToolUseID != "toolu_agent1" {
 		t.Errorf("Content blocks = %v", ue.Content)
+	}
+}
+
+func TestParseTaskEvents(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_agent1","name":"Agent","input":{"prompt":"read go.mod"}}]}}
+{"type":"system","subtype":"task_started","task_id":"task1","tool_use_id":"toolu_agent1","description":"Read go.mod","task_type":"local_agent","prompt":"read go.mod","uuid":"u1","session_id":"test"}
+{"type":"system","subtype":"task_progress","task_id":"task1","tool_use_id":"toolu_agent1","description":"Reading file","usage":{"total_tokens":5000,"tool_uses":1,"duration_ms":500},"last_tool_name":"Read","uuid":"u2","session_id":"test"}
+{"type":"system","subtype":"task_notification","task_id":"task1","tool_use_id":"toolu_agent1","status":"completed","summary":"Read go.mod","usage":{"total_tokens":8000,"tool_uses":2,"duration_ms":1200},"uuid":"u3","session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var tasks []*TaskEvent
+	for e := range ch {
+		if te, ok := e.(*TaskEvent); ok {
+			tasks = append(tasks, te)
+		}
+	}
+
+	if len(tasks) != 3 {
+		t.Fatalf("got %d TaskEvents, want 3", len(tasks))
+	}
+
+	// task_started
+	ts := tasks[0]
+	if ts.Subtype != "task_started" {
+		t.Errorf("tasks[0].Subtype = %q", ts.Subtype)
+	}
+	if ts.TaskID != "task1" || ts.ToolUseID != "toolu_agent1" {
+		t.Errorf("tasks[0] IDs = %q, %q", ts.TaskID, ts.ToolUseID)
+	}
+	if ts.TaskType != "local_agent" {
+		t.Errorf("tasks[0].TaskType = %q", ts.TaskType)
+	}
+	if ts.Description != "Read go.mod" {
+		t.Errorf("tasks[0].Description = %q", ts.Description)
+	}
+	if ts.Prompt != "read go.mod" {
+		t.Errorf("tasks[0].Prompt = %q", ts.Prompt)
+	}
+
+	// task_progress
+	tp := tasks[1]
+	if tp.Subtype != "task_progress" {
+		t.Errorf("tasks[1].Subtype = %q", tp.Subtype)
+	}
+	if tp.LastToolName != "Read" {
+		t.Errorf("tasks[1].LastToolName = %q", tp.LastToolName)
+	}
+	if tp.TotalTokens != 5000 || tp.ToolUses != 1 || tp.DurationMs != 500 {
+		t.Errorf("tasks[1] usage = tokens:%d tools:%d ms:%d", tp.TotalTokens, tp.ToolUses, tp.DurationMs)
+	}
+
+	// task_notification
+	tn := tasks[2]
+	if tn.Subtype != "task_notification" {
+		t.Errorf("tasks[2].Subtype = %q", tn.Subtype)
+	}
+	if tn.Status != "completed" {
+		t.Errorf("tasks[2].Status = %q", tn.Status)
+	}
+	if tn.Summary != "Read go.mod" {
+		t.Errorf("tasks[2].Summary = %q", tn.Summary)
+	}
+	if tn.TotalTokens != 8000 || tn.ToolUses != 2 || tn.DurationMs != 1200 {
+		t.Errorf("tasks[2] usage = tokens:%d tools:%d ms:%d", tn.TotalTokens, tn.ToolUses, tn.DurationMs)
+	}
+}
+
+func TestParseParentToolUseID(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_sub_read","name":"Read","input":{"path":"go.mod"}}]},"parent_tool_use_id":"toolu_agent1","session_id":"test"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"top-level text"}]},"parent_tool_use_id":null,"session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	// Find the subagent ToolUseEvent — should have ParentToolUseID set.
+	var toolUse *ToolUseEvent
+	for _, e := range events {
+		if tu, ok := e.(*ToolUseEvent); ok {
+			toolUse = tu
+		}
+	}
+	if toolUse == nil {
+		t.Fatal("no ToolUseEvent")
+	}
+	if toolUse.ParentToolUseID != "toolu_agent1" {
+		t.Errorf("ToolUseEvent.ParentToolUseID = %q, want %q", toolUse.ParentToolUseID, "toolu_agent1")
+	}
+
+	// Find the top-level TextEvent — ParentToolUseID should be empty.
+	var text *TextEvent
+	for _, e := range events {
+		if te, ok := e.(*TextEvent); ok {
+			text = te
+		}
+	}
+	if text == nil {
+		t.Fatal("no TextEvent")
+	}
+	if text.ParentToolUseID != "" {
+		t.Errorf("TextEvent.ParentToolUseID = %q, want empty", text.ParentToolUseID)
 	}
 }
