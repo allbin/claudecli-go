@@ -2003,3 +2003,456 @@ func TestSessionParentToolUseID(t *testing.T) {
 		t.Errorf("TextEvent.ParentToolUseID = %q, want empty", text.ParentToolUseID)
 	}
 }
+
+// --- Session control request method tests ---
+
+func TestSessionInterrupt(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "interrupt" {
+			t.Errorf("expected interrupt, got %v", request["subtype"])
+		}
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.Interrupt(); err != nil {
+		t.Fatal(err)
+	}
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionSetPermissionMode(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "set_permission_mode" {
+			t.Errorf("expected set_permission_mode, got %v", request["subtype"])
+		}
+		if request["mode"] != "plan" {
+			t.Errorf("expected mode 'plan', got %v", request["mode"])
+		}
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.SetPermissionMode(PermissionPlan); err != nil {
+		t.Fatal(err)
+	}
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionReconnectMCPServer(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "mcp_reconnect" {
+			t.Errorf("expected mcp_reconnect, got %v", request["subtype"])
+		}
+		if request["server_name"] != "my-server" {
+			t.Errorf("expected server_name 'my-server', got %v", request["server_name"])
+		}
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.ReconnectMCPServer("my-server"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionToggleMCPServer(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "mcp_toggle" {
+			t.Errorf("expected mcp_toggle, got %v", request["subtype"])
+		}
+		if request["server_name"] != "my-server" {
+			t.Errorf("expected server_name 'my-server', got %v", request["server_name"])
+		}
+		if request["enabled"] != true {
+			t.Errorf("expected enabled true, got %v", request["enabled"])
+		}
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.ToggleMCPServer("my-server", true); err != nil {
+		t.Fatal(err)
+	}
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionStopTask(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "stop_task" {
+			t.Errorf("expected stop_task, got %v", request["subtype"])
+		}
+		if request["task_id"] != "task-abc" {
+			t.Errorf("expected task_id 'task-abc', got %v", request["task_id"])
+		}
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.StopTask("task-abc"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- Multimodal session method tests ---
+
+func TestSessionQueryWithContent(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+
+		msg := sim.readStdin(t)
+		if msg["type"] != "user" {
+			t.Errorf("expected user message, got %v", msg["type"])
+		}
+		body := msg["message"].(map[string]any)
+		content, ok := body["content"].([]any)
+		if !ok {
+			t.Errorf("expected content to be array")
+			sim.sendTextAndResult("done")
+			return
+		}
+		if len(content) != 2 {
+			t.Errorf("expected 2 content blocks, got %d", len(content))
+			sim.sendTextAndResult("done")
+			return
+		}
+		// First block: text (prepended prompt)
+		b0 := content[0].(map[string]any)
+		if b0["type"] != "text" {
+			t.Errorf("block[0] type = %v, want text", b0["type"])
+		}
+		if b0["text"] != "describe this" {
+			t.Errorf("block[0] text = %v, want 'describe this'", b0["text"])
+		}
+		// Second block: image
+		b1 := content[1].(map[string]any)
+		if b1["type"] != "image" {
+			t.Errorf("block[1] type = %v, want image", b1["type"])
+		}
+
+		sim.sendTextAndResult("done")
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.QueryWithContent("describe this", ImageBlock("image/png", []byte{1, 2, 3})); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Text != "done" {
+		t.Errorf("result = %q, want 'done'", result.Text)
+	}
+}
+
+func TestSessionSendMessageWithContent(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		// Read initial query
+		sim.readStdin(t)
+		// Read the injected multimodal message
+		msg := sim.readStdin(t)
+		if msg["type"] != "user" {
+			t.Errorf("expected user message, got %v", msg["type"])
+		}
+		body := msg["message"].(map[string]any)
+		content, ok := body["content"].([]any)
+		if !ok {
+			t.Errorf("expected content to be array")
+			sim.sendTextAndResult("ok")
+			return
+		}
+		if len(content) != 2 {
+			t.Errorf("expected 2 content blocks, got %d", len(content))
+			sim.sendTextAndResult("ok")
+			return
+		}
+		b0 := content[0].(map[string]any)
+		if b0["type"] != "text" {
+			t.Errorf("block[0] type = %v, want text", b0["type"])
+		}
+		b1 := content[1].(map[string]any)
+		if b1["type"] != "document" {
+			t.Errorf("block[1] type = %v, want document", b1["type"])
+		}
+		sim.sendTextAndResult("ok")
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.Query("q1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SendMessageWithContent("see attached", DocumentBlock("application/pdf", []byte{0x25, 0x50})); err != nil {
+		t.Fatal(err)
+	}
+
+	session.Wait()
+}
+
+// --- readLoop event routing tests ---
+
+func TestSessionRateLimitEventRouting(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.send(`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","utilization":0.85,"resetsAt":1234567890,"rateLimitType":"five_hour"},"uuid":"u1","session_id":"test-sess"}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	var rl *RateLimitEvent
+	for ev := range session.Events() {
+		if r, ok := ev.(*RateLimitEvent); ok {
+			rl = r
+		}
+	}
+	if rl == nil {
+		t.Fatal("no RateLimitEvent received")
+	}
+	if rl.Status != "allowed_warning" {
+		t.Errorf("Status = %q, want allowed_warning", rl.Status)
+	}
+}
+
+func TestSessionStreamEventRouting(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.send(`{"type":"stream_event","uuid":"u1","session_id":"test-sess","event":{"type":"message_start","message":{"model":"claude-sonnet","usage":{"input_tokens":100}}}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	var se *StreamEvent
+	for ev := range session.Events() {
+		if s, ok := ev.(*StreamEvent); ok {
+			se = s
+		}
+	}
+	if se == nil {
+		t.Fatal("no StreamEvent received")
+	}
+	if se.UUID != "u1" {
+		t.Errorf("UUID = %q, want u1", se.UUID)
+	}
+}
+
+func TestSessionErrorEventRouting(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.send(`{"type":"error","error":{"type":"overloaded_error","message":"too busy"}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	var ee *ErrorEvent
+	for ev := range session.Events() {
+		if e, ok := ev.(*ErrorEvent); ok {
+			ee = e
+		}
+	}
+	if ee == nil {
+		t.Fatal("no ErrorEvent received")
+	}
+	if ee.Fatal {
+		t.Error("API error should not be fatal")
+	}
+}
+
+func TestSessionContextManagementRouting(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}],"context_management":{"strategy":"truncation"}}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	var cm *ContextManagementEvent
+	for ev := range session.Events() {
+		if c, ok := ev.(*ContextManagementEvent); ok {
+			cm = c
+		}
+	}
+	if cm == nil {
+		t.Fatal("no ContextManagementEvent received")
+	}
+}
+
+func TestSessionCompactStatusRouting(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.send(`{"type":"system","subtype":"status","session_id":"test-sess","status":"compacting"}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	var cs *CompactStatusEvent
+	for ev := range session.Events() {
+		if c, ok := ev.(*CompactStatusEvent); ok {
+			cs = c
+		}
+	}
+	if cs == nil {
+		t.Fatal("no CompactStatusEvent received")
+	}
+	if cs.Status != "compacting" {
+		t.Errorf("Status = %q, want compacting", cs.Status)
+	}
+}
+
+func TestSessionTrackStateFatalError(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		// Close stdout without result — simulates process crash
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Drain events
+	for range session.Events() {
+	}
+
+	if st := session.State(); st != StateDone && st != StateFailed {
+		t.Errorf("expected terminal state, got %s", st)
+	}
+}

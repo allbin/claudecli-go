@@ -1574,3 +1574,95 @@ func TestParseParentToolUseID(t *testing.T) {
 		t.Errorf("TextEvent.ParentToolUseID = %q, want empty", text.ParentToolUseID)
 	}
 }
+
+// extractContent fallback: non-string, non-array content wraps as text.
+func TestParseToolResultFallbackContent(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":42}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var tr *ToolResultEvent
+	for e := range ch {
+		if r, ok := e.(*ToolResultEvent); ok {
+			tr = r
+		}
+	}
+	if tr == nil {
+		t.Fatal("no ToolResultEvent")
+	}
+	if len(tr.Content) != 1 || tr.Content[0].Type != "text" {
+		t.Errorf("expected fallback text content, got %v", tr.Content)
+	}
+	if tr.Content[0].Text != "42" {
+		t.Errorf("fallback text = %q, want '42'", tr.Content[0].Text)
+	}
+}
+
+// stream_event with message_delta fills output_tokens in context snapshot.
+func TestParseStreamEventMessageDelta(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"stream_event","uuid":"u1","session_id":"test","event":{"type":"message_start","message":{"model":"claude-sonnet","usage":{"input_tokens":100,"cache_read_input_tokens":50}}}}
+{"type":"stream_event","uuid":"u2","session_id":"test","event":{"type":"message_delta","usage":{"output_tokens":200}}}
+{"type":"result","subtype":"success","session_id":"test","total_cost_usd":0.05,"usage":{"input_tokens":100,"output_tokens":200}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var result *ResultEvent
+	for e := range ch {
+		if r, ok := e.(*ResultEvent); ok {
+			result = r
+		}
+	}
+	if result == nil {
+		t.Fatal("no ResultEvent")
+	}
+	if result.ContextSnapshot == nil {
+		t.Fatal("ContextSnapshot is nil — message_start should have created it")
+	}
+	if result.ContextSnapshot.InputTokens != 100 {
+		t.Errorf("InputTokens = %d, want 100", result.ContextSnapshot.InputTokens)
+	}
+	if result.ContextSnapshot.CacheReadInputTokens != 50 {
+		t.Errorf("CacheReadInputTokens = %d, want 50", result.ContextSnapshot.CacheReadInputTokens)
+	}
+	if result.ContextSnapshot.OutputTokens != 200 {
+		t.Errorf("OutputTokens = %d, want 200", result.ContextSnapshot.OutputTokens)
+	}
+}
+
+// message_delta without prior message_start should not panic.
+func TestParseStreamEventDeltaWithoutStart(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"stream_event","uuid":"u1","session_id":"test","event":{"type":"message_delta","usage":{"output_tokens":100}}}
+{"type":"result","subtype":"success","session_id":"test","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var result *ResultEvent
+	for e := range ch {
+		if r, ok := e.(*ResultEvent); ok {
+			result = r
+		}
+	}
+	if result == nil {
+		t.Fatal("no ResultEvent")
+	}
+	// No snapshot because message_start never arrived
+	if result.ContextSnapshot != nil {
+		t.Errorf("expected nil ContextSnapshot without message_start, got %+v", result.ContextSnapshot)
+	}
+}

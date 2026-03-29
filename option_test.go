@@ -395,6 +395,21 @@ func TestBuildArgsExtraArgsSorted(t *testing.T) {
 	}
 }
 
+func TestResolveCanUseTool(t *testing.T) {
+	fn := func(name string, input json.RawMessage) (*PermissionResponse, error) {
+		return &PermissionResponse{Allow: true}, nil
+	}
+	got := ResolveCanUseTool(WithCanUseTool(fn))
+	if got == nil {
+		t.Fatal("expected non-nil callback")
+	}
+
+	got2 := ResolveCanUseTool(WithModel(ModelSonnet))
+	if got2 != nil {
+		t.Fatal("expected nil callback without WithCanUseTool")
+	}
+}
+
 func TestBuildSessionArgsWithCanUseTool(t *testing.T) {
 	opts := resolveOptions(nil, []Option{
 		WithCanUseTool(func(name string, input json.RawMessage) (*PermissionResponse, error) {
