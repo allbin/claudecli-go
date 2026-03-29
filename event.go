@@ -75,10 +75,52 @@ func (e *CompactBoundaryEvent) String() string {
 	return fmt.Sprintf("CompactBoundaryEvent{Trigger: %s, PreTokens: %d}", e.Trigger, e.PreTokens)
 }
 
+// TaskEvent is emitted for subagent lifecycle updates (system subtypes
+// "task_started", "task_progress", "task_notification").
+//
+// ToolUseID links to the parent Agent ToolUseEvent.ID that spawned this task.
+// TaskID is a unique identifier for the subagent task instance.
+//
+// Subtype meanings:
+//   - "task_started": subagent spawned. Description, TaskType, Prompt are set.
+//   - "task_progress": subagent working. Usage fields update, LastToolName shows current tool.
+//   - "task_notification": subagent finished. Status ("completed"), Summary, final Usage.
+type TaskEvent struct {
+	Subtype   string // "task_started", "task_progress", "task_notification"
+	TaskID    string
+	ToolUseID string // parent Agent ToolUseEvent.ID
+	SessionID string
+
+	// task_started
+	Description string
+	TaskType    string // e.g. "local_agent"
+	Prompt      string
+
+	// task_progress
+	LastToolName string
+
+	// task_notification
+	Status  string
+	Summary string
+
+	// task_progress + task_notification
+	TotalTokens int
+	ToolUses    int
+	DurationMs  int
+}
+
+func (*TaskEvent) event() {}
+func (e *TaskEvent) String() string {
+	return fmt.Sprintf("TaskEvent{Subtype: %s, TaskID: %s, ToolUseID: %s}", e.Subtype, e.TaskID, e.ToolUseID)
+}
+
 // ThinkingEvent contains extended thinking output.
+// ParentToolUseID is set when this event comes from a subagent (links to the
+// parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
 type ThinkingEvent struct {
-	Content   string
-	Signature string
+	Content         string
+	Signature       string
+	ParentToolUseID string
 }
 
 func (*ThinkingEvent) event() {}
@@ -87,8 +129,11 @@ func (e *ThinkingEvent) String() string {
 }
 
 // TextEvent contains assistant text output.
+// ParentToolUseID is set when this event comes from a subagent (links to the
+// parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
 type TextEvent struct {
-	Content string
+	Content         string
+	ParentToolUseID string
 }
 
 func (*TextEvent) event() {}
@@ -97,10 +142,13 @@ func (e *TextEvent) String() string {
 }
 
 // ToolUseEvent is emitted when the assistant invokes a tool.
+// ParentToolUseID is set when this event comes from a subagent (links to the
+// parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
 type ToolUseEvent struct {
-	ID    string
-	Name  string
-	Input json.RawMessage
+	ID              string
+	Name            string
+	Input           json.RawMessage
+	ParentToolUseID string
 }
 
 func (*ToolUseEvent) event() {}
@@ -145,9 +193,12 @@ type ToolContent struct {
 }
 
 // ToolResultEvent contains the result of a tool invocation.
+// ParentToolUseID is set when this event comes from a subagent (links to the
+// parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
 type ToolResultEvent struct {
-	ToolUseID string
-	Content   []ToolContent
+	ToolUseID       string
+	Content         []ToolContent
+	ParentToolUseID string
 }
 
 func (*ToolResultEvent) event() {}

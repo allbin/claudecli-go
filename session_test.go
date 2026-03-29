@@ -1907,3 +1907,99 @@ func TestSessionUserEventForwarded(t *testing.T) {
 		t.Errorf("unexpected content: %v", ue.Content)
 	}
 }
+
+func TestSessionTaskEventsForwarded(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.readStdin(t)
+
+		sim.send(`{"type":"system","session_id":"test"}`)
+		sim.send(`{"type":"system","subtype":"task_started","task_id":"t1","tool_use_id":"toolu_a1","description":"do stuff","task_type":"local_agent","prompt":"do stuff","session_id":"test"}`)
+		sim.send(`{"type":"system","subtype":"task_progress","task_id":"t1","tool_use_id":"toolu_a1","description":"working","usage":{"total_tokens":1000,"tool_uses":1,"duration_ms":100},"last_tool_name":"Bash","session_id":"test"}`)
+		sim.send(`{"type":"system","subtype":"task_notification","task_id":"t1","tool_use_id":"toolu_a1","status":"completed","summary":"done","usage":{"total_tokens":2000,"tool_uses":2,"duration_ms":200},"session_id":"test"}`)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","total_cost_usd":0.01,"duration_ms":100,"usage":{"input_tokens":10,"output_tokens":5}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.Query("test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var tasks []*TaskEvent
+	for ev := range session.Events() {
+		if te, ok := ev.(*TaskEvent); ok {
+			tasks = append(tasks, te)
+		}
+		if _, ok := ev.(*ResultEvent); ok {
+			break
+		}
+	}
+	if len(tasks) != 3 {
+		t.Fatalf("got %d TaskEvents, want 3", len(tasks))
+	}
+	if tasks[0].Subtype != "task_started" || tasks[0].TaskID != "t1" {
+		t.Errorf("tasks[0] = %v", tasks[0])
+	}
+	if tasks[1].Subtype != "task_progress" || tasks[1].LastToolName != "Bash" {
+		t.Errorf("tasks[1] = %v", tasks[1])
+	}
+	if tasks[2].Subtype != "task_notification" || tasks[2].Status != "completed" {
+		t.Errorf("tasks[2] = %v", tasks[2])
+	}
+}
+
+func TestSessionParentToolUseID(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.readStdin(t)
+
+		sim.send(`{"type":"system","session_id":"test"}`)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_sub","name":"Read","input":{}}]},"parent_tool_use_id":"toolu_agent","session_id":"test"}`)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"top level"}]},"parent_tool_use_id":null,"session_id":"test"}`)
+		sim.send(`{"type":"result","subtype":"success","total_cost_usd":0.01,"duration_ms":100,"usage":{"input_tokens":10,"output_tokens":5}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.Query("test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var toolUse *ToolUseEvent
+	var text *TextEvent
+	for ev := range session.Events() {
+		if tu, ok := ev.(*ToolUseEvent); ok {
+			toolUse = tu
+		}
+		if te, ok := ev.(*TextEvent); ok {
+			text = te
+		}
+		if _, ok := ev.(*ResultEvent); ok {
+			break
+		}
+	}
+	if toolUse == nil || toolUse.ParentToolUseID != "toolu_agent" {
+		t.Errorf("ToolUseEvent.ParentToolUseID = %q, want %q", toolUse.ParentToolUseID, "toolu_agent")
+	}
+	if text == nil || text.ParentToolUseID != "" {
+		t.Errorf("TextEvent.ParentToolUseID = %q, want empty", text.ParentToolUseID)
+	}
+}
