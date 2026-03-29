@@ -484,7 +484,12 @@ func (s *Session) readLoop() {
 			case "compact_boundary":
 				pumpSend(parseCompactBoundaryEvent(&raw))
 			case "task_started", "task_progress", "task_notification":
-				pumpSend(parseTaskEvent(&raw))
+				pumpSend(parseTaskEvent(&raw, line))
+			default:
+				pumpSend(&UnknownEvent{
+					Type: "system/" + raw.Subtype,
+					Raw:  append(json.RawMessage(nil), line...),
+				})
 			}
 
 		case "assistant":

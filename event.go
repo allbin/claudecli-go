@@ -107,6 +107,9 @@ type TaskEvent struct {
 	TotalTokens int
 	ToolUses    int
 	DurationMs  int
+
+	// Raw contains the full JSON line for forward compatibility.
+	Raw json.RawMessage
 }
 
 func (*TaskEvent) event() {}

@@ -56,7 +56,12 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 			case "compact_boundary":
 				ch <- parseCompactBoundaryEvent(&raw)
 			case "task_started", "task_progress", "task_notification":
-				ch <- parseTaskEvent(&raw)
+				ch <- parseTaskEvent(&raw, line)
+			default:
+				ch <- &UnknownEvent{
+					Type: "system/" + raw.Subtype,
+					Raw:  append(json.RawMessage(nil), line...),
+				}
 			}
 
 		case "assistant":
@@ -546,7 +551,7 @@ func parseAgentResult(data json.RawMessage) *AgentResult {
 	return ar
 }
 
-func parseTaskEvent(raw *rawEvent) *TaskEvent {
+func parseTaskEvent(raw *rawEvent, line []byte) *TaskEvent {
 	status := ""
 	if raw.Status != nil {
 		status = *raw.Status
@@ -565,5 +570,6 @@ func parseTaskEvent(raw *rawEvent) *TaskEvent {
 		TotalTokens:  raw.Usage.TotalTokens,
 		ToolUses:     raw.Usage.ToolUses,
 		DurationMs:   raw.Usage.DurationMs,
+		Raw:          append(json.RawMessage(nil), line...),
 	}
 }

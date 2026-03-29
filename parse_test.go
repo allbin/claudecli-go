@@ -865,11 +865,21 @@ func TestParseUnknownSystemSubtype(t *testing.T) {
 		close(ch)
 	}()
 
+	var unknown *UnknownEvent
 	for e := range ch {
 		switch e.(type) {
 		case *CompactStatusEvent, *CompactBoundaryEvent:
 			t.Errorf("unexpected compact event for unknown subtype: %T", e)
 		}
+		if u, ok := e.(*UnknownEvent); ok {
+			unknown = u
+		}
+	}
+	if unknown == nil {
+		t.Fatal("expected UnknownEvent for unknown system subtype")
+	}
+	if unknown.Type != "system/future_thing" {
+		t.Errorf("Type = %q, want %q", unknown.Type, "system/future_thing")
 	}
 }
 
