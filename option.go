@@ -428,3 +428,14 @@ func resolveOptions(defaults []Option, overrides []Option) *options {
 	}
 	return opts
 }
+
+// ResolveCanUseTool applies the given options and returns the ToolPermissionFunc
+// callback, or nil if none was set. Used by test infrastructure to extract
+// callbacks that would normally be consumed internally by Connect().
+func ResolveCanUseTool(opts ...Option) ToolPermissionFunc {
+	o := &options{}
+	for _, opt := range opts {
+		opt(o)
+	}
+	return o.canUseTool
+}
