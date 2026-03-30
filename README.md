@@ -516,7 +516,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithSessionName(string)`            | Display name for the session (shown in `/resume` and terminal title).                                 |
 | `WithForkSession()`                  | Fork from the session (requires `WithSessionID`).                                                     |
 | `WithContinue()`                     | Continue the most recent session.                                                                     |
-| `WithEffort(EffortLevel)`            | Effort level (`EffortLow`, `EffortMedium`, `EffortHigh`).                                             |
+| `WithEffort(EffortLevel)`            | Effort level (`EffortLow`, `EffortMedium`, `EffortHigh`, `EffortMax`).                                |
 | `WithMCPConfig(...string)`           | MCP server configs — file paths or inline JSON strings.                                               |
 | `WithStrictMCPConfig()`              | Only use MCP servers from `WithMCPConfig`, ignoring all other MCP configurations.                     |
 | `WithAgent(string)`                  | Named agent for the session.                                                                          |

@@ -404,7 +404,7 @@ func TestBuildArgsEffort(t *testing.T) {
 
 // Fix #12: EffortLevel typed constants work with WithEffort.
 func TestBuildArgsEffortTypedConstants(t *testing.T) {
-	for _, level := range []EffortLevel{EffortLow, EffortMedium, EffortHigh} {
+	for _, level := range []EffortLevel{EffortLow, EffortMedium, EffortHigh, EffortMax} {
 		args := resolveOptions(nil, []Option{WithEffort(level)}).buildArgs()
 		v, ok := argValue(args, "--effort")
 		if !ok {
