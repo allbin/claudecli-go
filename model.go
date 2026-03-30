@@ -7,7 +7,6 @@ const (
 	EffortLow    EffortLevel = "low"
 	EffortMedium EffortLevel = "medium"
 	EffortHigh   EffortLevel = "high"
-	EffortMax    EffortLevel = "max"
 )
 
 // Model represents a Claude model identifier.

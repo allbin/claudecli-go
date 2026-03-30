@@ -368,7 +368,7 @@ func TestSendAgentMessageUnknown(t *testing.T) {
 }
 
 func TestParseAgentInput(t *testing.T) {
-	input := `{"description":"search code","prompt":"find auth","subagent_type":"Explore","name":"explorer","run_in_background":true,"model":"sonnet"}`
+	input := `{"description":"search code","prompt":"find auth","subagent_type":"Explore","name":"explorer","run_in_background":true,"model":"sonnet","isolation":"worktree","mode":"plan","team_name":"search-team"}`
 	ev := &ToolUseEvent{
 		ID:    "tu_01",
 		Name:  "Agent",
@@ -396,6 +396,15 @@ func TestParseAgentInput(t *testing.T) {
 	}
 	if got.Model != "sonnet" {
 		t.Errorf("Model = %q", got.Model)
+	}
+	if got.Isolation != "worktree" {
+		t.Errorf("Isolation = %q", got.Isolation)
+	}
+	if got.Mode != "plan" {
+		t.Errorf("Mode = %q", got.Mode)
+	}
+	if got.TeamName != "search-team" {
+		t.Errorf("TeamName = %q", got.TeamName)
 	}
 }
 

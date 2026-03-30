@@ -167,6 +167,9 @@ type AgentInput struct {
 	Name            string `json:"name"`
 	RunInBackground bool   `json:"run_in_background"`
 	Model           string `json:"model"`
+	Isolation       string `json:"isolation"`
+	Mode            string `json:"mode"`
+	TeamName        string `json:"team_name"`
 }
 
 // ParseAgentInput extracts structured fields from an Agent tool_use event.
