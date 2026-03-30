@@ -1666,3 +1666,62 @@ func TestParseStreamEventDeltaWithoutStart(t *testing.T) {
 		t.Errorf("expected nil ContextSnapshot without message_start, got %+v", result.ContextSnapshot)
 	}
 }
+
+func TestParseUserEventReplay(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"user","message":{"role":"user","content":"What is 2+2?"},"session_id":"test","parent_tool_use_id":null,"uuid":"replay-uuid","timestamp":"2026-03-30T12:12:51.336Z","isReplay":true}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var ue *UserEvent
+	for e := range ch {
+		if u, ok := e.(*UserEvent); ok {
+			ue = u
+		}
+	}
+	if ue == nil {
+		t.Fatal("no UserEvent found")
+	}
+	if !ue.IsReplay {
+		t.Error("IsReplay = false, want true")
+	}
+	if ue.UUID != "replay-uuid" {
+		t.Errorf("UUID = %q, want replay-uuid", ue.UUID)
+	}
+	if ue.Text() != "What is 2+2?" {
+		t.Errorf("Text() = %q, want %q", ue.Text(), "What is 2+2?")
+	}
+	if len(ue.Content) != 1 || ue.Content[0].Type != "text" {
+		t.Errorf("Content = %+v, want 1 text block", ue.Content)
+	}
+}
+
+func TestParseUserEventReplayFalseByDefault(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]},"session_id":"test","uuid":"u1"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var ue *UserEvent
+	for e := range ch {
+		if u, ok := e.(*UserEvent); ok {
+			ue = u
+		}
+	}
+	if ue == nil {
+		t.Fatal("no UserEvent found")
+	}
+	if ue.IsReplay {
+		t.Error("IsReplay should be false for normal user events")
+	}
+}

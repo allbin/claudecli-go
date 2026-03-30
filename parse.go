@@ -312,6 +312,7 @@ type rawEvent struct {
 	ParentToolUseID *string         `json:"parent_tool_use_id,omitempty"`
 	Timestamp       string          `json:"timestamp,omitempty"`
 	ToolUseResult   json.RawMessage `json:"tool_use_result,omitempty"`
+	IsReplay        bool            `json:"isReplay,omitempty"`
 
 	// result event
 	Result           string          `json:"result,omitempty"`
@@ -338,8 +339,30 @@ type rawEvent struct {
 }
 
 type rawMessage struct {
-	Content           []rawContent    `json:"content"`
+	Content           rawFlexContent  `json:"content"`
 	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+}
+
+// rawFlexContent handles the CLI's content field which can be either a plain
+// string (replay user messages) or an array of content blocks (assistant/tool).
+type rawFlexContent []rawContent
+
+func (c *rawFlexContent) UnmarshalJSON(data []byte) error {
+	// Try array first (common case).
+	var blocks []rawContent
+	if err := json.Unmarshal(data, &blocks); err == nil {
+		*c = blocks
+		return nil
+	}
+	// Fall back to plain string (replay user messages).
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*c = []rawContent{{Type: "text", Text: s}}
+		return nil
+	}
+	// Ignore unparseable content.
+	*c = nil
+	return nil
 }
 
 type rawContent struct {
@@ -492,6 +515,7 @@ func parseUserEvent(raw *rawEvent) *UserEvent {
 		SessionID: raw.SessionID,
 		UUID:      raw.UUID,
 		Timestamp: raw.Timestamp,
+		IsReplay:  raw.IsReplay,
 	}
 	if raw.ParentToolUseID != nil {
 		ev.ParentToolUseID = *raw.ParentToolUseID

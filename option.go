@@ -77,6 +77,7 @@ type options struct {
 	stderrCallback          func(string)
 	enableFileCheckpointing bool
 	bare                    bool
+	replayUserMessages      bool
 	dangerouslySkipPerms    bool
 	disableSlashCommands    bool
 	debugFile               string
@@ -164,6 +165,14 @@ func WithExtraArgs(args map[string]string) Option { return func(o *options) { o.
 // WithBare enables minimal mode: skip hooks, LSP, plugin sync, attribution,
 // auto-memory, background prefetches, keychain reads, and CLAUDE.md auto-discovery.
 func WithBare() Option { return func(o *options) { o.bare = true } }
+
+// WithReplayUserMessages causes the CLI to echo user messages back on stdout
+// after reading them from stdin. The echoed messages appear as UserEvent with
+// IsReplay=true, confirming message delivery. Only works with interactive
+// sessions (Connect) which use stream-json I/O.
+func WithReplayUserMessages() Option {
+	return func(o *options) { o.replayUserMessages = true }
+}
 
 // WithDangerouslySkipPermissions bypasses all permission checks.
 // Emits both --allow-dangerously-skip-permissions and --dangerously-skip-permissions.
@@ -434,6 +443,10 @@ func (o *options) buildSessionArgs() []string {
 			toolName = o.permissionPromptToolName
 		}
 		args = append(args, "--permission-prompt-tool", toolName)
+	}
+
+	if o.replayUserMessages {
+		args = append(args, "--replay-user-messages")
 	}
 
 	return args

@@ -417,6 +417,24 @@ func TestBuildArgsEffortTypedConstants(t *testing.T) {
 	}
 }
 
+func TestBuildArgsReplayUserMessages(t *testing.T) {
+	opts := resolveOptions(nil, []Option{WithReplayUserMessages()})
+	// Should appear in session args
+	sargs := opts.buildSessionArgs()
+	if !slices.Contains(sargs, "--replay-user-messages") {
+		t.Error("buildSessionArgs missing --replay-user-messages")
+	}
+	// Should NOT appear in print-mode args
+	args := opts.buildArgs()
+	if slices.Contains(args, "--replay-user-messages") {
+		t.Error("buildArgs should not have --replay-user-messages")
+	}
+	bargs := opts.buildBlockingArgs()
+	if slices.Contains(bargs, "--replay-user-messages") {
+		t.Error("buildBlockingArgs should not have --replay-user-messages")
+	}
+}
+
 // Fix #14: extraArgs produce deterministic (sorted) order.
 func TestBuildArgsExtraArgsSorted(t *testing.T) {
 	extra := map[string]string{

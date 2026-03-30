@@ -478,7 +478,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*TextEvent`       | Assistant text output. `ParentToolUseID` set when from a subagent.                                                           |
 | `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent. |
 | `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. `ParentToolUseID` set when from a subagent. |
-| `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil on subagent completion) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `Text()` returns concatenated text. |
+| `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil on subagent completion) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `IsReplay` is true when echoed via `--replay-user-messages`. `Text()` returns concatenated text. |
 | `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string, `Raw` is the full JSON line. Forward-compat catch-all. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
@@ -538,6 +538,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithDebugFile(string)`              | Write CLI debug logs to a file path.                                                                  |
 | `WithDisableSlashCommands()`         | Disable all slash command / skill processing in prompts.                                              |
 | `WithFileCheckpointing()`            | Enable SDK file checkpointing via `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING` env var.                |
+| `WithReplayUserMessages()`           | Echo user messages back on stdout as `UserEvent` with `IsReplay=true`. Confirms message delivery. Sessions only. |
 
 Options set at call time **replace** (not merge with) client-level defaults.
 

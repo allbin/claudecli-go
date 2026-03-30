@@ -248,6 +248,10 @@ type UserEvent struct {
 	SessionID       string
 	UUID            string
 	Timestamp       string
+	// IsReplay is true when this event is an echo of a user message sent via
+	// stdin, produced by the CLI's --replay-user-messages flag. Replay events
+	// confirm that the CLI has read and accepted the message.
+	IsReplay bool
 }
 
 func (*UserEvent) event() {}
