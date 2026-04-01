@@ -211,6 +211,14 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 	return session, nil
 }
 
+// binaryPath returns the CLI binary path from the executor, falling back to "claude".
+func (c *Client) binaryPath() string {
+	if le, ok := c.executor.(*LocalExecutor); ok && le.BinaryPath != "" {
+		return le.BinaryPath
+	}
+	return "claude"
+}
+
 // Package-level shortcuts for one-off use without constructing a client.
 
 var defaultClient = New()
