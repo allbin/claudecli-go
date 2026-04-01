@@ -12,12 +12,12 @@ import (
 // AuthStatusResult represents the authentication state returned by the CLI.
 type AuthStatusResult struct {
 	LoggedIn         bool   `json:"loggedIn"`
-	AuthMethod       string `json:"authMethod"`       // e.g. "claude.ai", "api-key"
-	APIProvider      string `json:"apiProvider"`       // e.g. "firstParty", "bedrock", "vertex"
-	Email            string `json:"email"`
-	OrgID            string `json:"orgId"`
-	OrgName          string `json:"orgName"`
-	SubscriptionType string `json:"subscriptionType"` // e.g. "team", "pro"
+	AuthMethod       string `json:"authMethod,omitempty"`       // e.g. "claude.ai", "api-key"
+	APIProvider      string `json:"apiProvider,omitempty"`       // e.g. "firstParty", "bedrock", "vertex"
+	Email            string `json:"email,omitempty"`
+	OrgID            string `json:"orgId,omitempty"`
+	OrgName          string `json:"orgName,omitempty"`
+	SubscriptionType string `json:"subscriptionType,omitempty"` // e.g. "team", "pro"
 }
 
 // AuthMethod selects the authentication provider for login.
