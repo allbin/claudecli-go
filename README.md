@@ -118,6 +118,36 @@ stream := client.Run(ctx, "Quick check",
 )
 ```
 
+## Authentication
+
+Check, login, and logout via the CLI's `auth` subcommands.
+
+```go
+// Check current auth state
+status, err := client.AuthStatus(ctx)
+fmt.Println(status.Email, status.OrgName, status.SubscriptionType)
+
+// Start OAuth login — returns URL for user to visit
+proc, err := client.AuthLogin(ctx,
+    claudecli.WithAuthMethod(claudecli.AuthMethodConsole), // or AuthMethodClaudeAI (default)
+    claudecli.WithSSO(),
+    claudecli.WithLoginEmail("user@example.com"),
+)
+fmt.Println("Visit:", proc.URL)
+err = proc.Wait() // blocks until browser auth completes
+
+// Logout
+err = client.AuthLogout(ctx)
+```
+
+Package-level shortcuts (`AuthStatus`, `AuthLogin`, `AuthLogout`) use the default client.
+
+| Login option              | Description                          |
+| ------------------------- | ------------------------------------ |
+| `WithAuthMethod(method)`  | `AuthMethodClaudeAI` (default) or `AuthMethodConsole` (API billing). |
+| `WithSSO()`               | Force SSO login flow.                |
+| `WithLoginEmail(string)`  | Pre-populate email on login page.    |
+
 ## Stream state
 
 Poll the stream's lifecycle state at any time:
