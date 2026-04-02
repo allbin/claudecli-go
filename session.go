@@ -529,7 +529,7 @@ func (s *Session) readLoop() {
 		case "result":
 			modelUsage := convertModelUsage(raw.ModelUsage)
 			if snapshot != nil && lastModel != "" {
-				if mu, ok := modelUsage[lastModel]; ok {
+				if mu, ok := lookupModelUsage(modelUsage, lastModel); ok {
 					snapshot.ContextWindow = mu.ContextWindow
 				}
 			}

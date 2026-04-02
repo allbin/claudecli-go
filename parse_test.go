@@ -1279,6 +1279,44 @@ func TestContextSnapshotModelMismatch(t *testing.T) {
 	}
 }
 
+func TestContextSnapshotModelSuffixMatch(t *testing.T) {
+	// The CLI appends a context-window suffix to modelUsage keys (e.g.,
+	// "claude-opus-4-6[1m]") while inner stream events use the bare name.
+	input := `{"type":"system","session_id":"s1","model":"claude-opus-4-6[1m]"}
+{"type":"stream_event","uuid":"u1","session_id":"s1","event":{"type":"message_start","message":{"model":"claude-opus-4-6","usage":{"input_tokens":100}}}}
+{"type":"stream_event","uuid":"u2","session_id":"s1","event":{"type":"message_delta","usage":{"output_tokens":50}}}
+{"type":"result","subtype":"success","total_cost_usd":0.1,"usage":{"input_tokens":100,"output_tokens":50},"modelUsage":{"claude-opus-4-6[1m]":{"inputTokens":100,"outputTokens":50,"contextWindow":1000000,"maxOutputTokens":128000},"claude-haiku-4-5-20251001":{"inputTokens":8,"outputTokens":20,"contextWindow":200000,"maxOutputTokens":32000}}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var result *ResultEvent
+	for e := range ch {
+		if r, ok := e.(*ResultEvent); ok {
+			result = r
+		}
+	}
+	if result == nil {
+		t.Fatal("no ResultEvent")
+	}
+	cs := result.ContextSnapshot
+	if cs == nil {
+		t.Fatal("ContextSnapshot is nil")
+	}
+	if cs.ContextWindow != 1000000 {
+		t.Errorf("ContextWindow = %d, want 1000000", cs.ContextWindow)
+	}
+	if cs.InputTokens != 100 {
+		t.Errorf("InputTokens = %d, want 100", cs.InputTokens)
+	}
+	if cs.OutputTokens != 50 {
+		t.Errorf("OutputTokens = %d, want 50", cs.OutputTokens)
+	}
+}
+
 func TestParseUnknownEventType(t *testing.T) {
 	input := `{"type":"system","session_id":"test","model":"sonnet"}
 {"type":"subagent_progress","agent_id":"abc123","data":"working"}

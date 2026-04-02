@@ -82,7 +82,7 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 		case "result":
 			modelUsage := convertModelUsage(raw.ModelUsage)
 			if snapshot != nil && lastModel != "" {
-				if mu, ok := modelUsage[lastModel]; ok {
+				if mu, ok := lookupModelUsage(modelUsage, lastModel); ok {
 					snapshot.ContextWindow = mu.ContextWindow
 				}
 			}
@@ -450,6 +450,22 @@ func convertModelUsage(raw map[string]rawModelUsage) map[string]ModelUsage {
 		}
 	}
 	return out
+}
+
+// lookupModelUsage finds the ModelUsage entry for the given model name.
+// The CLI may append a context-window suffix (e.g., "claude-opus-4-6[1m]")
+// to modelUsage keys while inner stream events use the bare model name.
+func lookupModelUsage(mu map[string]ModelUsage, model string) (ModelUsage, bool) {
+	if v, ok := mu[model]; ok {
+		return v, true
+	}
+	prefix := model + "["
+	for k, v := range mu {
+		if strings.HasPrefix(k, prefix) {
+			return v, true
+		}
+	}
+	return ModelUsage{}, false
 }
 
 // rawInnerEventType peeks at just the "type" field of an inner stream event.
