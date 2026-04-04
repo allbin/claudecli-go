@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -59,26 +60,50 @@ func TestAuthStatusResult_NotLoggedIn(t *testing.T) {
 
 func TestExtractLoginURL(t *testing.T) {
 	tests := []struct {
+		name string
 		line string
 		want string
 	}{
 		{
+			"primary prefix",
 			"If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&client_id=abc",
 			"https://claude.com/cai/oauth/authorize?code=true&client_id=abc",
 		},
 		{
+			"primary prefix trailing space",
 			"If the browser didn't open, visit: https://example.com/auth  ",
 			"https://example.com/auth",
 		},
-		{"Opening browser to sign in…", ""},
-		{"random output", ""},
-		{"", ""},
+		{
+			"fallback visit keyword",
+			"Please visit https://claude.ai/oauth/authorize?client_id=abc to continue",
+			"https://claude.ai/oauth/authorize?client_id=abc",
+		},
+		{
+			"fallback open keyword",
+			"Open https://claude.ai/oauth/authorize?state=xyz in your browser",
+			"https://claude.ai/oauth/authorize?state=xyz",
+		},
+		{
+			"fallback OAuth URL without keywords",
+			"https://claude.ai/oauth/authorize?client_id=abc&state=xyz",
+			"https://claude.ai/oauth/authorize?client_id=abc&state=xyz",
+		},
+		{
+			"no match",
+			"Opening browser to sign in…",
+			"",
+		},
+		{"random output", "random output", ""},
+		{"empty", "", ""},
 	}
 	for _, tt := range tests {
-		got := extractLoginURL(tt.line)
-		if got != tt.want {
-			t.Errorf("extractLoginURL(%q) = %q, want %q", tt.line, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractLoginURL(tt.line)
+			if got != tt.want {
+				t.Errorf("extractLoginURL(%q) = %q, want %q", tt.line, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -225,7 +250,7 @@ func TestWaitForAutoURL(t *testing.T) {
 }
 
 func TestSubmitCode(t *testing.T) {
-	t.Run("code with hash state", func(t *testing.T) {
+	t.Run("CODE#STATE format", func(t *testing.T) {
 		var mu sync.Mutex
 		var gotPath string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -240,23 +265,23 @@ func TestSubmitCode(t *testing.T) {
 		port, _ := strconv.Atoi(u.Port())
 
 		lp := &LoginProcess{
-			URL:          "https://claude.ai/oauth/authorize?state=url-state&client_id=abc",
+			URL:          "https://claude.ai/oauth/authorize?state=s",
 			callbackPort: port,
 		}
 
-		if err := lp.SubmitCode("mycode#override-state"); err != nil {
+		if err := lp.SubmitCode("mycode#mystate"); err != nil {
 			t.Fatalf("SubmitCode: %v", err)
 		}
 
 		mu.Lock()
 		defer mu.Unlock()
-		want := "/callback?code=mycode&state=override-state"
+		want := "/callback?code=mycode&state=mystate"
 		if gotPath != want {
 			t.Errorf("request path = %q, want %q", gotPath, want)
 		}
 	})
 
-	t.Run("plain code uses URL state", func(t *testing.T) {
+	t.Run("full redirect URL", func(t *testing.T) {
 		var mu sync.Mutex
 		var gotPath string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -271,17 +296,18 @@ func TestSubmitCode(t *testing.T) {
 		port, _ := strconv.Atoi(u.Port())
 
 		lp := &LoginProcess{
-			URL:          "https://claude.ai/oauth/authorize?state=from-url&client_id=abc",
+			URL:          "https://claude.ai/oauth/authorize?state=s",
 			callbackPort: port,
 		}
 
-		if err := lp.SubmitCode("justthecode"); err != nil {
+		redirectURL := fmt.Sprintf("http://localhost:%d/callback?code=fromurl&state=urlstate", port)
+		if err := lp.SubmitCode(redirectURL); err != nil {
 			t.Fatalf("SubmitCode: %v", err)
 		}
 
 		mu.Lock()
 		defer mu.Unlock()
-		want := "/callback?code=justthecode&state=from-url"
+		want := "/callback?code=fromurl&state=urlstate"
 		if gotPath != want {
 			t.Errorf("request path = %q, want %q", gotPath, want)
 		}
@@ -289,20 +315,17 @@ func TestSubmitCode(t *testing.T) {
 
 	t.Run("no port returns error", func(t *testing.T) {
 		lp := &LoginProcess{URL: "https://example.com"}
-		err := lp.SubmitCode("code")
+		err := lp.SubmitCode("code#state")
 		if err == nil {
 			t.Error("expected error for zero callbackPort")
 		}
 	})
 
-	t.Run("no state returns error", func(t *testing.T) {
-		lp := &LoginProcess{
-			URL:          "https://claude.ai/oauth/authorize?client_id=abc",
-			callbackPort: 9999,
-		}
-		err := lp.SubmitCode("codeonly")
+	t.Run("invalid format returns error", func(t *testing.T) {
+		lp := &LoginProcess{URL: "https://example.com", callbackPort: 9999}
+		err := lp.SubmitCode("justcode")
 		if err == nil {
-			t.Error("expected error for missing state")
+			t.Error("expected error for bare code without state")
 		}
 	})
 
@@ -325,6 +348,168 @@ func TestSubmitCode(t *testing.T) {
 			t.Error("expected error for non-200 response")
 		}
 	})
+}
+
+func TestParseAuthStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		output     string
+		cmdErr     error
+		wantStatus AuthState
+		wantLogin  bool
+		wantEmail  string
+	}{
+		{
+			name:       "JSON loggedIn true",
+			output:     `{"loggedIn": true, "email": "user@example.com", "authMethod": "claude.ai"}`,
+			wantStatus: AuthStateAuthenticated,
+			wantLogin:  true,
+			wantEmail:  "user@example.com",
+		},
+		{
+			name:       "JSON loggedIn false",
+			output:     `{"loggedIn": false}`,
+			wantStatus: AuthStateUnauthenticated,
+		},
+		{
+			name:       "JSON isAuthenticated true",
+			output:     `{"isAuthenticated": true, "email": "alt@example.com"}`,
+			wantStatus: AuthStateAuthenticated,
+			wantLogin:  true,
+			wantEmail:  "alt@example.com",
+		},
+		{
+			name:       "JSON no auth marker",
+			output:     `{"version": "1.0"}`,
+			wantStatus: AuthStateUnknown,
+		},
+		{
+			name:       "text not logged in",
+			output:     "Error: Not logged in. Run `claude login` to authenticate.",
+			cmdErr:     fmt.Errorf("exit status 1"),
+			wantStatus: AuthStateUnauthenticated,
+		},
+		{
+			name:       "text login required",
+			output:     "Login required to continue",
+			cmdErr:     fmt.Errorf("exit status 1"),
+			wantStatus: AuthStateUnauthenticated,
+		},
+		{
+			name:       "text authentication required",
+			output:     "Authentication required",
+			cmdErr:     fmt.Errorf("exit status 1"),
+			wantStatus: AuthStateUnauthenticated,
+		},
+		{
+			name:       "text run claude login",
+			output:     "Please run claude login first",
+			cmdErr:     fmt.Errorf("exit status 1"),
+			wantStatus: AuthStateUnauthenticated,
+		},
+		{
+			name:       "unknown command",
+			output:     "error: unknown command 'auth'",
+			cmdErr:     fmt.Errorf("exit status 1"),
+			wantStatus: AuthStateUnknown,
+		},
+		{
+			name:       "unexpected argument",
+			output:     "error: unexpected argument '--json'",
+			cmdErr:     fmt.Errorf("exit status 1"),
+			wantStatus: AuthStateUnknown,
+		},
+		{
+			name:       "exit 0 non-JSON",
+			output:     "Logged in as user@example.com",
+			wantStatus: AuthStateAuthenticated,
+			wantLogin:  true,
+		},
+		{
+			name:       "exit non-zero unrecognized output",
+			output:     "something unexpected happened",
+			cmdErr:     fmt.Errorf("exit status 1"),
+			wantStatus: AuthStateUnknown,
+		},
+		{
+			name:       "JSON with subscription_type key",
+			output:     `{"loggedIn": true, "subscription_type": "maxplan"}`,
+			wantStatus: AuthStateAuthenticated,
+			wantLogin:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseAuthStatus(tt.output, tt.cmdErr)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Status != tt.wantStatus {
+				t.Errorf("Status = %q, want %q", result.Status, tt.wantStatus)
+			}
+			if result.LoggedIn != tt.wantLogin {
+				t.Errorf("LoggedIn = %v, want %v", result.LoggedIn, tt.wantLogin)
+			}
+			if tt.wantEmail != "" && result.Email != tt.wantEmail {
+				t.Errorf("Email = %q, want %q", result.Email, tt.wantEmail)
+			}
+		})
+	}
+}
+
+func TestParseAuthStatus_SubscriptionType(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{"subscriptionType", `{"loggedIn":true,"subscriptionType":"maxplan"}`, "maxplan"},
+		{"subscription_type", `{"loggedIn":true,"subscription_type":"pro"}`, "pro"},
+		{"plan key", `{"loggedIn":true,"plan":"team"}`, "team"},
+		{"tier key", `{"loggedIn":true,"tier":"enterprise"}`, "enterprise"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := parseAuthStatus(tt.output, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.SubscriptionType != tt.want {
+				t.Errorf("SubscriptionType = %q, want %q", result.SubscriptionType, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractFirstHTTPS(t *testing.T) {
+	tests := []struct {
+		line string
+		want string
+	}{
+		{"visit https://example.com/auth to continue", "https://example.com/auth"},
+		{"https://example.com", "https://example.com"},
+		{"no url here", ""},
+		{"http://not-https.com", ""},
+		{"prefix https://a.com/path?q=1 suffix", "https://a.com/path?q=1"},
+	}
+	for _, tt := range tests {
+		got := extractFirstHTTPS(tt.line)
+		if got != tt.want {
+			t.Errorf("extractFirstHTTPS(%q) = %q, want %q", tt.line, got, tt.want)
+		}
+	}
+}
+
+func TestCallbackPort(t *testing.T) {
+	lp := &LoginProcess{URL: "https://example.com", callbackPort: 12345}
+	if lp.CallbackPort() != 12345 {
+		t.Errorf("CallbackPort() = %d, want 12345", lp.CallbackPort())
+	}
+
+	lp2 := &LoginProcess{URL: "https://example.com"}
+	if lp2.CallbackPort() != 0 {
+		t.Errorf("CallbackPort() = %d, want 0", lp2.CallbackPort())
+	}
 }
 
 func TestWriteBrowserCaptureScript(t *testing.T) {

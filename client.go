@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 )
 
@@ -11,20 +12,40 @@ import (
 type Client struct {
 	executor Executor
 	defaults []Option
+	logger   *slog.Logger
 }
 
-// New creates a client. Pass options to set defaults for all calls.
+// ClientOption configures the Client itself (not individual Run calls).
+type ClientOption func(*Client)
+
+// WithLogger sets a structured logger for auth and diagnostic output.
+// If nil or not set, a no-op logger is used.
+func WithLogger(l *slog.Logger) ClientOption {
+	return func(c *Client) { c.logger = l }
+}
+
+// New creates a client. ClientOption values configure the client;
+// Option values set defaults for all Run/Connect calls.
 // Use WithBinaryPath to override the CLI binary location.
 func New(defaults ...Option) *Client {
+	return NewClient(nil, defaults...)
+}
+
+// NewClient creates a client with explicit client options.
+func NewClient(clientOpts []ClientOption, defaults ...Option) *Client {
 	resolved := resolveOptions(defaults, nil)
 	executor := NewLocalExecutor()
 	if resolved.binaryPath != "" {
 		executor.BinaryPath = resolved.binaryPath
 	}
-	return &Client{
+	c := &Client{
 		executor: executor,
 		defaults: defaults,
 	}
+	for _, o := range clientOpts {
+		o(c)
+	}
+	return c
 }
 
 // NewWithExecutor creates a client with a specific executor and default options.
@@ -210,6 +231,22 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 
 	return session, nil
 }
+
+// log returns the client's logger, or a no-op logger if none was set.
+func (c *Client) log() *slog.Logger {
+	if c.logger != nil {
+		return c.logger
+	}
+	return slog.New(discardHandler{})
+}
+
+// discardHandler is a no-op slog.Handler.
+type discardHandler struct{}
+
+func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
+func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
+func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
+func (d discardHandler) WithGroup(string) slog.Handler            { return d }
 
 // binaryPath returns the CLI binary path from the executor, falling back to "claude".
 func (c *Client) binaryPath() string {
