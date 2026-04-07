@@ -234,13 +234,13 @@ func (s *Session) RewindFiles(userMessageID string) error {
 
 // ReconnectMCPServer reconnects a named MCP server.
 func (s *Session) ReconnectMCPServer(serverName string) error {
-	return s.sendControlRequest("mcp_reconnect", map[string]any{"server_name": serverName})
+	return s.sendControlRequest("mcp_reconnect", map[string]any{"serverName": serverName})
 }
 
 // ToggleMCPServer enables or disables a named MCP server.
 func (s *Session) ToggleMCPServer(serverName string, enabled bool) error {
 	return s.sendControlRequest("mcp_toggle", map[string]any{
-		"server_name": serverName,
+		"serverName": serverName,
 		"enabled":     enabled,
 	})
 }

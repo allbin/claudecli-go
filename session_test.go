@@ -2078,8 +2078,8 @@ func TestSessionReconnectMCPServer(t *testing.T) {
 		if request["subtype"] != "mcp_reconnect" {
 			t.Errorf("expected mcp_reconnect, got %v", request["subtype"])
 		}
-		if request["server_name"] != "my-server" {
-			t.Errorf("expected server_name 'my-server', got %v", request["server_name"])
+		if request["serverName"] != "my-server" {
+			t.Errorf("expected server_name 'my-server', got %v", request["serverName"])
 		}
 		sim.sendResult()
 	}()
@@ -2110,8 +2110,8 @@ func TestSessionToggleMCPServer(t *testing.T) {
 		if request["subtype"] != "mcp_toggle" {
 			t.Errorf("expected mcp_toggle, got %v", request["subtype"])
 		}
-		if request["server_name"] != "my-server" {
-			t.Errorf("expected server_name 'my-server', got %v", request["server_name"])
+		if request["serverName"] != "my-server" {
+			t.Errorf("expected server_name 'my-server', got %v", request["serverName"])
 		}
 		if request["enabled"] != true {
 			t.Errorf("expected enabled true, got %v", request["enabled"])
