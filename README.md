@@ -265,10 +265,12 @@ Session methods:
 - `SetModel(model)` — change model mid-session
 - `GetServerInfo()` — raw JSON from the initialize handshake
 - `RewindFiles(userMessageID)` — rewind files to a checkpoint
-- `ReconnectMCPServer(name)` — reconnect a named MCP server
+- `ReconnectMCPServer(name)` — reconnect a named MCP server (non-blocking)
+- `ReconnectMCPServerWait(name, timeout)` — reconnect and block until connected (polls `mcp_status`; 0 timeout = 10s default)
 - `ToggleMCPServer(name, enabled)` — enable/disable an MCP server
 - `StopTask(taskID)` — stop a running task
-- `GetMCPStatus()` — query MCP server status
+- `GetMCPStatus()` — query MCP server status (fire-and-forget)
+- `QueryMCPStatus()` — query MCP server status, returns `[]MCPServerStatus`
 - `Close()` — terminate session
 
 ### Mid-turn message injection

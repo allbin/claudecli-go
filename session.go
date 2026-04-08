@@ -256,6 +256,58 @@ func (s *Session) GetMCPStatus() error {
 	return s.sendControlRequest("mcp_status", nil)
 }
 
+// QueryMCPStatus queries MCP server connection status and returns the parsed result.
+func (s *Session) QueryMCPStatus() ([]MCPServerStatus, error) {
+	resp, err := s.sendControlRequestRaw("mcp_status", nil)
+	if err != nil {
+		return nil, err
+	}
+	var servers []MCPServerStatus
+	if err := json.Unmarshal(resp, &servers); err != nil {
+		return nil, fmt.Errorf("parse mcp_status response: %w", err)
+	}
+	return servers, nil
+}
+
+// ReconnectMCPServerWait reconnects a named MCP server and blocks until it
+// reports connected status. A zero timeout uses the default (10s).
+func (s *Session) ReconnectMCPServerWait(serverName string, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	if err := s.ReconnectMCPServer(serverName); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		servers, err := s.QueryMCPStatus()
+		if err != nil {
+			return fmt.Errorf("mcp_reconnect_wait: status query: %w", err)
+		}
+		for _, srv := range servers {
+			if srv.Name == serverName && srv.Status == "connected" {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			if s.ctx.Err() != nil {
+				return s.ctx.Err()
+			}
+			return fmt.Errorf("mcp_reconnect_wait: %s not connected after %s", serverName, timeout)
+		case <-ticker.C:
+		}
+	}
+}
+
 // Close terminates the session. Closes stdin (EOF signal) and waits up to
 // 5 seconds for the CLI to exit gracefully before canceling the context
 // (SIGTERM). The grace period prevents interrupting session file writes
@@ -302,6 +354,12 @@ func (s *Session) writeStdin(data []byte) error {
 
 // sendControlRequest sends a control request and waits for the CLI's response.
 func (s *Session) sendControlRequest(subtype string, data map[string]any) error {
+	_, err := s.sendControlRequestRaw(subtype, data)
+	return err
+}
+
+// sendControlRequestRaw sends a control request and returns the raw response body.
+func (s *Session) sendControlRequestRaw(subtype string, data map[string]any) (json.RawMessage, error) {
 	id := fmt.Sprintf("req_%d", s.reqCounter.Add(1))
 	resultCh := make(chan controlResult, 1)
 	s.pending.Store(id, resultCh)
@@ -319,10 +377,10 @@ func (s *Session) sendControlRequest(subtype string, data map[string]any) error 
 
 	raw, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := s.writeStdin(append(raw, '\n')); err != nil {
-		return err
+		return nil, err
 	}
 
 	ctx, cancel := context.WithTimeout(s.ctx, s.controlTimeout)
@@ -331,14 +389,14 @@ func (s *Session) sendControlRequest(subtype string, data map[string]any) error 
 	select {
 	case result := <-resultCh:
 		if result.Err != nil {
-			return fmt.Errorf("%s: %w", subtype, result.Err)
+			return nil, fmt.Errorf("%s: %w", subtype, result.Err)
 		}
-		return nil
+		return result.Response, nil
 	case <-ctx.Done():
 		if s.ctx.Err() != nil {
-			return s.ctx.Err()
+			return nil, s.ctx.Err()
 		}
-		return fmt.Errorf("%s: timeout after %s", subtype, s.controlTimeout)
+		return nil, fmt.Errorf("%s: timeout after %s", subtype, s.controlTimeout)
 	}
 }
 

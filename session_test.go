@@ -93,6 +93,20 @@ func (s *sessionSim) respondError(t *testing.T, errMsg string) map[string]any {
 	return msg
 }
 
+// respondSuccessWithBody reads a control request and sends a success response
+// with a custom JSON body.
+func (s *sessionSim) respondSuccessWithBody(t *testing.T, body string) map[string]any {
+	t.Helper()
+	msg := s.readStdin(t)
+	if msg["type"] != "control_request" {
+		t.Errorf("expected control_request, got %v", msg["type"])
+	}
+	requestID := msg["request_id"].(string)
+	resp := fmt.Sprintf(`{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":%s}}`, requestID, body)
+	s.send(resp)
+	return msg
+}
+
 // send writes a JSONL line to stdout.
 func (s *sessionSim) send(line string) {
 	s.bidi.StdoutWriter.Write([]byte(line + "\n"))
@@ -2131,6 +2145,134 @@ func TestSessionToggleMCPServer(t *testing.T) {
 	_, err = session.Wait()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSessionQueryMCPStatus(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+
+		msg := sim.respondSuccessWithBody(t, `[{"name":"my-server","status":"connected"},{"name":"other","status":"disconnected"}]`)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "mcp_status" {
+			t.Errorf("expected mcp_status, got %v", request["subtype"])
+		}
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	servers, err := session.QueryMCPStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 2 {
+		t.Fatalf("expected 2 servers, got %d", len(servers))
+	}
+	if servers[0].Name != "my-server" || servers[0].Status != "connected" {
+		t.Errorf("unexpected server[0]: %+v", servers[0])
+	}
+	if servers[1].Name != "other" || servers[1].Status != "disconnected" {
+		t.Errorf("unexpected server[1]: %+v", servers[1])
+	}
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionReconnectMCPServerWait(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+
+		// First: the reconnect request
+		msg := sim.respondSuccess(t)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "mcp_reconnect" {
+			t.Errorf("expected mcp_reconnect, got %v", request["subtype"])
+		}
+		if request["serverName"] != "my-server" {
+			t.Errorf("expected serverName 'my-server', got %v", request["serverName"])
+		}
+
+		// First poll: still disconnected
+		sim.respondSuccessWithBody(t, `[{"name":"my-server","status":"disconnected"}]`)
+
+		// Second poll: connected
+		sim.respondSuccessWithBody(t, `[{"name":"my-server","status":"connected"}]`)
+
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.ReconnectMCPServerWait("my-server", 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionReconnectMCPServerWaitTimeout(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi, WithControlTimeout(5*time.Second))
+
+	go func() {
+		sim.handleInitAndReady(t)
+
+		// Reconnect succeeds
+		sim.respondSuccess(t)
+
+		// Keep responding disconnected until stdin closes (client timed out).
+		// Manual read loop avoids t.Errorf noise on expected EOF.
+		for {
+			line, err := sim.reader.ReadBytes('\n')
+			if err != nil {
+				break
+			}
+			var msg map[string]any
+			json.Unmarshal(line, &msg)
+			requestID, _ := msg["request_id"].(string)
+			if requestID == "" {
+				break
+			}
+			resp := fmt.Sprintf(`{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":[{"name":"my-server","status":"disconnected"}]}}`, requestID)
+			sim.send(resp)
+		}
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	err = session.ReconnectMCPServerWait("my-server", 500*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "not connected after") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
