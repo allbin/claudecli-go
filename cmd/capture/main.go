@@ -111,7 +111,7 @@ func capture(prompt, outDir string, timeout time.Duration) error {
 
 	ch := make(chan claudecli.Event, 256)
 	go func() {
-		claudecli.ParseEvents(pr, ch)
+		claudecli.ParseEvents(ctx, pr, ch)
 		close(ch)
 	}()
 
@@ -216,7 +216,7 @@ func analyzeJSONL(path string) error {
 	f.Seek(0, 0)
 	ch := make(chan claudecli.Event, 256)
 	go func() {
-		claudecli.ParseEvents(f, ch)
+		claudecli.ParseEvents(context.Background(), f, ch)
 		close(ch)
 	}()
 

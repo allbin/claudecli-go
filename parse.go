@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,11 @@ import (
 // ParseEvents reads JSONL from r and sends parsed events to ch.
 // Does not close ch — the caller is responsible for closing it.
 // Safe to call from a goroutine.
-func ParseEvents(r io.Reader, ch chan<- Event) {
+//
+// When ctx is cancelled, ParseEvents stops processing new lines and returns.
+// Note: cancellation does not unblock a pending scanner.Scan() — the caller
+// must close the reader (e.g. by killing the subprocess) to unblock reads.
+func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
@@ -21,6 +26,11 @@ func ParseEvents(r io.Reader, ch chan<- Event) {
 	var lastModel string
 
 	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue

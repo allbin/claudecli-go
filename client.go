@@ -120,7 +120,7 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 		}
 	}()
 
-	ParseEvents(proc.Stdout, parsed)
+	ParseEvents(ctx, proc.Stdout, parsed)
 	close(parsed)
 	<-parseDone
 	<-stderrDone

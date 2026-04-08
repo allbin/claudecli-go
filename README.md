@@ -357,7 +357,7 @@ for pe := range pool.Events() {
 }
 ```
 
-Pool methods: `Add`, `Remove`, `Get`, `List`, `Events`, `Close`. All are thread-safe.
+Pool methods: `Add`, `Remove`, `Get`, `List`, `Events`, `Close`, `CloseAll`. All are thread-safe. `CloseAll` closes every registered session in parallel (respecting each session's grace period), then closes the pool — useful for clean application shutdown.
 
 ### Inter-agent messaging
 
@@ -527,7 +527,7 @@ You can also parse JSONL directly:
 ch := make(chan claudecli.Event, 64)
 go func() {
     defer close(ch)
-    claudecli.ParseEvents(reader, ch)
+    claudecli.ParseEvents(ctx, reader, ch)
 }()
 for event := range ch {
     // ...

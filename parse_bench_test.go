@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"testing"
 )
@@ -16,7 +17,7 @@ func BenchmarkParseBasicStream(b *testing.B) {
 	for range b.N {
 		ch := make(chan Event, 64)
 		go func() {
-			ParseEvents(bytes.NewReader(data), ch)
+			ParseEvents(context.Background(), bytes.NewReader(data), ch)
 			close(ch)
 		}()
 		for range ch {
@@ -34,7 +35,7 @@ func BenchmarkParseToolUseStream(b *testing.B) {
 	for range b.N {
 		ch := make(chan Event, 64)
 		go func() {
-			ParseEvents(bytes.NewReader(data), ch)
+			ParseEvents(context.Background(), bytes.NewReader(data), ch)
 			close(ch)
 		}()
 		for range ch {

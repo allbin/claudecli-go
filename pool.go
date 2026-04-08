@@ -132,6 +132,39 @@ func (p *Pool) Events() <-chan PoolEvent {
 	return p.events
 }
 
+// CloseAll closes every registered session in parallel, then closes the pool.
+// Each session gets up to its grace period (default 5s) for the CLI to flush.
+// Returns the first error encountered, or nil if all sessions closed cleanly.
+func (p *Pool) CloseAll() error {
+	p.mu.RLock()
+	entries := make([]*poolEntry, 0, len(p.sessions))
+	for _, e := range p.sessions {
+		entries = append(entries, e)
+	}
+	p.mu.RUnlock()
+
+	errs := make(chan error, len(entries))
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		wg.Add(1)
+		go func(s *Session) {
+			defer wg.Done()
+			if err := s.Close(); err != nil {
+				errs <- err
+			}
+		}(e.session)
+	}
+	wg.Wait()
+	close(errs)
+
+	p.Close()
+
+	for err := range errs {
+		return err // return first error
+	}
+	return nil
+}
+
 // Close stops all forwarders and closes the events channel.
 // Does not close individual sessions. Idempotent.
 func (p *Pool) Close() {
