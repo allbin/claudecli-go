@@ -37,5 +37,5 @@ func ExampleStream_events() {
 		eventCount++
 	}
 	fmt.Printf("Received %d events, state: %s\n", eventCount, stream.State())
-	// Output: Received 6 events, state: done
+	// Output: Received 8 events, state: done
 }

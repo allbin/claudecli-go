@@ -838,20 +838,23 @@ func TestParseCompactionSequence(t *testing.T) {
 		events = append(events, e)
 	}
 
-	// Expected: InitEvent, TextEvent, ResultEvent (parser returns after first result).
+	// Expected: InitEvent, TurnEvent, TextEvent, ResultEvent (parser returns after first result).
 	// The compaction events come after the first result, which terminates ParseEvents.
 	// In session mode (readLoop) they would all be received.
-	if len(events) < 3 {
-		t.Fatalf("expected at least 3 events, got %d", len(events))
+	if len(events) < 4 {
+		t.Fatalf("expected at least 4 events, got %d", len(events))
 	}
 	if _, ok := events[0].(*InitEvent); !ok {
 		t.Errorf("event[0]: expected InitEvent, got %T", events[0])
 	}
-	if _, ok := events[1].(*TextEvent); !ok {
-		t.Errorf("event[1]: expected TextEvent, got %T", events[1])
+	if _, ok := events[1].(*TurnEvent); !ok {
+		t.Errorf("event[1]: expected TurnEvent, got %T", events[1])
 	}
-	if _, ok := events[2].(*ResultEvent); !ok {
-		t.Errorf("event[2]: expected ResultEvent, got %T", events[2])
+	if _, ok := events[2].(*TextEvent); !ok {
+		t.Errorf("event[2]: expected TextEvent, got %T", events[2])
+	}
+	if _, ok := events[3].(*ResultEvent); !ok {
+		t.Errorf("event[3]: expected ResultEvent, got %T", events[3])
 	}
 }
 
@@ -1800,5 +1803,135 @@ func TestParseUserEventReplayFalseByDefault(t *testing.T) {
 	}
 	if ue.IsReplay {
 		t.Error("IsReplay should be false for normal user events")
+	}
+}
+
+func TestParseMaxTurnsStream(t *testing.T) {
+	events := collectEvents(t, "testdata/max_turns.jsonl")
+
+	// Should have ErrorEvent with ErrMaxTurns before ResultEvent.
+	var maxTurnsErr *ErrorEvent
+	var result *ResultEvent
+	for _, e := range events {
+		switch ev := e.(type) {
+		case *ErrorEvent:
+			if errors.Is(ev.Err, ErrMaxTurns) {
+				maxTurnsErr = ev
+			}
+		case *ResultEvent:
+			result = ev
+		}
+	}
+
+	if maxTurnsErr == nil {
+		t.Fatal("no ErrorEvent with ErrMaxTurns found")
+	}
+	if maxTurnsErr.Fatal {
+		t.Error("max turns ErrorEvent should be non-fatal")
+	}
+	var mte *MaxTurnsError
+	if !errors.As(maxTurnsErr.Err, &mte) {
+		t.Fatal("expected errors.As to match *MaxTurnsError")
+	}
+	if mte.Turns != 3 {
+		t.Errorf("MaxTurnsError.Turns = %d, want 3", mte.Turns)
+	}
+	if !strings.Contains(mte.Message, "Reached maximum number of turns (3)") {
+		t.Errorf("MaxTurnsError.Message = %q", mte.Message)
+	}
+
+	if result == nil {
+		t.Fatal("no ResultEvent found")
+	}
+	if result.Subtype != "error_max_turns" {
+		t.Errorf("ResultEvent.Subtype = %q, want error_max_turns", result.Subtype)
+	}
+	if result.NumTurns != 3 {
+		t.Errorf("ResultEvent.NumTurns = %d, want 3", result.NumTurns)
+	}
+}
+
+func TestParseResultNumTurns(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}
+{"type":"result","subtype":"success","num_turns":5,"total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var result *ResultEvent
+	for e := range ch {
+		if r, ok := e.(*ResultEvent); ok {
+			result = r
+		}
+	}
+	if result == nil {
+		t.Fatal("no ResultEvent")
+	}
+	if result.NumTurns != 5 {
+		t.Errorf("NumTurns = %d, want 5", result.NumTurns)
+	}
+}
+
+func TestParseTurnEvents(t *testing.T) {
+	events := collectEvents(t, "testdata/max_turns.jsonl")
+
+	var turns []*TurnEvent
+	for _, e := range events {
+		if te, ok := e.(*TurnEvent); ok {
+			turns = append(turns, te)
+		}
+	}
+
+	if len(turns) != 3 {
+		t.Fatalf("got %d TurnEvents, want 3", len(turns))
+	}
+	// Turn 1: tool_use Read
+	if turns[0].Turn != 1 || turns[0].ToolName != "Read" {
+		t.Errorf("turn 1: Turn=%d, ToolName=%q", turns[0].Turn, turns[0].ToolName)
+	}
+	// Turn 2: tool_use Grep
+	if turns[1].Turn != 2 || turns[1].ToolName != "Grep" {
+		t.Errorf("turn 2: Turn=%d, ToolName=%q", turns[1].Turn, turns[1].ToolName)
+	}
+	// Turn 3: text only (no tool)
+	if turns[2].Turn != 3 || turns[2].ToolName != "" {
+		t.Errorf("turn 3: Turn=%d, ToolName=%q", turns[2].Turn, turns[2].ToolName)
+	}
+}
+
+func TestParseTurnEventsSkipSubagent(t *testing.T) {
+	// Subagent assistant messages (with parent_tool_use_id) should NOT emit TurnEvents.
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_agent","name":"Agent","input":{}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_sub","name":"Read","input":{}}]},"parent_tool_use_id":"tu_agent"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}
+{"type":"result","subtype":"success","num_turns":2,"total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var turns []*TurnEvent
+	for e := range ch {
+		if te, ok := e.(*TurnEvent); ok {
+			turns = append(turns, te)
+		}
+	}
+
+	// Only 2 top-level assistant messages (turn 1: Agent tool, turn 2: text)
+	if len(turns) != 2 {
+		t.Fatalf("got %d TurnEvents, want 2", len(turns))
+	}
+	if turns[0].ToolName != "Agent" {
+		t.Errorf("turn 1 ToolName = %q, want Agent", turns[0].ToolName)
+	}
+	if turns[1].ToolName != "" {
+		t.Errorf("turn 2 ToolName = %q, want empty", turns[1].ToolName)
 	}
 }

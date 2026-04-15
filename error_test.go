@@ -251,6 +251,82 @@ func TestInferErrorMessage_EmptyStderr(t *testing.T) {
 	}
 }
 
+func TestMaxTurnsError_Error(t *testing.T) {
+	e := &MaxTurnsError{Turns: 5, Message: "Reached maximum number of turns (5)"}
+	got := e.Error()
+	if !strings.Contains(got, "max turns reached (5)") {
+		t.Errorf("got %q", got)
+	}
+
+	e2 := &MaxTurnsError{Message: "hit limit"}
+	got2 := e2.Error()
+	if got2 != "max turns reached: hit limit" {
+		t.Errorf("got %q", got2)
+	}
+}
+
+func TestMaxTurnsError_Is(t *testing.T) {
+	e := &Error{ExitCode: 1, class: &MaxTurnsError{Turns: 3, Message: "test"}}
+	if !errors.Is(e, ErrMaxTurns) {
+		t.Error("expected errors.Is(e, ErrMaxTurns)")
+	}
+	if errors.Is(e, ErrRateLimit) {
+		t.Error("unexpected match with ErrRateLimit")
+	}
+}
+
+func TestMaxTurnsError_As(t *testing.T) {
+	e := &Error{ExitCode: 1, class: &MaxTurnsError{Turns: 10, Message: "hit"}}
+	var mte *MaxTurnsError
+	if !errors.As(e, &mte) {
+		t.Fatal("expected errors.As to match *MaxTurnsError")
+	}
+	if mte.Turns != 10 {
+		t.Errorf("Turns = %d", mte.Turns)
+	}
+}
+
+func TestParseMaxTurnsCount(t *testing.T) {
+	tests := []struct {
+		input string
+		turns int
+		ok    bool
+	}{
+		{"Reached maximum number of turns (5)", 5, true},
+		{"Reached maximum number of turns (25)", 25, true},
+		{"Reached maximum number of turns (0)", 0, true},
+		{"Some other error", 0, false},
+		{"Reached maximum number of turns (abc)", 0, false},
+		{"Reached maximum number of turns (", 0, false},
+		{"", 0, false},
+	}
+	for _, tt := range tests {
+		n, ok := parseMaxTurnsCount(tt.input)
+		if ok != tt.ok || n != tt.turns {
+			t.Errorf("parseMaxTurnsCount(%q) = (%d, %v), want (%d, %v)",
+				tt.input, n, ok, tt.turns, tt.ok)
+		}
+	}
+}
+
+func TestClassifyMaxTurns(t *testing.T) {
+	mte := classifyMaxTurns([]string{"Reached maximum number of turns (7)"})
+	if mte.Turns != 7 {
+		t.Errorf("Turns = %d, want 7", mte.Turns)
+	}
+	if !strings.Contains(mte.Message, "Reached maximum number of turns (7)") {
+		t.Errorf("Message = %q", mte.Message)
+	}
+
+	mte2 := classifyMaxTurns(nil)
+	if mte2.Turns != 0 {
+		t.Errorf("Turns = %d, want 0", mte2.Turns)
+	}
+	if mte2.Message != "reached maximum number of turns" {
+		t.Errorf("Message = %q", mte2.Message)
+	}
+}
+
 func TestNormalizeAPIErrorType(t *testing.T) {
 	tests := []struct {
 		input string

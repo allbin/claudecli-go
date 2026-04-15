@@ -139,6 +139,12 @@ func (s *Stream) trackState(event Event) {
 	case *ResultEvent:
 		s.state = StateDone
 		s.result = e
+		if s.err == nil && e.Subtype == "error_max_turns" {
+			s.err = &MaxTurnsError{
+				Turns:   e.NumTurns,
+				Message: "reached maximum number of turns",
+			}
+		}
 	case *ErrorEvent:
 		if e.Fatal {
 			s.state = StateFailed

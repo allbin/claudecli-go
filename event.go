@@ -144,6 +144,23 @@ func (e *TextEvent) String() string {
 	return fmt.Sprintf("TextEvent{len: %d}", len(e.Content))
 }
 
+// TurnEvent is emitted when a new assistant turn starts.
+// Turn is a 1-based counter incremented for each top-level assistant message.
+// ToolName is the name of the first tool_use block in the turn, or empty if
+// the turn contains only text/thinking.
+type TurnEvent struct {
+	Turn     int
+	ToolName string
+}
+
+func (*TurnEvent) event() {}
+func (e *TurnEvent) String() string {
+	if e.ToolName != "" {
+		return fmt.Sprintf("TurnEvent{Turn: %d, Tool: %s}", e.Turn, e.ToolName)
+	}
+	return fmt.Sprintf("TurnEvent{Turn: %d}", e.Turn)
+}
+
 // ToolUseEvent is emitted when the assistant invokes a tool.
 // ParentToolUseID is set when this event comes from a subagent (links to the
 // parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
@@ -325,7 +342,7 @@ func (e *StderrEvent) String() string {
 	return fmt.Sprintf("StderrEvent{%s}", e.Content)
 }
 
-// ResultEvent is emitted at the end of a successful session.
+// ResultEvent is emitted at the end of a session (successful or error).
 type ResultEvent struct {
 	Text             string
 	Subtype          string
@@ -334,6 +351,7 @@ type ResultEvent struct {
 	Duration         time.Duration
 	CostUSD          float64
 	SessionID        string
+	NumTurns         int
 	Usage            Usage
 	// ModelUsage contains per-model usage keyed by model ID.
 	ModelUsage map[string]ModelUsage

@@ -24,6 +24,7 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 	var resultText []string
 	var snapshot *ContextSnapshot
 	var lastModel string
+	var turnCounter int
 
 	for scanner.Scan() {
 		select {
@@ -82,6 +83,18 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 			if raw.ParentToolUseID != nil {
 				parentToolUseID = *raw.ParentToolUseID
 			}
+			// Emit TurnEvent for top-level assistant messages only
+			if parentToolUseID == "" {
+				turnCounter++
+				toolName := ""
+				for _, block := range raw.Message.Content {
+					if block.Type == "tool_use" {
+						toolName = block.Name
+						break
+					}
+				}
+				ch <- &TurnEvent{Turn: turnCounter, ToolName: toolName}
+			}
 			for _, block := range raw.Message.Content {
 				parseContentBlock(block, parentToolUseID, &resultText, ch)
 			}
@@ -96,6 +109,12 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 					snapshot.ContextWindow = mu.ContextWindow
 				}
 			}
+			// Classify error_max_turns: emit a non-fatal ErrorEvent so callers
+			// using errors.Is(err, ErrMaxTurns) can detect it via Stream.Wait().
+			if raw.Subtype == "error_max_turns" {
+				mte := classifyMaxTurns(raw.Errors)
+				ch <- &ErrorEvent{Err: mte, Fatal: false}
+			}
 			ch <- &ResultEvent{
 				Text:             strings.Join(resultText, ""),
 				Subtype:          raw.Subtype,
@@ -104,6 +123,7 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 				Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
 				CostUSD:          raw.CostUSD,
 				SessionID:        raw.SessionID,
+				NumTurns:         raw.NumTurns,
 				Usage:            raw.Usage.toUsage(),
 				ModelUsage:       modelUsage,
 				ContextSnapshot:  snapshot,
@@ -338,6 +358,10 @@ type rawEvent struct {
 	CostUSD          float64         `json:"total_cost_usd,omitempty"`
 	StopReason       string          `json:"stop_reason,omitempty"`
 	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
+	NumTurns         int             `json:"num_turns,omitempty"`
+	IsError          bool            `json:"is_error,omitempty"`
+	TerminalReason   string          `json:"terminal_reason,omitempty"`
+	Errors           []string        `json:"errors,omitempty"`
 	Usage            rawUsage                   `json:"usage,omitempty"`
 	ModelUsage       map[string]rawModelUsage   `json:"modelUsage,omitempty"`
 

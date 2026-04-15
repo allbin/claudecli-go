@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -94,5 +95,43 @@ func TestStreamConcurrentWait(t *testing.T) {
 		} else if r != first {
 			t.Error("concurrent Wait() returned different pointers")
 		}
+	}
+}
+
+func TestStreamMaxTurnsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	events := make(chan Event, 10)
+	done := make(chan struct{})
+	s := newStream(ctx, events, done, cancel)
+
+	events <- &InitEvent{SessionID: "test"}
+	events <- &ResultEvent{
+		Text:     "ran out of turns",
+		Subtype:  "error_max_turns",
+		NumTurns: 5,
+	}
+	close(events)
+	close(done)
+
+	result, err := s.Wait()
+	if err == nil {
+		t.Fatal("expected error from Wait()")
+	}
+	if !errors.Is(err, ErrMaxTurns) {
+		t.Errorf("expected errors.Is(_, ErrMaxTurns), got %v", err)
+	}
+	var mte *MaxTurnsError
+	if !errors.As(err, &mte) {
+		t.Fatal("expected errors.As to match *MaxTurnsError")
+	}
+	if mte.Turns != 5 {
+		t.Errorf("Turns = %d, want 5", mte.Turns)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.NumTurns != 5 {
+		t.Errorf("ResultEvent.NumTurns = %d, want 5", result.NumTurns)
 	}
 }

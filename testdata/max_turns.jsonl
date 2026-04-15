@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","session_id":"test-max-turns","model":"claude-sonnet-4-5-20250514","tools":["Bash","Read","Grep"]}
+{"type":"assistant","message":{"model":"claude-sonnet-4-5-20250514","content":[{"type":"tool_use","id":"tu_01","name":"Read","input":{"path":"/tmp/test.txt"}}]},"session_id":"test-max-turns"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_01","content":"hello"}]},"session_id":"test-max-turns"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-5-20250514","content":[{"type":"tool_use","id":"tu_02","name":"Grep","input":{"pattern":"foo"}}]},"session_id":"test-max-turns"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_02","content":"bar"}]},"session_id":"test-max-turns"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-5-20250514","content":[{"type":"text","text":"I ran out of turns."}]},"session_id":"test-max-turns"}
+{"type":"result","subtype":"error_max_turns","terminal_reason":"max_turns","is_error":true,"duration_ms":5000,"total_cost_usd":0.05,"num_turns":3,"session_id":"test-max-turns","errors":["Reached maximum number of turns (3)"],"usage":{"input_tokens":500,"output_tokens":200}}

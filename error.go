@@ -20,6 +20,7 @@ var (
 	ErrRateLimit       = errors.New("rate limit")
 	ErrAPI             = errors.New("API error")
 	ErrOverloaded      = errors.New("API overloaded")
+	ErrMaxTurns        = errors.New("max turns reached")
 )
 
 // RateLimitError carries retry timing for rate limit errors.
@@ -38,6 +39,24 @@ func (e *RateLimitError) Error() string {
 
 func (e *RateLimitError) Is(target error) bool {
 	return target == ErrRateLimit
+}
+
+// MaxTurnsError carries the turn limit that was reached.
+// Use errors.As to extract Turns from any error in the chain.
+type MaxTurnsError struct {
+	Turns   int
+	Message string
+}
+
+func (e *MaxTurnsError) Error() string {
+	if e.Turns > 0 {
+		return fmt.Sprintf("max turns reached (%d): %s", e.Turns, e.Message)
+	}
+	return "max turns reached: " + e.Message
+}
+
+func (e *MaxTurnsError) Is(target error) bool {
+	return target == ErrMaxTurns
 }
 
 // Error represents a CLI process failure with context.
@@ -162,6 +181,44 @@ func normalizeAPIErrorType(apiType string) string {
 	default:
 		return apiType
 	}
+}
+
+// classifyMaxTurns builds a MaxTurnsError from a result event's errors array.
+// It parses "Reached maximum number of turns (N)" to extract the turn count.
+func classifyMaxTurns(errs []string) *MaxTurnsError {
+	msg := strings.Join(errs, "; ")
+	if msg == "" {
+		msg = "reached maximum number of turns"
+	}
+	turns := 0
+	for _, e := range errs {
+		if n, ok := parseMaxTurnsCount(e); ok {
+			turns = n
+			break
+		}
+	}
+	return &MaxTurnsError{Turns: turns, Message: msg}
+}
+
+// parseMaxTurnsCount extracts N from "Reached maximum number of turns (N)".
+func parseMaxTurnsCount(s string) (int, bool) {
+	const prefix = "Reached maximum number of turns ("
+	_, after, found := strings.Cut(s, prefix)
+	if !found {
+		return 0, false
+	}
+	numStr, _, found := strings.Cut(after, ")")
+	if !found {
+		return 0, false
+	}
+	n := 0
+	for _, ch := range numStr {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n, true
 }
 
 func classifyError(d *errorDetails) error {
