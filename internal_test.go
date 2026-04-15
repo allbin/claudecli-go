@@ -131,6 +131,80 @@ func TestStderrRing(t *testing.T) {
 	}
 }
 
+func TestLineCaptureReader(t *testing.T) {
+	ring := newStderrRing(5)
+	input := "line1\nline2\nline3\n"
+	r := &lineCaptureReader{r: strings.NewReader(input), ring: ring}
+
+	// Read all bytes through the wrapper.
+	buf := make([]byte, 1024)
+	var total int
+	for {
+		n, err := r.Read(buf[total:])
+		total += n
+		if err != nil {
+			break
+		}
+	}
+	r.flush()
+
+	got := ring.lines()
+	if len(got) != 3 || got[0] != "line1" || got[1] != "line2" || got[2] != "line3" {
+		t.Errorf("captured lines = %v, want [line1, line2, line3]", got)
+	}
+	if string(buf[:total]) != input {
+		t.Errorf("passthrough data = %q, want %q", string(buf[:total]), input)
+	}
+}
+
+func TestLineCaptureReader_PartialFlush(t *testing.T) {
+	ring := newStderrRing(5)
+	input := "line1\npartial" // no trailing newline
+	r := &lineCaptureReader{r: strings.NewReader(input), ring: ring}
+
+	buf := make([]byte, 1024)
+	for {
+		_, err := r.Read(buf)
+		if err != nil {
+			break
+		}
+	}
+
+	// Before flush, only complete lines captured.
+	got := ring.lines()
+	if len(got) != 1 || got[0] != "line1" {
+		t.Errorf("before flush: %v", got)
+	}
+
+	r.flush()
+	got = ring.lines()
+	if len(got) != 2 || got[1] != "partial" {
+		t.Errorf("after flush: %v", got)
+	}
+}
+
+func TestLineCaptureReader_SmallReads(t *testing.T) {
+	// Force byte-at-a-time reads to ensure line detection works across
+	// Read boundaries.
+	ring := newStderrRing(5)
+	input := "ab\ncd\n"
+	r := &lineCaptureReader{r: strings.NewReader(input), ring: ring}
+
+	buf := make([]byte, 1) // 1-byte reads
+	for {
+		_, err := r.Read(buf)
+		if err != nil {
+			break
+		}
+	}
+	r.flush()
+
+	got := ring.lines()
+	if len(got) != 2 || got[0] != "ab" || got[1] != "cd" {
+		t.Errorf("small reads: %v", got)
+	}
+}
+
 func TestBuildEnv_EntrypointDefault(t *testing.T) {
 	env := buildEnv(nil)
 	var found bool

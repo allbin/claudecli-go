@@ -1357,6 +1357,44 @@ func TestParseUnknownEventType(t *testing.T) {
 	}
 }
 
+func TestParseUnknownContentBlock(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"hello"},{"type":"redacted_thinking","data":"secret"},{"type":"text","text":" world"}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var events []Event
+	for e := range ch {
+		events = append(events, e)
+	}
+
+	var unknown *UnknownEvent
+	var textCount int
+	for _, e := range events {
+		if u, ok := e.(*UnknownEvent); ok {
+			unknown = u
+		}
+		if _, ok := e.(*TextEvent); ok {
+			textCount++
+		}
+	}
+
+	if textCount != 2 {
+		t.Errorf("expected 2 TextEvents, got %d", textCount)
+	}
+	if unknown == nil {
+		t.Fatal("no UnknownEvent for unrecognized content block")
+	}
+	if unknown.Type != "content/redacted_thinking" {
+		t.Errorf("Type = %q, want %q", unknown.Type, "content/redacted_thinking")
+	}
+}
+
 func TestParseUserEventToolResult(t *testing.T) {
 	input := `{"type":"system","session_id":"test","model":"sonnet"}
 {"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_abc","type":"tool_result","content":"file contents here"}]},"parent_tool_use_id":null,"session_id":"test","uuid":"uuid1","timestamp":"2026-03-29T18:36:37.512Z"}

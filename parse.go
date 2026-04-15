@@ -174,6 +174,14 @@ func parseContentBlock(block rawContent, parentToolUseID string, resultText *[]s
 			Content:         extractContent(block.Content),
 			ParentToolUseID: parentToolUseID,
 		}
+	default:
+		if block.Type != "" {
+			raw, _ := json.Marshal(block)
+			ch <- &UnknownEvent{
+				Type: "content/" + block.Type,
+				Raw:  raw,
+			}
+		}
 	}
 }
 

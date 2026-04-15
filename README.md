@@ -552,7 +552,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent. |
 | `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. `ParentToolUseID` set when from a subagent. |
 | `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil on subagent completion) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `IsReplay` is true when echoed via `--replay-user-messages`. `Text()` returns concatenated text. |
-| `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string, `Raw` is the full JSON line. Forward-compat catch-all. |
+| `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string (or `"content/<type>"` for unknown content blocks), `Raw` is the full JSON. Forward-compat catch-all — also used for error fallback diagnostics on non-zero exit. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
 | `*ResultEvent`     | Session complete. Text, cost, duration, usage, `StopReason`, `StructuredOutput`, `ModelUsage` (per-model context window, token limits, web search/fetch counts), `ContextSnapshot` (per-API-call usage from last `message_start`/`message_delta`; requires `WithIncludePartialMessages`; nil otherwise). Synthesized if CLI exits cleanly without one. |
@@ -646,11 +646,14 @@ if errors.As(err, &rlErr) {
 // Error.Error() returns a concise message (auto-inferred from stderr patterns
 // like "command not found", "permission denied", "no such file or directory").
 // For full stderr, access the Stderr field directly.
+// LastEvents contains the last 10 raw JSONL lines from stdout for post-mortem
+// diagnostics when stderr and classified errors yield no information.
 var cliErr *claudecli.Error
 if errors.As(err, &cliErr) {
     fmt.Println(cliErr.ExitCode)
-    fmt.Println(cliErr.Message) // concise, auto-inferred from stderr
-    fmt.Println(cliErr.Stderr)  // full stderr output
+    fmt.Println(cliErr.Message)    // concise, auto-inferred from stderr
+    fmt.Println(cliErr.Stderr)     // full stderr output
+    fmt.Println(cliErr.LastEvents) // last 10 raw JSONL lines from stdout
 }
 
 // RunJSON/RunBlockingJSON failed to parse response as JSON

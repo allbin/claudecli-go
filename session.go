@@ -491,12 +491,18 @@ func (s *Session) readLoop() {
 
 	stderrRing, stderrDone := scanStderr(s.ctx, s.proc, pump, nil)
 
-	scanner := bufio.NewScanner(s.proc.Stdout)
+	// Capture raw stdout JSONL lines for diagnostics on error exit.
+	stdoutRing := newStderrRing(10)
+	stdoutCapture := &lineCaptureReader{r: s.proc.Stdout, ring: stdoutRing}
+
+	scanner := bufio.NewScanner(stdoutCapture)
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
 	var resultText []string
 	var snapshot *ContextSnapshot
 	var lastModel string
+	var lastStdoutErr error
+	var unknowns []*UnknownEvent
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -589,6 +595,16 @@ func (s *Session) readLoop() {
 						Content:         extractContent(block.Content),
 						ParentToolUseID: parentToolUseID,
 					})
+				default:
+					if block.Type != "" {
+						blockRaw, _ := json.Marshal(block)
+						ev := &UnknownEvent{
+							Type: "content/" + block.Type,
+							Raw:  blockRaw,
+						}
+						unknowns = append(unknowns, ev)
+						pumpSend(ev)
+					}
 				}
 			}
 			if len(raw.Message.ContextManagement) > 0 && string(raw.Message.ContextManagement) != "null" {
@@ -632,16 +648,22 @@ func (s *Session) readLoop() {
 			updateContextSnapshot(raw.Event, &snapshot, &lastModel)
 
 		case "error":
-			pumpSend(parseErrorEvent(&raw))
+			errEv := parseErrorEvent(&raw)
+			if errEv.Err != nil {
+				lastStdoutErr = errEv.Err
+			}
+			pumpSend(errEv)
 
 		case "user":
 			pumpSend(parseUserEvent(&raw))
 
 		default:
-			pumpSend(&UnknownEvent{
+			ev := &UnknownEvent{
 				Type: raw.Type,
 				Raw:  append(json.RawMessage(nil), line...),
-			})
+			}
+			unknowns = append(unknowns, ev)
+			pumpSend(ev)
 		}
 	}
 
@@ -654,10 +676,31 @@ func (s *Session) readLoop() {
 
 	<-stderrDone
 
+	stdoutCapture.flush()
+
 	if err := s.proc.Wait(); err != nil {
 		stderr := strings.Join(stderrRing.lines(), "\n")
+		cliErr := processExitError(err, stderr)
+		if cliErr.Message == "" && lastStdoutErr != nil {
+			cliErr.Message = lastStdoutErr.Error()
+			if cliErr.class == nil {
+				cliErr.class = lastStdoutErr
+			}
+		}
+		if cliErr.Message == "" && len(unknowns) > 0 {
+			var msgs []string
+			for _, u := range unknowns {
+				msg := fmt.Sprintf("unknown event %q: %s", u.Type, string(u.Raw))
+				if len(msg) > 200 {
+					msg = msg[:200] + "..."
+				}
+				msgs = append(msgs, msg)
+			}
+			cliErr.Message = "unrecognized CLI events may contain error details: " + strings.Join(msgs, "; ")
+		}
+		cliErr.LastEvents = stdoutRing.lines()
 		ev := &ErrorEvent{
-			Err:   processExitError(err, stderr),
+			Err:   cliErr,
 			Fatal: true,
 		}
 		s.trackState(ev)

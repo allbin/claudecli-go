@@ -2,8 +2,10 @@ package claudecli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 )
@@ -39,6 +41,39 @@ func (r *stderrRing) lines() []string {
 	copy(out, r.buf[r.pos:])
 	copy(out[len(r.buf)-r.pos:], r.buf[:r.pos])
 	return out
+}
+
+// lineCaptureReader wraps an io.Reader and records complete lines (delimited
+// by '\n') into a ring buffer as bytes pass through. Used to capture raw JSONL
+// from stdout for error diagnostics without an extra scanner goroutine.
+type lineCaptureReader struct {
+	r    io.Reader
+	ring *stderrRing
+	buf  []byte
+}
+
+func (r *lineCaptureReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.buf = append(r.buf, p[:n]...)
+		for {
+			idx := bytes.IndexByte(r.buf, '\n')
+			if idx < 0 {
+				break
+			}
+			r.ring.add(string(r.buf[:idx]))
+			r.buf = r.buf[idx+1:]
+		}
+	}
+	return n, err
+}
+
+// flush captures any remaining partial line in the buffer.
+func (r *lineCaptureReader) flush() {
+	if len(r.buf) > 0 {
+		r.ring.add(string(r.buf))
+		r.buf = nil
+	}
 }
 
 func scanStderr(ctx context.Context, proc *Process, events chan<- Event, callback func(string)) (*stderrRing, <-chan struct{}) {

@@ -45,7 +45,11 @@ type Error struct {
 	ExitCode int
 	Stderr   string
 	Message  string
-	class    error // sentinel or *RateLimitError; nil for unclassified
+	// LastEvents contains the last few raw JSONL lines from stdout before
+	// the process exited. Useful for diagnosing failures where stderr and
+	// classified errors yield no information.
+	LastEvents []string
+	class      error // sentinel or *RateLimitError; nil for unclassified
 }
 
 func (e *Error) Error() string {
@@ -58,6 +62,9 @@ func (e *Error) Error() string {
 			s = s[:256] + "... (truncated, full stderr in Error.Stderr)"
 		}
 		return fmt.Sprintf("claudecli: exit %d: %s", e.ExitCode, s)
+	}
+	if len(e.LastEvents) > 0 {
+		return fmt.Sprintf("claudecli: exit %d (no error details — last %d stdout events in Error.LastEvents)", e.ExitCode, len(e.LastEvents))
 	}
 	return fmt.Sprintf("claudecli: exit %d (no error details available — check CLI output or run with verbose logging)", e.ExitCode)
 }

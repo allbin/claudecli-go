@@ -102,12 +102,17 @@ func (c *Client) Run(ctx context.Context, prompt string, opts ...Option) *Stream
 func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- Event, stderrCallback func(string)) {
 	stderrRing, stderrDone := scanStderr(ctx, proc, events, stderrCallback)
 
+	// Capture raw stdout JSONL lines for diagnostics on error exit.
+	stdoutRing := newStderrRing(10)
+	stdoutCapture := &lineCaptureReader{r: proc.Stdout, ring: stdoutRing}
+
 	// Intercept parsed events to track whether a ResultEvent was emitted
 	// and capture the last stdout error event for fallback diagnostics.
 	parsed := make(chan Event, 64)
 	var sawResult bool
 	var accText []string
-	var lastStdoutErr error // last classified error from stdout "error" events
+	var lastStdoutErr error    // last classified error from stdout "error" events
+	var unknowns []*UnknownEvent // unrecognized event types for fallback diagnostics
 	parseDone := make(chan struct{})
 	go func() {
 		defer close(parseDone)
@@ -121,12 +126,15 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 				if e.Err != nil {
 					lastStdoutErr = e.Err
 				}
+			case *UnknownEvent:
+				unknowns = append(unknowns, e)
 			}
 			events <- ev
 		}
 	}()
 
-	ParseEvents(ctx, proc.Stdout, parsed)
+	ParseEvents(ctx, stdoutCapture, parsed)
+	stdoutCapture.flush()
 	close(parsed)
 	<-parseDone
 	<-stderrDone
@@ -143,6 +151,22 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 				cliErr.class = lastStdoutErr
 			}
 		}
+		// If still no message, check UnknownEvents for diagnostic info.
+		// The CLI may emit error details in event types this SDK doesn't
+		// yet recognize.
+		if cliErr.Message == "" && len(unknowns) > 0 {
+			var msgs []string
+			for _, u := range unknowns {
+				s := fmt.Sprintf("unknown event %q: %s", u.Type, string(u.Raw))
+				if len(s) > 200 {
+					s = s[:200] + "..."
+				}
+				msgs = append(msgs, s)
+			}
+			cliErr.Message = "unrecognized CLI events may contain error details: " + strings.Join(msgs, "; ")
+		}
+		// Attach raw stdout lines for post-mortem diagnostics.
+		cliErr.LastEvents = stdoutRing.lines()
 		events <- &ErrorEvent{
 			Err:   cliErr,
 			Fatal: true,

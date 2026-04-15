@@ -443,6 +443,92 @@ func TestStderrBufferKeepsMostRecent(t *testing.T) {
 	}
 }
 
+func TestLastEventsOnExitError(t *testing.T) {
+	// CLI emits some events then exits non-zero with no stderr.
+	// Error should contain LastEvents for diagnostics.
+	exec := &failingProcessExecutor{
+		stdout: `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}
+`,
+		stderr:   "",
+		exitCode: 1,
+	}
+	client := NewWithExecutor(exec)
+	stream := client.Run(context.Background(), "ignored")
+	_, err := stream.Wait()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var cliErr *Error
+	if !errors.As(err, &cliErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if len(cliErr.LastEvents) == 0 {
+		t.Fatal("LastEvents empty — should contain raw JSONL lines")
+	}
+	// Should have captured the 3 lines from stdout.
+	if len(cliErr.LastEvents) != 3 {
+		t.Errorf("LastEvents count = %d, want 3", len(cliErr.LastEvents))
+	}
+	// Error message should reference LastEvents since no other details.
+	if !strings.Contains(cliErr.Error(), "LastEvents") {
+		t.Errorf("Error() = %q, should mention LastEvents", cliErr.Error())
+	}
+}
+
+func TestUnknownEventFallbackOnExitError(t *testing.T) {
+	// CLI emits an unknown event type, then exits non-zero with no stderr.
+	// Error message should include info from the unknown event.
+	exec := &failingProcessExecutor{
+		stdout: `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"internal_error","code":"CONTEXT_OVERFLOW","detail":"context window exceeded"}
+`,
+		stderr:   "",
+		exitCode: 1,
+	}
+	client := NewWithExecutor(exec)
+	stream := client.Run(context.Background(), "ignored")
+
+	// Drain events — verify UnknownEvent is emitted to consumer too.
+	var gotUnknown bool
+	for ev := range stream.Events() {
+		if _, ok := ev.(*UnknownEvent); ok {
+			gotUnknown = true
+		}
+	}
+	if !gotUnknown {
+		t.Error("UnknownEvent not forwarded to consumer")
+	}
+
+	_, err := stream.Wait()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var cliErr *Error
+	if !errors.As(err, &cliErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if !strings.Contains(cliErr.Message, "internal_error") {
+		t.Errorf("Message = %q, should contain unknown event type", cliErr.Message)
+	}
+	if !strings.Contains(cliErr.Message, "CONTEXT_OVERFLOW") || !strings.Contains(cliErr.Message, "context window exceeded") {
+		t.Errorf("Message = %q, should contain unknown event data", cliErr.Message)
+	}
+}
+
+func TestErrorMessageWithLastEvents(t *testing.T) {
+	// Error with no message/stderr but with LastEvents should hint at the field.
+	e := &Error{ExitCode: 1, LastEvents: []string{`{"type":"foo"}`}}
+	got := e.Error()
+	if !strings.Contains(got, "LastEvents") {
+		t.Errorf("Error() = %q, should mention LastEvents", got)
+	}
+	if !strings.Contains(got, "exit 1") {
+		t.Errorf("Error() = %q, should contain exit code", got)
+	}
+}
+
 type failingProcessExecutor struct {
 	stdout   string
 	stderr   string
