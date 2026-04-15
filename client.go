@@ -103,9 +103,11 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 	stderrRing, stderrDone := scanStderr(ctx, proc, events, stderrCallback)
 
 	// Intercept parsed events to track whether a ResultEvent was emitted
+	// and capture the last stdout error event for fallback diagnostics.
 	parsed := make(chan Event, 64)
 	var sawResult bool
 	var accText []string
+	var lastStdoutErr error // last classified error from stdout "error" events
 	parseDone := make(chan struct{})
 	go func() {
 		defer close(parseDone)
@@ -115,6 +117,10 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 				sawResult = true
 			case *TextEvent:
 				accText = append(accText, e.Content)
+			case *ErrorEvent:
+				if e.Err != nil {
+					lastStdoutErr = e.Err
+				}
 			}
 			events <- ev
 		}
@@ -127,8 +133,18 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 
 	if err := proc.Wait(); err != nil {
 		stderr := strings.Join(stderrRing.lines(), "\n")
+		cliErr := processExitError(err, stderr)
+		// If stderr yielded no message or classification, fall back to
+		// the last error event from stdout (the CLI may emit structured
+		// error JSON on stdout before exiting non-zero).
+		if cliErr.Message == "" && lastStdoutErr != nil {
+			cliErr.Message = lastStdoutErr.Error()
+			if cliErr.class == nil {
+				cliErr.class = lastStdoutErr
+			}
+		}
 		events <- &ErrorEvent{
-			Err:   processExitError(err, stderr),
+			Err:   cliErr,
 			Fatal: true,
 		}
 		return

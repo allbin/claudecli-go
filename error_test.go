@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +184,70 @@ func TestError_ErrorShortStderrUnchanged(t *testing.T) {
 	}
 	if strings.Contains(got, "truncated") {
 		t.Error("should not truncate short stderr")
+	}
+}
+
+func TestError_EmptyMessageAndStderr(t *testing.T) {
+	e := &Error{ExitCode: 1}
+	got := e.Error()
+	if !strings.Contains(got, "no error details available") {
+		t.Errorf("expected diagnostic hint, got %q", got)
+	}
+	if !strings.Contains(got, "exit 1") {
+		t.Errorf("expected exit code, got %q", got)
+	}
+}
+
+func TestError_MessageTakesPrecedence(t *testing.T) {
+	e := &Error{ExitCode: 1, Message: "auth failed", Stderr: "raw stderr"}
+	got := e.Error()
+	if !strings.Contains(got, "auth failed") {
+		t.Errorf("expected Message in output, got %q", got)
+	}
+	if strings.Contains(got, "raw stderr") {
+		t.Errorf("Stderr should not appear when Message is set, got %q", got)
+	}
+}
+
+func TestProcessExitError_EmptyStderr(t *testing.T) {
+	// Non-ExitError with empty stderr: message falls back to err.Error().
+	cliErr := processExitError(fmt.Errorf("exit status 1"), "")
+	if cliErr.Message != "exit status 1" {
+		t.Errorf("expected generic error message, got %q", cliErr.Message)
+	}
+	if cliErr.ExitCode != -1 {
+		t.Errorf("expected exit code -1 for non-ExitError, got %d", cliErr.ExitCode)
+	}
+}
+
+func TestProcessExitError_StderrAllJSON(t *testing.T) {
+	// Stderr with only JSON lines that lack a "type" field — inferErrorMessage
+	// should return empty, processExitError falls back to err.Error().
+	stderr := "{\"foo\":\"bar\"}\n{\"baz\":123}"
+	cliErr := processExitError(fmt.Errorf("exit status 1"), stderr)
+	// No structured error details, no non-JSON lines, so message comes from err.Error()
+	if cliErr.Message != "exit status 1" {
+		t.Errorf("expected fallback to err.Error(), got %q", cliErr.Message)
+	}
+}
+
+func TestInferErrorMessage_NodeStackTrace(t *testing.T) {
+	stderr := "node:internal/modules/cjs/loader:1228\n  throw err;\n  ^\nError: Cannot find module '/usr/lib/node_modules/claude/bin'\n    at Module._resolveFilename (node:internal/modules/cjs/loader:1225:15)"
+	got := inferErrorMessage(stderr)
+	// Should pick up the last non-empty non-JSON line
+	if got == "" {
+		t.Error("expected non-empty message from Node stack trace")
+	}
+	// Should be the last meaningful line (the stack frame)
+	if !strings.Contains(got, "Module._resolveFilename") {
+		t.Errorf("expected last line of stack trace, got %q", got)
+	}
+}
+
+func TestInferErrorMessage_EmptyStderr(t *testing.T) {
+	got := inferErrorMessage("")
+	if got != "" {
+		t.Errorf("expected empty for empty stderr, got %q", got)
 	}
 }
 

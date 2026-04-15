@@ -59,7 +59,7 @@ func (e *Error) Error() string {
 		}
 		return fmt.Sprintf("claudecli: exit %d: %s", e.ExitCode, s)
 	}
-	return fmt.Sprintf("claudecli: exit %d", e.ExitCode)
+	return fmt.Sprintf("claudecli: exit %d (no error details available — check CLI output or run with verbose logging)", e.ExitCode)
 }
 
 func (e *Error) Unwrap() []error {
