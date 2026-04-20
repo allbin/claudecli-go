@@ -69,6 +69,8 @@ type options struct {
 	addDirs                 []string
 	workDir                 string
 	effort                  EffortLevel
+	thinking                ThinkingConfig
+	taskBudget              int
 	env                     map[string]string
 	includePartialMessages  bool
 	extraArgs               map[string]string
@@ -156,6 +158,23 @@ func WithSettingSources(sources ...string) Option {
 func WithPluginDirs(dirs ...string) Option        { return func(o *options) { o.pluginDirs = dirs } }
 func WithWorkDir(dir string) Option               { return func(o *options) { o.workDir = dir } }
 func WithEffort(level EffortLevel) Option         { return func(o *options) { o.effort = level } }
+
+// WithThinking configures extended thinking mode directly, emitting the
+// CLI's --thinking or --max-thinking-tokens flag. Use ThinkingAdaptive{},
+// ThinkingEnabled{BudgetTokens: N}, or ThinkingDisabled{}.
+//
+// Mutually overlapping with WithEffort — if both are set the CLI receives
+// both flags. Prefer WithEffort for normal use; WithThinking is for
+// callers that need explicit budget control or to force thinking off.
+func WithThinking(cfg ThinkingConfig) Option {
+	return func(o *options) { o.thinking = cfg }
+}
+
+// WithTaskBudget caps the total tokens a task may consume. Emits
+// --task-budget to the CLI. Zero or negative values are ignored.
+func WithTaskBudget(totalTokens int) Option {
+	return func(o *options) { o.taskBudget = totalTokens }
+}
 func WithEnv(env map[string]string) Option        { return func(o *options) { o.env = env } }
 func WithResume(sessionID string) Option          { return func(o *options) { o.resume = sessionID } }
 // WithExtraArgs passes additional CLI flags. Keys are flag names without the
@@ -403,6 +422,12 @@ func (o *options) appendExecArgs(args *[]string) {
 	}
 	if o.effort != "" {
 		*args = append(*args, "--effort", string(o.effort))
+	}
+	if o.thinking != nil {
+		o.thinking.appendArgs(args)
+	}
+	if o.taskBudget > 0 {
+		*args = append(*args, "--task-budget", fmt.Sprintf("%d", o.taskBudget))
 	}
 	if o.bare {
 		*args = append(*args, "--bare")

@@ -117,8 +117,50 @@ func (e *TaskEvent) String() string {
 	return fmt.Sprintf("TaskEvent{Subtype: %s, TaskID: %s, ToolUseID: %s}", e.Subtype, e.TaskID, e.ToolUseID)
 }
 
+// HookEvent is emitted when the CLI runs a configured hook (SessionStart,
+// PreToolUse, PostToolUse, etc.). Subtype is "hook_started" when the hook
+// begins and "hook_response" when it finishes.
+//
+// On "hook_started" only HookID, HookName, HookEvent, UUID, and SessionID
+// are populated.
+//
+// On "hook_response" Output, Stdout, Stderr, ExitCode, and Outcome are also
+// populated. Outcome is typically "success" or "failure".
+type HookEvent struct {
+	Subtype   string // "hook_started" or "hook_response"
+	HookID    string
+	HookName  string
+	HookEvent string // e.g. "SessionStart", "PreToolUse"
+	UUID      string
+	SessionID string
+
+	// hook_response only
+	Output   string
+	Stdout   string
+	Stderr   string
+	ExitCode int
+	Outcome  string
+
+	// Raw contains the full JSON line for forward compatibility.
+	Raw json.RawMessage
+}
+
+func (*HookEvent) event() {}
+func (e *HookEvent) String() string {
+	if e.Subtype == "hook_response" {
+		return fmt.Sprintf("HookEvent{%s %s outcome=%s exit=%d}", e.Subtype, e.HookName, e.Outcome, e.ExitCode)
+	}
+	return fmt.Sprintf("HookEvent{%s %s}", e.Subtype, e.HookName)
+}
+
 // ThinkingEvent contains model thinking output (extended thinking on pre-4.7
 // models, adaptive thinking on Opus 4.7+).
+//
+// On Claude Opus 4.7, adaptive thinking defaults to display:"omitted" — the
+// model thinks but the text is hidden. The SDK surfaces this as Content=""
+// with Signature set. Callers should treat a non-empty Signature with empty
+// Content as "thinking hidden", not "no thinking occurred".
+//
 // ParentToolUseID is set when this event comes from a subagent (links to the
 // parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
 type ThinkingEvent struct {

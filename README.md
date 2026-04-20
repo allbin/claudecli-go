@@ -563,7 +563,8 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
 | `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
 | `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`. |
-| `*ThinkingEvent`   | Model thinking output (adaptive on Opus 4.7+, extended on earlier models). Includes `Signature` for verification. `ParentToolUseID` set when from a subagent. |
+| `*HookEvent`       | Hook lifecycle event (system subtypes `hook_started`, `hook_response`). Fields: `HookID`, `HookName`, `HookEvent` (e.g. `"SessionStart"`), and on `hook_response`: `Output`, `Stdout`, `Stderr`, `ExitCode`, `Outcome`. |
+| `*ThinkingEvent`   | Model thinking output (adaptive on Opus 4.7+, extended on earlier models). Includes `Signature` for verification. On Opus 4.7 xhigh, `Content` is empty while `Signature` is set — thinking occurred but display is hidden server-side (no CLI/SDK workaround). Treat `Content=="" && Signature!=""` as "thinking hidden", not "no thinking". `ParentToolUseID` set when from a subagent. |
 | `*TextEvent`       | Assistant text output. `ParentToolUseID` set when from a subagent.                                                           |
 | `*TurnEvent`       | New assistant turn started. `Turn` is a 1-based counter, `ToolName` is the first tool in the turn (empty for text-only turns). Only emitted for top-level turns (subagent messages excluded). |
 | `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent. |
@@ -606,6 +607,8 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithForkSession()`                  | Fork from the session (requires `WithSessionID`).                                                     |
 | `WithContinue()`                     | Continue the most recent session.                                                                     |
 | `WithEffort(EffortLevel)`            | Reasoning effort (`EffortLow`, `EffortMedium`, `EffortHigh`, `EffortXHigh`, `EffortMax`). `DefaultEffort` is `EffortXHigh`. Controls adaptive thinking on Opus 4.7+.                                |
+| `WithThinking(ThinkingConfig)`       | Extended thinking mode. Use `ThinkingAdaptive{}` (emits `--thinking adaptive`), `ThinkingEnabled{BudgetTokens: N}` (emits `--max-thinking-tokens N`), or `ThinkingDisabled{}` (emits `--thinking disabled`). Overlaps with `WithEffort`; prefer `WithEffort` unless explicit control is needed. |
+| `WithTaskBudget(int)`                | Cap total tokens per task. Emits `--task-budget`. Zero is ignored.                                    |
 | `WithMCPConfig(...string)`           | MCP server configs — file paths or inline JSON strings.                                               |
 | `WithStrictMCPConfig()`              | Only use MCP servers from `WithMCPConfig`, ignoring all other MCP configurations.                     |
 | `WithAgent(string)`                  | Named agent for the session.                                                                          |
@@ -729,3 +732,4 @@ claudecli-go/
 - **Blocking stderr capped at 10 MB** — `RunBlocking` caps stderr collection at 10 MB. The streaming path uses a 1000-line ring buffer.
 - **Fork-session needs a persisted parent** — `RunBlocking` by default emits `--no-session-persistence`, so the parent must be started with `WithSessionID`, `WithResume`/`WithContinue`, or via `Connect` for `WithForkSession` to find the parent on disk.
 - **`AuthStatus` fail-close** — When the CLI exits 0 with non-JSON output, `AuthStatus` returns `AuthStateUnknown` (not `AuthStateAuthenticated`). Callers should handle this explicitly.
+- **Opus 4.7 thinking text is hidden** — Claude Opus 4.7 defaults adaptive thinking to `display: "omitted"` server-side. `ThinkingEvent.Content` arrives empty while `Signature` is set; raw thinking text is never returned. No CLI flag, env var, or SDK option can override this. Distinguish "thinking hidden" from "no thinking" via `Content == "" && Signature != ""`.

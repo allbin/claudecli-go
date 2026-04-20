@@ -68,6 +68,8 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 				ch <- parseCompactBoundaryEvent(&raw)
 			case "task_started", "task_progress", "task_notification":
 				ch <- parseTaskEvent(&raw, line)
+			case "hook_started", "hook_response":
+				ch <- parseHookEvent(&raw, line)
 			default:
 				ch <- &UnknownEvent{
 					Type: "system/" + raw.Subtype,
@@ -344,6 +346,16 @@ type rawEvent struct {
 	Prompt       string `json:"prompt,omitempty"`
 	LastToolName string `json:"last_tool_name,omitempty"`
 	Summary      string `json:"summary,omitempty"`
+
+	// system hook subtypes (hook_started, hook_response)
+	HookID    string `json:"hook_id,omitempty"`
+	HookName  string `json:"hook_name,omitempty"`
+	HookEvent string `json:"hook_event,omitempty"`
+	Output    string `json:"output,omitempty"`
+	Stdout    string `json:"stdout,omitempty"`
+	Stderr    string `json:"stderr,omitempty"`
+	ExitCode  int    `json:"exit_code,omitempty"`
+	Outcome   string `json:"outcome,omitempty"`
 
 	// assistant + user events
 	Message         *rawMessage     `json:"message,omitempty"`
@@ -631,6 +643,23 @@ func parseAgentResult(data json.RawMessage) *AgentResult {
 		}
 	}
 	return ar
+}
+
+func parseHookEvent(raw *rawEvent, line []byte) *HookEvent {
+	return &HookEvent{
+		Subtype:   raw.Subtype,
+		HookID:    raw.HookID,
+		HookName:  raw.HookName,
+		HookEvent: raw.HookEvent,
+		UUID:      raw.UUID,
+		SessionID: raw.SessionID,
+		Output:    raw.Output,
+		Stdout:    raw.Stdout,
+		Stderr:    raw.Stderr,
+		ExitCode:  raw.ExitCode,
+		Outcome:   raw.Outcome,
+		Raw:       append(json.RawMessage(nil), line...),
+	}
 }
 
 func parseTaskEvent(raw *rawEvent, line []byte) *TaskEvent {

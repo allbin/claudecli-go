@@ -436,6 +436,44 @@ func TestBuildArgsEffortTypedConstants(t *testing.T) {
 	}
 }
 
+func TestBuildArgsThinkingAdaptive(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithThinking(ThinkingAdaptive{})}).buildArgs()
+	if v, ok := argValue(args, "--thinking"); !ok || v != "adaptive" {
+		t.Errorf("missing or wrong --thinking: %q", v)
+	}
+}
+
+func TestBuildArgsThinkingDisabled(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithThinking(ThinkingDisabled{})}).buildArgs()
+	if v, ok := argValue(args, "--thinking"); !ok || v != "disabled" {
+		t.Errorf("missing or wrong --thinking: %q", v)
+	}
+}
+
+func TestBuildArgsThinkingEnabledWithBudget(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithThinking(ThinkingEnabled{BudgetTokens: 8000})}).buildArgs()
+	if v, ok := argValue(args, "--max-thinking-tokens"); !ok || v != "8000" {
+		t.Errorf("missing or wrong --max-thinking-tokens: %q", v)
+	}
+	if slices.Contains(args, "--thinking") {
+		t.Error("ThinkingEnabled should not emit --thinking flag (uses --max-thinking-tokens path)")
+	}
+}
+
+func TestBuildArgsTaskBudget(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithTaskBudget(12345)}).buildArgs()
+	if v, ok := argValue(args, "--task-budget"); !ok || v != "12345" {
+		t.Errorf("missing or wrong --task-budget: %q", v)
+	}
+}
+
+func TestBuildArgsTaskBudgetZeroOmitted(t *testing.T) {
+	args := resolveOptions(nil, []Option{WithTaskBudget(0)}).buildArgs()
+	if slices.Contains(args, "--task-budget") {
+		t.Error("--task-budget should be omitted when zero")
+	}
+}
+
 func TestBuildArgsReplayUserMessages(t *testing.T) {
 	opts := resolveOptions(nil, []Option{WithReplayUserMessages()})
 	// Should appear in session args

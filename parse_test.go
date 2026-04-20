@@ -1609,6 +1609,80 @@ func TestParseTaskEvents(t *testing.T) {
 	}
 }
 
+func TestParseHookEvents(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"system","subtype":"hook_started","hook_id":"h1","hook_name":"SessionStart:startup","hook_event":"SessionStart","uuid":"u1","session_id":"test"}
+{"type":"system","subtype":"hook_response","hook_id":"h1","hook_name":"SessionStart:startup","hook_event":"SessionStart","output":"loaded","stdout":"loaded","stderr":"","exit_code":0,"outcome":"success","uuid":"u2","session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var hooks []*HookEvent
+	for e := range ch {
+		if h, ok := e.(*HookEvent); ok {
+			hooks = append(hooks, h)
+		}
+	}
+
+	if len(hooks) != 2 {
+		t.Fatalf("got %d HookEvents, want 2", len(hooks))
+	}
+
+	started := hooks[0]
+	if started.Subtype != "hook_started" {
+		t.Errorf("hooks[0].Subtype = %q, want hook_started", started.Subtype)
+	}
+	if started.HookID != "h1" || started.HookName != "SessionStart:startup" || started.HookEvent != "SessionStart" {
+		t.Errorf("hooks[0] ids = %q, %q, %q", started.HookID, started.HookName, started.HookEvent)
+	}
+	if started.ExitCode != 0 || started.Outcome != "" || started.Output != "" {
+		t.Errorf("hooks[0] should have empty response fields, got exit=%d outcome=%q output=%q", started.ExitCode, started.Outcome, started.Output)
+	}
+
+	resp := hooks[1]
+	if resp.Subtype != "hook_response" {
+		t.Errorf("hooks[1].Subtype = %q, want hook_response", resp.Subtype)
+	}
+	if resp.Output != "loaded" || resp.Stdout != "loaded" {
+		t.Errorf("hooks[1] output = %q, stdout = %q", resp.Output, resp.Stdout)
+	}
+	if resp.Outcome != "success" || resp.ExitCode != 0 {
+		t.Errorf("hooks[1] outcome = %q, exit = %d", resp.Outcome, resp.ExitCode)
+	}
+	if len(resp.Raw) == 0 {
+		t.Error("hooks[1].Raw should be populated")
+	}
+}
+
+func TestParseHookEventNonZeroExit(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"system","subtype":"hook_response","hook_id":"h2","hook_name":"PreToolUse","hook_event":"PreToolUse","output":"","stdout":"","stderr":"boom","exit_code":2,"outcome":"failure","uuid":"u","session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var h *HookEvent
+	for e := range ch {
+		if he, ok := e.(*HookEvent); ok {
+			h = he
+		}
+	}
+	if h == nil {
+		t.Fatal("no HookEvent")
+	}
+	if h.ExitCode != 2 || h.Outcome != "failure" || h.Stderr != "boom" {
+		t.Errorf("exit=%d outcome=%q stderr=%q", h.ExitCode, h.Outcome, h.Stderr)
+	}
+}
+
 func TestParseParentToolUseID(t *testing.T) {
 	input := `{"type":"system","session_id":"test","model":"sonnet"}
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_sub_read","name":"Read","input":{"path":"go.mod"}}]},"parent_tool_use_id":"toolu_agent1","session_id":"test"}
