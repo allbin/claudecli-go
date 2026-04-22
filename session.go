@@ -550,9 +550,20 @@ func (s *Session) readLoop() {
 		close(pump)
 		<-pumpDone
 		if exitEv != nil {
+			// Non-blocking first: succeeds immediately when the consumer
+			// is draining (the common case on a 64-buffer channel).
+			// Falls back to a short blocking wait so a momentarily-slow
+			// consumer still sees the event without a long Close() stall
+			// when one has truly abandoned the channel.
 			select {
 			case s.events <- exitEv:
-			case <-time.After(2 * time.Second):
+			default:
+				timer := time.NewTimer(250 * time.Millisecond)
+				select {
+				case s.events <- exitEv:
+				case <-timer.C:
+				}
+				timer.Stop()
 			}
 		}
 		close(s.events)
@@ -840,12 +851,12 @@ func (s *Session) readLoop() {
 // CLIExitEvent. ctxErr takes priority over the wait error: if the context
 // was canceled, the SDK initiated termination, so report context_canceled
 // even when the kernel reports the kill via signal.
-func classifyExit(waitErr error, ctxErr error, lastErr error) *CLIExitEvent {
+func classifyExit(waitErr error, ctxErr error, cliErr error) *CLIExitEvent {
 	signal, code := extractExitDetails(waitErr)
 	ev := &CLIExitEvent{
 		ExitCode: code,
 		Signal:   signal,
-		Err:      lastErr,
+		Err:      cliErr,
 		At:       time.Now(),
 	}
 	switch {
@@ -861,6 +872,8 @@ func classifyExit(waitErr error, ctxErr error, lastErr error) *CLIExitEvent {
 	case code > 0:
 		ev.Reason = ExitReasonCrashed
 	default:
+		// Reached when waitErr is non-nil but not an *exec.ExitError
+		// (e.g. IO failure, broken pipe). Not a clean process exit.
 		ev.Reason = ExitReasonUnknown
 	}
 	return ev
