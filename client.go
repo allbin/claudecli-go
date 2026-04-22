@@ -252,6 +252,7 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 		resultReady:    make(chan struct{}),
 		readyCh:        make(chan struct{}),
 		activity:       newActivityTracker(),
+		pumpClosed:     make(chan struct{}),
 	}
 
 	go session.readLoop()

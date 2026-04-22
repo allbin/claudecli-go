@@ -38,6 +38,7 @@ type Session struct {
 	initTimeout    time.Duration
 	controlWg      sync.WaitGroup // tracks in-flight handleControlRequest goroutines
 	pump           chan Event     // set by readLoop; sendEvent writes here for ordering
+	pumpClosed     chan struct{}  // closed by readLoop defer BEFORE close(pump) — sendEvent uses to avoid writing to a closed pump
 
 	// callbacks
 	canUseTool ToolPermissionFunc
@@ -56,7 +57,7 @@ type Session struct {
 	readyCh         chan struct{} // closed after initialize (or first system event on older CLIs)
 	readyOnce       sync.Once
 	activity        *activityTracker // guarded by stateMu
-	lastStdoutAt    time.Time        // guarded by stateMu; zero until first stdout line
+	lastStdoutAt    atomic.Int64     // unix nanos of last stdout line; 0 until first line
 }
 
 // ProcessInfo reports process-level state for watchdogs and health monitoring.
@@ -78,10 +79,15 @@ type ProcessInfo struct {
 // Consumers can compare LastStdoutAt against the wall clock to detect stdout
 // stalls without having to infer state from event pairings.
 func (s *Session) ProcessInfo() ProcessInfo {
+	nanos := s.lastStdoutAt.Load()
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
+	var last time.Time
+	if nanos != 0 {
+		last = time.Unix(0, nanos)
+	}
 	return ProcessInfo{
-		LastStdoutAt:  s.lastStdoutAt,
+		LastStdoutAt:  last,
 		ActivityState: s.activity.State(),
 		Lifecycle:     s.state,
 		SessionID:     s.sessionID,
@@ -527,6 +533,7 @@ func (s *Session) readLoop() {
 		}
 	}()
 	defer func() {
+		close(s.pumpClosed)
 		close(pump)
 		<-pumpDone
 		close(s.events)
@@ -568,9 +575,7 @@ func (s *Session) readLoop() {
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		s.stateMu.Lock()
-		s.lastStdoutAt = time.Now()
-		s.stateMu.Unlock()
+		s.lastStdoutAt.Store(time.Now().UnixNano())
 		if len(line) == 0 {
 			continue
 		}
@@ -798,14 +803,18 @@ func (s *Session) failPendingRequests() {
 }
 
 func (s *Session) sendEvent(ev Event) {
-	// Recover if pump was closed between the validateSendable check and
-	// this write. The pump is closed by readLoop's defer after stdout EOF,
-	// and callers like emitQueryActivity run on the user's goroutine —
-	// they may race the shutdown path. Dropping the event is correct: the
-	// session has ended, so downstream consumers won't see more events.
-	defer func() { _ = recover() }()
+	// pumpClosed is closed by readLoop's defer BEFORE close(pump), so a
+	// user-goroutine caller (e.g. emitQueryActivity racing shutdown) sees
+	// the close signal and drops the event instead of panicking on a
+	// closed channel write.
+	select {
+	case <-s.pumpClosed:
+		return
+	default:
+	}
 	select {
 	case s.pump <- ev:
+	case <-s.pumpClosed:
 	case <-s.ctx.Done():
 	}
 }
