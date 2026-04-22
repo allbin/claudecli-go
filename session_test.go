@@ -2548,6 +2548,50 @@ func TestSessionCompactStatusRouting(t *testing.T) {
 	}
 }
 
+func TestSessionEmitsTurnEvents(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.readStdin(t)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}`)
+		sim.send(`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":1}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.Query("q"); err != nil {
+		t.Fatal(err)
+	}
+
+	var turns []TurnEvent
+	for ev := range session.Events() {
+		if te, ok := ev.(*TurnEvent); ok {
+			turns = append(turns, *te)
+		}
+	}
+	want := []TurnEvent{
+		{Turn: 1, ToolName: "Bash"},
+		{Turn: 2, ToolName: ""},
+	}
+	if len(turns) != len(want) {
+		t.Fatalf("turns = %+v, want %+v", turns, want)
+	}
+	for i, w := range want {
+		if turns[i] != w {
+			t.Errorf("turn[%d] = %+v, want %+v", i, turns[i], w)
+		}
+	}
+}
+
 func TestSessionActivityStateOverTurn(t *testing.T) {
 	sim := newSessionSim()
 	client := NewWithExecutor(sim.bidi)

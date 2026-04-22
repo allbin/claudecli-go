@@ -572,6 +572,7 @@ func (s *Session) readLoop() {
 	var lastModel string
 	var lastStdoutErr error
 	var unknowns []*UnknownEvent
+	var turnCounter int
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -644,6 +645,20 @@ func (s *Session) readLoop() {
 			parentToolUseID := ""
 			if raw.ParentToolUseID != nil {
 				parentToolUseID = *raw.ParentToolUseID
+			}
+			// Emit TurnEvent for top-level assistant messages, matching
+			// ParseEvents behaviour so Session consumers see the same
+			// turn boundaries as stateless-parse consumers.
+			if parentToolUseID == "" {
+				turnCounter++
+				toolName := ""
+				for _, block := range raw.Message.Content {
+					if block.Type == "tool_use" {
+						toolName = block.Name
+						break
+					}
+				}
+				pumpSend(&TurnEvent{Turn: turnCounter, ToolName: toolName})
 			}
 			for _, block := range raw.Message.Content {
 				switch block.Type {
