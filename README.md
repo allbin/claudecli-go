@@ -602,6 +602,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*ControlRequestEvent` | Control request from CLI (handled internally in sessions).                                                              |
 | `*StreamEvent`     | Partial message update (when `WithIncludePartialMessages` is on).                                                            |
 | `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal errors (parse errors, API errors). API errors are classified via `errors.Is` with sentinel errors (see error handling below). |
+| `*CLIExitEvent`    | Final event before the events channel closes (Session mode). `Reason` (`"normal"` / `"killed"` / `"crashed"` / `"context_canceled"` / `"unknown"`), `ExitCode` (-1 if signaled or non-`*exec.ExitError`), `Signal` (e.g. `"SIGKILL"`, empty if not signaled), `Err` (underlying `*Error` or context error), `At`. Lets consumers give actionable termination messages instead of inferring cause from a closed channel. Backward-compatible: ignore in the type switch if unused. |
 
 ## Options
 

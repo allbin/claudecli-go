@@ -553,6 +553,49 @@ func (e *ToolProgressEvent) String() string {
 	return fmt.Sprintf("ToolProgressEvent{Tool: %s, ID: %s, Elapsed: %s}", e.ToolName, e.ToolUseID, e.Elapsed)
 }
 
+// ExitReason classifies why the CLI process terminated. Carried by
+// CLIExitEvent so consumers can give users actionable messages and
+// distinguish clean shutdowns from crashes.
+type ExitReason string
+
+const (
+	// ExitReasonNormal indicates the process exited cleanly with code 0.
+	ExitReasonNormal ExitReason = "normal"
+	// ExitReasonKilled indicates the process was terminated by a signal
+	// (SIGKILL, SIGTERM, OOM kill, etc.).
+	ExitReasonKilled ExitReason = "killed"
+	// ExitReasonCrashed indicates the process exited with a non-zero code
+	// without being signaled (CLI bug, panic, fatal API error).
+	ExitReasonCrashed ExitReason = "crashed"
+	// ExitReasonContextCanceled indicates the session context was canceled
+	// (Close timeout, parent ctx cancel) and the SDK terminated the process.
+	ExitReasonContextCanceled ExitReason = "context_canceled"
+	// ExitReasonUnknown is used when the cause cannot be classified.
+	ExitReasonUnknown ExitReason = "unknown"
+)
+
+// CLIExitEvent is the last event emitted before the events channel closes.
+// Describes the cause of the CLI process termination so consumers can
+// distinguish a clean shutdown from a crash, signal kill, or context cancel.
+//
+// Backward compatible: callers that don't type-switch for CLIExitEvent
+// simply ignore it.
+type CLIExitEvent struct {
+	Reason   ExitReason
+	ExitCode int    // process exit code; -1 if not an *exec.ExitError
+	Signal   string // signal name (e.g. "SIGKILL", "SIGTERM"); empty if not signaled
+	Err      error  // underlying error (e.g. *Error from processExitError); nil on clean exit
+	At       time.Time
+}
+
+func (*CLIExitEvent) event() {}
+func (e *CLIExitEvent) String() string {
+	if e.Signal != "" {
+		return fmt.Sprintf("CLIExitEvent{Reason: %s, ExitCode: %d, Signal: %s}", e.Reason, e.ExitCode, e.Signal)
+	}
+	return fmt.Sprintf("CLIExitEvent{Reason: %s, ExitCode: %d}", e.Reason, e.ExitCode)
+}
+
 // UnknownEvent is emitted when the CLI sends an event type not recognized
 // by this SDK version. Preserves the full raw JSON for inspection.
 type UnknownEvent struct {

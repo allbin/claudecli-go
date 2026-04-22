@@ -540,10 +540,21 @@ func (s *Session) readLoop() {
 			}
 		}
 	}()
+	// exitEv is set near the end of readLoop; the deferred close emits it
+	// AFTER pump drains (so it is the last event observable on s.events)
+	// but BEFORE close(s.events). Direct send bypasses the pump's
+	// ctx.Done early-out, so context-canceled exits still surface a reason.
+	var exitEv *CLIExitEvent
 	defer func() {
 		close(s.pumpClosed)
 		close(pump)
 		<-pumpDone
+		if exitEv != nil {
+			select {
+			case s.events <- exitEv:
+			case <-time.After(2 * time.Second):
+			}
+		}
 		close(s.events)
 	}()
 	// Defer order (LIFO): stopToolProgressTicker runs before the pump is
@@ -790,9 +801,11 @@ func (s *Session) readLoop() {
 
 	stdoutCapture.flush()
 
-	if err := s.proc.Wait(); err != nil {
+	waitErr := s.proc.Wait()
+	var exitErrForEvent error
+	if waitErr != nil {
 		stderr := strings.Join(stderrRing.lines(), "\n")
-		cliErr := processExitError(err, stderr)
+		cliErr := processExitError(waitErr, stderr)
 		if cliErr.Message == "" && lastStdoutErr != nil {
 			cliErr.Message = lastStdoutErr.Error()
 			if cliErr.class == nil {
@@ -817,7 +830,40 @@ func (s *Session) readLoop() {
 		}
 		s.trackState(ev)
 		pumpSend(ev)
+		exitErrForEvent = cliErr
 	}
+
+	exitEv = classifyExit(waitErr, s.ctx.Err(), exitErrForEvent)
+}
+
+// classifyExit maps the cmd.Wait error and context state into a structured
+// CLIExitEvent. ctxErr takes priority over the wait error: if the context
+// was canceled, the SDK initiated termination, so report context_canceled
+// even when the kernel reports the kill via signal.
+func classifyExit(waitErr error, ctxErr error, lastErr error) *CLIExitEvent {
+	signal, code := extractExitDetails(waitErr)
+	ev := &CLIExitEvent{
+		ExitCode: code,
+		Signal:   signal,
+		Err:      lastErr,
+		At:       time.Now(),
+	}
+	switch {
+	case ctxErr != nil:
+		ev.Reason = ExitReasonContextCanceled
+		if ev.Err == nil {
+			ev.Err = ctxErr
+		}
+	case waitErr == nil:
+		ev.Reason = ExitReasonNormal
+	case signal != "":
+		ev.Reason = ExitReasonKilled
+	case code > 0:
+		ev.Reason = ExitReasonCrashed
+	default:
+		ev.Reason = ExitReasonUnknown
+	}
+	return ev
 }
 
 // setDoneState transitions to StateDone when readLoop exits (process ended).
