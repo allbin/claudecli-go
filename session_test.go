@@ -2548,6 +2548,122 @@ func TestSessionCompactStatusRouting(t *testing.T) {
 	}
 }
 
+func TestSessionResultNumTurns(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.readStdin(t)
+		sim.send(`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","num_turns":7,"total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":1}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err := session.Query("q"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := session.Wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NumTurns != 7 {
+		t.Errorf("NumTurns = %d, want 7", result.NumTurns)
+	}
+}
+
+func TestSessionRoutesHookEvents(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.readStdin(t)
+		sim.send(`{"type":"system","subtype":"hook_started","session_id":"test-sess","hook_id":"h1","hook_name":"pre","hook_event":"PreToolUse","uuid":"u1"}`)
+		sim.send(`{"type":"system","subtype":"hook_response","session_id":"test-sess","hook_id":"h1","hook_name":"pre","hook_event":"PreToolUse","uuid":"u1","outcome":"success","exit_code":0,"stdout":"ok"}`)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":1}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err := session.Query("q"); err != nil {
+		t.Fatal(err)
+	}
+
+	var hooks []HookEvent
+	for ev := range session.Events() {
+		switch v := ev.(type) {
+		case *HookEvent:
+			hooks = append(hooks, *v)
+		case *UnknownEvent:
+			if strings.HasPrefix(v.Type, "system/hook_") {
+				t.Errorf("hook event fell through to UnknownEvent: %s", v.Type)
+			}
+		}
+	}
+	if len(hooks) != 2 {
+		t.Fatalf("hooks = %+v, want 2", hooks)
+	}
+	if hooks[0].Subtype != "hook_started" || hooks[0].HookName != "pre" {
+		t.Errorf("hooks[0] = %+v", hooks[0])
+	}
+	if hooks[1].Subtype != "hook_response" || hooks[1].Outcome != "success" || hooks[1].Stdout != "ok" {
+		t.Errorf("hooks[1] = %+v", hooks[1])
+	}
+}
+
+func TestSessionDoesNotLeakControlMessages(t *testing.T) {
+	// Guard: control_request and control_response are part of the bidi
+	// protocol and must stay internal to Session — consumers must never
+	// see them in the event stream.
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.readStdin(t)
+		// Inject a synthetic control_request from the "CLI" side. Session
+		// must handle it via handleControlRequest, not pump it downstream.
+		// (We send a can_use_tool request with no callback registered —
+		// session will respond with an error, which is fine for this test.)
+		sim.send(`{"type":"control_request","request_id":"ctrl-probe","request":{"subtype":"can_use_tool","tool_name":"X","input":{}}}`)
+		// Drain the error response Session writes back to stdin.
+		sim.readStdin(t)
+		sim.send(`{"type":"result","subtype":"success","session_id":"test-sess","total_cost_usd":0.01,"usage":{"input_tokens":1,"output_tokens":1}}`)
+		sim.bidi.StdoutWriter.Close()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err := session.Query("q"); err != nil {
+		t.Fatal(err)
+	}
+
+	for ev := range session.Events() {
+		switch ev.(type) {
+		case *ControlRequestEvent:
+			t.Errorf("ControlRequestEvent leaked to consumer: %+v", ev)
+		}
+		if u, ok := ev.(*UnknownEvent); ok {
+			if u.Type == "control_request" || u.Type == "control_response" {
+				t.Errorf("control message leaked as UnknownEvent: %s", u.Type)
+			}
+		}
+	}
+}
+
 func TestSessionEmitsTurnEvents(t *testing.T) {
 	sim := newSessionSim()
 	client := NewWithExecutor(sim.bidi)

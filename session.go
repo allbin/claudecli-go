@@ -631,6 +631,8 @@ func (s *Session) readLoop() {
 				pumpSend(parseCompactBoundaryEvent(&raw))
 			case "task_started", "task_progress", "task_notification":
 				pumpSend(parseTaskEvent(&raw, line))
+			case "hook_started", "hook_response":
+				pumpSend(parseHookEvent(&raw, line))
 			default:
 				pumpSend(&UnknownEvent{
 					Type: "system/" + raw.Subtype,
@@ -711,6 +713,7 @@ func (s *Session) readLoop() {
 				Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
 				CostUSD:          raw.CostUSD,
 				SessionID:        raw.SessionID,
+				NumTurns:         raw.NumTurns,
 				Usage:            raw.Usage.toUsage(),
 				ModelUsage:       modelUsage,
 				ContextSnapshot:  snapshot,
