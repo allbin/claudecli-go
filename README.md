@@ -283,6 +283,7 @@ Session methods:
 - `Events()` — event channel
 - `Wait()` — block until result (idempotent)
 - `Interrupt()` — send interrupt signal
+- `Ping(timeout)` — round-trip a no-op control request to prove the CLI's read loop is alive (not just that the process is running). Watchdog-friendly: any CLI response, including "unknown subtype", counts as success
 - `SetPermissionMode(mode)` — change permissions mid-session
 - `SetModel(model)` — change model mid-session
 - `GetServerInfo()` — raw JSON from the initialize handshake

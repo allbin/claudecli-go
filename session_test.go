@@ -2994,6 +2994,125 @@ func TestSessionCLIStateChangeBeforeToolUse(t *testing.T) {
 	}
 }
 
+func TestSessionPing(t *testing.T) {
+	t.Run("success response", func(t *testing.T) {
+		sim := newSessionSim()
+		client := NewWithExecutor(sim.bidi)
+
+		go func() {
+			sim.handleInitAndReady(t)
+			msg := sim.respondSuccess(t)
+			request := msg["request"].(map[string]any)
+			if request["subtype"] != "ping" {
+				t.Errorf("expected ping, got %v", request["subtype"])
+			}
+			sim.sendResult()
+		}()
+
+		session, err := client.Connect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+
+		if err := session.Ping(time.Second); err != nil {
+			t.Fatalf("Ping: %v", err)
+		}
+		_, err = session.Wait()
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("unknown subtype counts as alive", func(t *testing.T) {
+		sim := newSessionSim()
+		client := NewWithExecutor(sim.bidi)
+
+		go func() {
+			sim.handleInitAndReady(t)
+			msg := sim.respondError(t, "Unknown control subtype: ping")
+			request := msg["request"].(map[string]any)
+			if request["subtype"] != "ping" {
+				t.Errorf("expected ping, got %v", request["subtype"])
+			}
+			sim.sendResult()
+		}()
+
+		session, err := client.Connect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+
+		// CLI-side error still proves readLoop is alive.
+		if err := session.Ping(time.Second); err != nil {
+			t.Fatalf("Ping with unknown subtype should succeed, got: %v", err)
+		}
+		_, err = session.Wait()
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("timeout", func(t *testing.T) {
+		sim := newSessionSim()
+		client := NewWithExecutor(sim.bidi)
+
+		done := make(chan struct{})
+		go func() {
+			sim.handleInitAndReady(t)
+			// Read the ping request but never respond, simulating a wedged readLoop.
+			sim.readStdin(t)
+			<-done
+			sim.bidi.StdoutWriter.Close()
+		}()
+
+		session, err := client.Connect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			close(done)
+			session.Close()
+		}()
+
+		err = session.Ping(50 * time.Millisecond)
+		if err == nil {
+			t.Fatal("expected timeout error, got nil")
+		}
+		if !strings.Contains(err.Error(), "timeout") {
+			t.Errorf("expected timeout error, got: %v", err)
+		}
+	})
+
+	t.Run("session ended during ping", func(t *testing.T) {
+		sim := newSessionSim()
+		client := NewWithExecutor(sim.bidi)
+
+		go func() {
+			sim.handleInitAndReady(t)
+			// Accept the ping request but then close stdout, causing
+			// readLoop to exit while Ping is waiting for a response.
+			sim.readStdin(t)
+			sim.bidi.StdoutWriter.Close()
+		}()
+
+		session, err := client.Connect(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer session.Close()
+
+		err = session.Ping(5 * time.Second)
+		if err == nil {
+			t.Fatal("expected error after session ended, got nil")
+		}
+		if !errors.Is(err, errSessionEnded) {
+			t.Errorf("expected errSessionEnded, got: %v", err)
+		}
+	})
+}
+
 func TestSessionTrackStateFatalError(t *testing.T) {
 	sim := newSessionSim()
 	client := NewWithExecutor(sim.bidi)

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -11,6 +12,12 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+// errSessionEnded is returned via a pending control request channel when the
+// read loop exits before a response arrives. Wrapped by the calling method
+// so callers can use errors.Is to distinguish transport failure from a
+// structured error response from the CLI.
+var errSessionEnded = errors.New("session ended")
 
 const defaultControlTimeout = 30 * time.Second
 const defaultInitTimeout = 60 * time.Second
@@ -275,6 +282,62 @@ func (s *Session) Wait() (*ResultEvent, error) {
 // Interrupt sends an interrupt to the CLI.
 func (s *Session) Interrupt() error {
 	return s.sendControlRequest("interrupt", nil)
+}
+
+// Ping sends a no-op control request and returns when the CLI responds.
+// Used by watchdogs to prove the CLI's read loop is alive during long
+// tool executions, not just that the process hasn't exited. Returns
+// error on timeout or transport failure.
+//
+// Any response from the CLI — including an "unknown subtype" error —
+// proves the read loop parsed stdin and wrote stdout, so such responses
+// are treated as success. Failure modes:
+//   - timeout: no response within the supplied deadline
+//   - transport error: write to stdin failed, or the session ended
+//     (readLoop exited) before the CLI responded
+//
+// A zero timeout uses the session's configured control timeout.
+func (s *Session) Ping(timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = s.controlTimeout
+	}
+
+	id := fmt.Sprintf("req_%d", s.reqCounter.Add(1))
+	resultCh := make(chan controlResult, 1)
+	s.pending.Store(id, resultCh)
+	defer s.pending.Delete(id)
+
+	payload := map[string]any{
+		"type":       "control_request",
+		"request_id": id,
+		"request":    map[string]any{"subtype": "ping"},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("ping: marshal: %w", err)
+	}
+	if err := s.writeStdin(append(raw, '\n')); err != nil {
+		return fmt.Errorf("ping: write: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(s.ctx, timeout)
+	defer cancel()
+
+	select {
+	case result := <-resultCh:
+		// Session ended before CLI responded — readLoop is not alive.
+		if result.Err != nil && errors.Is(result.Err, errSessionEnded) {
+			return fmt.Errorf("ping: %w", result.Err)
+		}
+		// Any other response (success or CLI-side error like "unknown
+		// subtype") proves the read loop is alive.
+		return nil
+	case <-ctx.Done():
+		if s.ctx.Err() != nil {
+			return fmt.Errorf("ping: %w", s.ctx.Err())
+		}
+		return fmt.Errorf("ping: timeout after %s", timeout)
+	}
 }
 
 // SetPermissionMode changes the permission mode mid-session.
@@ -895,7 +958,7 @@ func (s *Session) failPendingRequests() {
 	s.pending.Range(func(key, value any) bool {
 		ch := value.(chan controlResult)
 		select {
-		case ch <- controlResult{Err: fmt.Errorf("session ended")}:
+		case ch <- controlResult{Err: errSessionEnded}:
 		default:
 		}
 		s.pending.Delete(key)
