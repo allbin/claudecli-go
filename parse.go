@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+// previewLine returns a truncated, single-line representation of a raw
+// JSONL line for inclusion in error messages. Caps output at 200 bytes
+// and collapses embedded newlines so log lines stay scannable.
+func previewLine(line []byte) string {
+	const max = 200
+	s := string(line)
+	if len(s) > max {
+		s = s[:max] + "...(truncated)"
+	}
+	// Collapse newlines (shouldn't appear inside a JSONL line, but be safe).
+	s = strings.ReplaceAll(s, "\n", "\\n")
+	return s
+}
+
 // ParseEvents reads JSONL from r and sends parsed events to ch.
 // Does not close ch — the caller is responsible for closing it.
 // Safe to call from a goroutine.
@@ -49,7 +63,7 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 
 		var raw rawEvent
 		if err := json.Unmarshal(line, &raw); err != nil {
-			emit(&ErrorEvent{Err: fmt.Errorf("unmarshal JSONL: %w", err)})
+			emit(&ErrorEvent{Err: fmt.Errorf("unmarshal JSONL: %w (line: %s)", err, previewLine(line))})
 			continue
 		}
 
@@ -405,6 +419,34 @@ type rawEvent struct {
 type rawMessage struct {
 	Content           rawFlexContent  `json:"content"`
 	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+}
+
+// UnmarshalJSON accepts both the canonical object form
+// ({"role":"user","content":[...]}) and a bare string form
+// ("some text"), converting the latter to a single text content block.
+// Mirrors the rawFlexContent precedent below — the CLI has been
+// observed (after agent_result events with status="async_launched")
+// emitting a top-level "message":"<string>" instead of the usual
+// object, which would otherwise fail the whole-line unmarshal and
+// drop the event.
+func (m *rawMessage) UnmarshalJSON(data []byte) error {
+	// Try the canonical object form first.
+	type alias rawMessage
+	var obj alias
+	objErr := json.Unmarshal(data, &obj)
+	if objErr == nil {
+		*m = rawMessage(obj)
+		return nil
+	}
+	// Fall back to plain string.
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*m = rawMessage{Content: []rawContent{{Type: "text", Text: s}}}
+		return nil
+	}
+	// Neither shape matched; surface the original object-form error so
+	// the line preview in the pump's ErrorEvent carries a useful hint.
+	return objErr
 }
 
 // rawFlexContent handles the CLI's content field which can be either a plain

@@ -2023,3 +2023,105 @@ func TestParseTurnEventsSkipSubagent(t *testing.T) {
 		t.Errorf("turn 2 ToolName = %q, want empty", turns[1].ToolName)
 	}
 }
+
+// TestParseUserEventStringMessage covers the CLI emitting a top-level
+// "message" as a plain string instead of the canonical object. Seen in
+// the wild after agent_result events with status="async_launched".
+// Without the rawMessage UnmarshalJSON fallback this whole line is
+// dropped and surfaces as an ErrorEvent.
+func TestParseUserEventStringMessage(t *testing.T) {
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+{"type":"user","message":"hello","session_id":"test","uuid":"uuid-x","timestamp":"2026-05-25T10:00:00Z"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var ue *UserEvent
+	var errs []*ErrorEvent
+	for e := range ch {
+		switch v := e.(type) {
+		case *UserEvent:
+			ue = v
+		case *ErrorEvent:
+			errs = append(errs, v)
+		}
+	}
+	if len(errs) != 0 {
+		t.Fatalf("got %d ErrorEvents, want 0: %v", len(errs), errs)
+	}
+	if ue == nil {
+		t.Fatal("no UserEvent found")
+	}
+	if len(ue.Content) != 1 {
+		t.Fatalf("Content len = %d, want 1: %+v", len(ue.Content), ue.Content)
+	}
+	if ue.Content[0].Type != "text" {
+		t.Errorf("Content[0].Type = %q, want %q", ue.Content[0].Type, "text")
+	}
+	if ue.Content[0].Text != "hello" {
+		t.Errorf("Content[0].Text = %q, want %q", ue.Content[0].Text, "hello")
+	}
+	if ue.Text() != "hello" {
+		t.Errorf("Text() = %q, want %q", ue.Text(), "hello")
+	}
+}
+
+// TestParseMalformedLinePreview confirms that an unparseable line's
+// ErrorEvent carries a prefix of the offending bytes, so future
+// drift cases are diagnosable from logs alone.
+func TestParseMalformedLinePreview(t *testing.T) {
+	bad := `{"type":"user","message":` + "\x00" + `not json}`
+	input := `{"type":"system","session_id":"test","model":"sonnet"}
+` + bad + `
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var errs []*ErrorEvent
+	for e := range ch {
+		if ev, ok := e.(*ErrorEvent); ok {
+			errs = append(errs, ev)
+		}
+	}
+	if len(errs) == 0 {
+		t.Fatal("expected at least one ErrorEvent for the malformed line")
+	}
+	msg := errs[0].Err.Error()
+	if !strings.Contains(msg, "unmarshal JSONL") {
+		t.Errorf("error missing prefix: %q", msg)
+	}
+	if !strings.Contains(msg, "(line: ") {
+		t.Errorf("error missing line preview marker: %q", msg)
+	}
+	// Preview should include a recognizable prefix of the bad line.
+	if !strings.Contains(msg, `{"type":"user","message":`) {
+		t.Errorf("error preview missing bad-line prefix: %q", msg)
+	}
+}
+
+// TestPreviewLineTruncation guards the previewLine helper's 200-byte
+// cap so future bumps don't accidentally turn it into an unbounded
+// log-spam vector.
+func TestPreviewLineTruncation(t *testing.T) {
+	long := strings.Repeat("a", 500)
+	got := previewLine([]byte(long))
+	if len(got) > 220 { // 200 chars + "...(truncated)" suffix
+		t.Errorf("preview len = %d, want <= 220", len(got))
+	}
+	if !strings.HasSuffix(got, "...(truncated)") {
+		t.Errorf("preview missing truncation suffix: %q", got)
+	}
+	// Newlines should be escaped, not preserved.
+	got2 := previewLine([]byte("a\nb"))
+	if strings.Contains(got2, "\n") {
+		t.Errorf("preview contains raw newline: %q", got2)
+	}
+}

@@ -701,7 +701,7 @@ func (s *Session) readLoop() {
 
 		var raw rawEvent
 		if err := json.Unmarshal(line, &raw); err != nil {
-			pumpSend(&ErrorEvent{Err: fmt.Errorf("unmarshal JSONL: %w", err)})
+			pumpSend(&ErrorEvent{Err: fmt.Errorf("unmarshal JSONL: %w (line: %s)", err, previewLine(line))})
 			continue
 		}
 
