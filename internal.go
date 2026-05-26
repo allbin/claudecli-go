@@ -157,6 +157,8 @@ func inferErrorMessage(stderr string) string {
 		return "file or directory not found (ENOENT)"
 	case strings.Contains(lower, "eacces"):
 		return "permission denied (EACCES)"
+	case strings.Contains(lower, "context window exceeded") || strings.Contains(lower, "context length exceeded"):
+		return "context window exceeded"
 	}
 
 	// Use last non-empty, non-JSON stderr line as the most relevant context.

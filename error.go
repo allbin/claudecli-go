@@ -18,9 +18,10 @@ var (
 	ErrNotFound        = errors.New("not found")
 	ErrRequestTooLarge = errors.New("request too large")
 	ErrRateLimit       = errors.New("rate limit")
-	ErrAPI             = errors.New("API error")
-	ErrOverloaded      = errors.New("API overloaded")
-	ErrMaxTurns        = errors.New("max turns reached")
+	ErrAPI                  = errors.New("API error")
+	ErrOverloaded           = errors.New("API overloaded")
+	ErrMaxTurns             = errors.New("max turns reached")
+	ErrContextWindowExceeded = errors.New("context window exceeded")
 )
 
 // RateLimitError carries retry timing for rate limit errors.
@@ -222,6 +223,9 @@ func parseMaxTurnsCount(s string) (int, bool) {
 }
 
 func classifyError(d *errorDetails) error {
+	if isContextWindowError(d.message) {
+		return fmt.Errorf("%w: %s", ErrContextWindowExceeded, d.message)
+	}
 	switch d.typ {
 	case "invalid_request":
 		return fmt.Errorf("%w: %s", ErrInvalidRequest, d.message)
@@ -244,4 +248,11 @@ func classifyError(d *errorDetails) error {
 	default:
 		return nil
 	}
+}
+
+func isContextWindowError(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "context window exceeded") ||
+		strings.Contains(lower, "context length exceeded") ||
+		strings.Contains(lower, "prompt is too long")
 }

@@ -387,3 +387,34 @@ func TestClassifyError(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyError_ContextWindowExceeded(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+	}{
+		{"exact", "context window exceeded"},
+		{"mixed_case", "Context Window Exceeded"},
+		{"context_length", "context length exceeded for this request"},
+		{"prompt_too_long", "prompt is too long for the model"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &errorDetails{typ: "invalid_request", message: tt.msg}
+			got := classifyError(d)
+			if got == nil {
+				t.Fatal("expected non-nil error")
+			}
+			if !errors.Is(got, ErrContextWindowExceeded) {
+				t.Errorf("expected errors.Is(_, ErrContextWindowExceeded), got %v", got)
+			}
+		})
+	}
+}
+
+func TestContextWindowExceeded_Is(t *testing.T) {
+	e := &Error{ExitCode: 1, class: fmt.Errorf("%w: test", ErrContextWindowExceeded)}
+	if !errors.Is(e, ErrContextWindowExceeded) {
+		t.Error("expected errors.Is(e, ErrContextWindowExceeded)")
+	}
+}
