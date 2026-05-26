@@ -681,6 +681,7 @@ if errors.Is(err, claudecli.ErrRateLimit) { ... }         // 429 rate limited
 if errors.Is(err, claudecli.ErrAPI) { ... }               // 500 internal API error
 if errors.Is(err, claudecli.ErrOverloaded) { ... }        // 529 API overloaded
 if errors.Is(err, claudecli.ErrMaxTurns) { ... }          // max turns reached
+if errors.Is(err, claudecli.ErrContextWindowExceeded) { ... } // context window exceeded
 
 // Extract turn count from max turns errors
 var mte *claudecli.MaxTurnsError
@@ -737,7 +738,7 @@ claudecli-go/
   pool.go        Pool multi-session registry, FormatAgentMessage, SendAgentMessage
   version.go     SDKVersion, MinCLIVersion, CLI version checking with semver parsing
   internal.go    Stderr ring buffer, processExitError with heuristic inference, code fence stripping
-  error.go       Sentinel errors (ErrInvalidRequest, ErrAuth, ErrBilling, ErrPermission, ErrNotFound, ErrRequestTooLarge, ErrRateLimit, ErrAPI, ErrOverloaded, ErrMaxTurns), RateLimitError, MaxTurnsError, Error, UnmarshalError
+  error.go       Sentinel errors (ErrInvalidRequest, ErrAuth, ErrBilling, ErrPermission, ErrNotFound, ErrRequestTooLarge, ErrRateLimit, ErrAPI, ErrOverloaded, ErrMaxTurns, ErrContextWindowExceeded), RateLimitError, MaxTurnsError, Error, UnmarshalError
 ```
 
 **Layers:**
