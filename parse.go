@@ -322,13 +322,20 @@ func parseErrorEvent(raw *rawEvent) *ErrorEvent {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	}
+	var unmarshalFailed bool
 	if len(raw.ErrorData) > 0 {
-		_ = json.Unmarshal(raw.ErrorData, &errObj)
+		if err := json.Unmarshal(raw.ErrorData, &errObj); err != nil {
+			unmarshalFailed = true
+		}
 	}
 
 	msg := errObj.Message
 	if msg == "" {
-		msg = "unknown error"
+		if unmarshalFailed {
+			msg = "unknown error (unmarshal failed: " + previewLine(raw.ErrorData) + ")"
+		} else {
+			msg = "unknown error"
+		}
 	}
 
 	d := &errorDetails{
