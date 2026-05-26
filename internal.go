@@ -83,9 +83,15 @@ func scanStderr(ctx context.Context, proc *Process, events chan<- Event, callbac
 		defer close(done)
 		defer func() {
 			if r := recover(); r != nil {
+				var panicErr error
+				if err, ok := r.(error); ok {
+					panicErr = fmt.Errorf("stderr goroutine panic: %w", err)
+				} else {
+					panicErr = fmt.Errorf("stderr goroutine panic: %v", r)
+				}
 				select {
 				case events <- &ErrorEvent{
-					Err:   fmt.Errorf("stderr goroutine panic: %v", r),
+					Err:   panicErr,
 					Fatal: true,
 				}:
 				case <-ctx.Done():

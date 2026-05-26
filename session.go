@@ -1116,7 +1116,11 @@ func (s *Session) handleControlResponse(line []byte) {
 func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 	defer func() {
 		if r := recover(); r != nil {
-			s.sendControlResponse(requestID, nil, fmt.Errorf("callback panic: %v", r))
+			if err, ok := r.(error); ok {
+				s.sendControlResponse(requestID, nil, fmt.Errorf("callback panic: %w", err))
+			} else {
+				s.sendControlResponse(requestID, nil, fmt.Errorf("callback panic: %v", r))
+			}
 		}
 	}()
 
@@ -1155,7 +1159,11 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					ch <- callbackResult{err: fmt.Errorf("callback panic: %v", r)}
+					if err, ok := r.(error); ok {
+						ch <- callbackResult{err: fmt.Errorf("callback panic: %w", err)}
+					} else {
+						ch <- callbackResult{err: fmt.Errorf("callback panic: %v", r)}
+					}
 				}
 			}()
 			resp, err := s.canUseTool(permReq.ToolName, permReq.Input)
@@ -1214,7 +1222,11 @@ func (s *Session) handleUserInput(requestID string, permReq ToolPermissionReques
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				ch <- callbackResult{err: fmt.Errorf("callback panic: %v", r)}
+				if err, ok := r.(error); ok {
+					ch <- callbackResult{err: fmt.Errorf("callback panic: %w", err)}
+				} else {
+					ch <- callbackResult{err: fmt.Errorf("callback panic: %v", r)}
+				}
 			}
 		}()
 		answers, err := s.userInput(input.Questions)
