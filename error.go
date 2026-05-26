@@ -11,17 +11,17 @@ import (
 // Sentinel errors for CLI error classification.
 // Use errors.Is to check from any error in the chain (Error, ErrorEvent, etc).
 var (
-	ErrInvalidRequest  = errors.New("invalid request")
-	ErrAuth            = errors.New("authentication failed")
-	ErrBilling         = errors.New("billing error")
-	ErrPermission      = errors.New("permission denied")
-	ErrNotFound        = errors.New("not found")
-	ErrRequestTooLarge = errors.New("request too large")
-	ErrRateLimit       = errors.New("rate limit")
-	ErrAPI                  = errors.New("API error")
-	ErrOverloaded           = errors.New("API overloaded")
-	ErrMaxTurns             = errors.New("max turns reached")
-	ErrContextWindowExceeded = errors.New("context window exceeded")
+	ErrInvalidRequest        = errors.New("invalid request")
+	ErrAuth                  = errors.New("authentication failed")
+	ErrBilling               = errors.New("billing error")
+	ErrPermission            = errors.New("permission denied")
+	ErrNotFound              = errors.New("not found")
+	ErrRequestTooLarge       = errors.New("request too large")
+	ErrRateLimit             = errors.New("rate limit")
+	ErrAPI                   = errors.New("API error")
+	ErrOverloaded            = errors.New("API overloaded")
+	ErrMaxTurns              = errors.New("max turns reached")
+	ErrContextWindowExceeded = errors.New("context window exceeded") // detected from error message content, not error type
 )
 
 // RateLimitError carries retry timing for rate limit errors.

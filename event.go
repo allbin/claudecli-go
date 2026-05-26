@@ -222,7 +222,14 @@ type ToolUseEvent struct {
 
 func (*ToolUseEvent) event() {}
 func (e *ToolUseEvent) String() string {
-	return fmt.Sprintf("ToolUseEvent{Name: %s, ID: %s}", e.Name, e.ID)
+	switch {
+	case e.ServerSide:
+		return fmt.Sprintf("ToolUseEvent{Name: %s, ID: %s, ServerSide}", e.Name, e.ID)
+	case e.MCP:
+		return fmt.Sprintf("ToolUseEvent{Name: %s, ID: %s, MCP}", e.Name, e.ID)
+	default:
+		return fmt.Sprintf("ToolUseEvent{Name: %s, ID: %s}", e.Name, e.ID)
+	}
 }
 
 // AgentInput contains the parsed fields from an Agent tool invocation.
@@ -585,7 +592,11 @@ type ToolUseSummaryEvent struct {
 
 func (*ToolUseSummaryEvent) event() {}
 func (e *ToolUseSummaryEvent) String() string {
-	return fmt.Sprintf("ToolUseSummaryEvent{Summary: %s, IDs: %d}", e.Summary, len(e.PrecedingToolUseIDs))
+	s := e.Summary
+	if len(s) > 60 {
+		s = s[:60] + "..."
+	}
+	return fmt.Sprintf("ToolUseSummaryEvent{Summary: %q, IDs: %d}", s, len(e.PrecedingToolUseIDs))
 }
 
 // AuthStatusEvent is emitted when the CLI reports authentication status
