@@ -2107,6 +2107,327 @@ func TestParseMalformedLinePreview(t *testing.T) {
 	}
 }
 
+// --- Fixture-based tests for event types not covered by the original 4 fixtures ---
+
+func TestParseThinkingFixture(t *testing.T) {
+	events := filterActivity(collectEvents(t, "testdata/thinking.jsonl"))
+
+	var thinking *ThinkingEvent
+	var text *TextEvent
+	var result *ResultEvent
+	for _, e := range events {
+		switch ev := e.(type) {
+		case *ThinkingEvent:
+			thinking = ev
+		case *TextEvent:
+			text = ev
+		case *ResultEvent:
+			result = ev
+		}
+	}
+
+	if thinking == nil {
+		t.Fatal("no ThinkingEvent from fixture")
+	}
+	if !strings.Contains(thinking.Content, "analyze this step by step") {
+		t.Errorf("ThinkingEvent.Content = %q", thinking.Content)
+	}
+	if thinking.Signature != "sig_abc123def456" {
+		t.Errorf("ThinkingEvent.Signature = %q, want sig_abc123def456", thinking.Signature)
+	}
+	if thinking.ParentToolUseID != "" {
+		t.Errorf("ThinkingEvent.ParentToolUseID = %q, want empty", thinking.ParentToolUseID)
+	}
+
+	if text == nil {
+		t.Fatal("no TextEvent from fixture")
+	}
+	if text.Content != "Here is my analysis of the problem." {
+		t.Errorf("TextEvent.Content = %q", text.Content)
+	}
+
+	if result == nil {
+		t.Fatal("no ResultEvent from fixture")
+	}
+	if result.SessionID != "test-thinking" {
+		t.Errorf("ResultEvent.SessionID = %q", result.SessionID)
+	}
+}
+
+func TestParseTaskEventsFixture(t *testing.T) {
+	events := filterActivity(collectEvents(t, "testdata/task_events.jsonl"))
+
+	var tasks []*TaskEvent
+	var userEv *UserEvent
+	for _, e := range events {
+		switch ev := e.(type) {
+		case *TaskEvent:
+			tasks = append(tasks, ev)
+		case *UserEvent:
+			if ev.AgentResult != nil {
+				userEv = ev
+			}
+		}
+	}
+
+	if len(tasks) != 4 {
+		t.Fatalf("got %d TaskEvents, want 4", len(tasks))
+	}
+
+	// task_started
+	if tasks[0].Subtype != "task_started" {
+		t.Errorf("tasks[0].Subtype = %q", tasks[0].Subtype)
+	}
+	if tasks[0].TaskType != "local_agent" {
+		t.Errorf("tasks[0].TaskType = %q", tasks[0].TaskType)
+	}
+	if tasks[0].Prompt != "Read the README" {
+		t.Errorf("tasks[0].Prompt = %q", tasks[0].Prompt)
+	}
+
+	// first task_progress
+	if tasks[1].LastToolName != "Read" {
+		t.Errorf("tasks[1].LastToolName = %q", tasks[1].LastToolName)
+	}
+	if tasks[1].TotalTokens != 5000 {
+		t.Errorf("tasks[1].TotalTokens = %d", tasks[1].TotalTokens)
+	}
+
+	// second task_progress
+	if tasks[2].LastToolName != "Grep" {
+		t.Errorf("tasks[2].LastToolName = %q", tasks[2].LastToolName)
+	}
+	if tasks[2].TotalTokens != 12000 {
+		t.Errorf("tasks[2].TotalTokens = %d", tasks[2].TotalTokens)
+	}
+
+	// task_notification
+	if tasks[3].Status != "completed" {
+		t.Errorf("tasks[3].Status = %q", tasks[3].Status)
+	}
+	if tasks[3].Summary != "README contains project setup instructions" {
+		t.Errorf("tasks[3].Summary = %q", tasks[3].Summary)
+	}
+	if tasks[3].TotalTokens != 18000 {
+		t.Errorf("tasks[3].TotalTokens = %d", tasks[3].TotalTokens)
+	}
+
+	// Agent completion UserEvent
+	if userEv == nil {
+		t.Fatal("no UserEvent with AgentResult from fixture")
+	}
+	if userEv.AgentResult.AgentType != "Explore" {
+		t.Errorf("AgentResult.AgentType = %q", userEv.AgentResult.AgentType)
+	}
+	if userEv.AgentResult.TotalToolUseCount != 4 {
+		t.Errorf("AgentResult.TotalToolUseCount = %d", userEv.AgentResult.TotalToolUseCount)
+	}
+}
+
+func TestParseRateLimitFixture(t *testing.T) {
+	events := filterActivity(collectEvents(t, "testdata/rate_limit.jsonl"))
+
+	var rle *RateLimitEvent
+	for _, e := range events {
+		if r, ok := e.(*RateLimitEvent); ok {
+			rle = r
+		}
+	}
+	if rle == nil {
+		t.Fatal("no RateLimitEvent from fixture")
+	}
+	if rle.Status != "allowed_warning" {
+		t.Errorf("Status = %q", rle.Status)
+	}
+	if rle.Utilization != 0.85 {
+		t.Errorf("Utilization = %f, want 0.85", rle.Utilization)
+	}
+	if rle.RateLimitType != "five_hour" {
+		t.Errorf("RateLimitType = %q", rle.RateLimitType)
+	}
+	if rle.OverageStatus != "allowed" {
+		t.Errorf("OverageStatus = %q", rle.OverageStatus)
+	}
+	if rle.ResetsAt != 1772773200 {
+		t.Errorf("ResetsAt = %d", rle.ResetsAt)
+	}
+	// Forward-compat raw field
+	if rle.Raw["isUsingOverage"] != true {
+		t.Errorf("Raw[isUsingOverage] = %v, want true", rle.Raw["isUsingOverage"])
+	}
+}
+
+func TestParseCompactFixture(t *testing.T) {
+	events := filterActivity(collectEvents(t, "testdata/compact.jsonl"))
+
+	var init *InitEvent
+	var text *TextEvent
+	var result *ResultEvent
+	for _, e := range events {
+		switch ev := e.(type) {
+		case *InitEvent:
+			init = ev
+		case *TextEvent:
+			text = ev
+		case *ResultEvent:
+			result = ev
+		}
+	}
+	if init == nil {
+		t.Fatal("no InitEvent from compact fixture")
+	}
+	if init.SessionID != "test-compact" {
+		t.Errorf("InitEvent.SessionID = %q", init.SessionID)
+	}
+	if text == nil {
+		t.Fatal("no TextEvent from compact fixture")
+	}
+	if result == nil {
+		t.Fatal("no ResultEvent from compact fixture")
+	}
+}
+
+func TestParseHookEventsFixture(t *testing.T) {
+	events := filterActivity(collectEvents(t, "testdata/hook_events.jsonl"))
+
+	var hooks []*HookEvent
+	for _, e := range events {
+		if h, ok := e.(*HookEvent); ok {
+			hooks = append(hooks, h)
+		}
+	}
+
+	if len(hooks) != 4 {
+		t.Fatalf("got %d HookEvents, want 4", len(hooks))
+	}
+
+	// SessionStart hook_started
+	if hooks[0].Subtype != "hook_started" {
+		t.Errorf("hooks[0].Subtype = %q", hooks[0].Subtype)
+	}
+	if hooks[0].HookEvent != "SessionStart" {
+		t.Errorf("hooks[0].HookEvent = %q", hooks[0].HookEvent)
+	}
+	if hooks[0].HookName != "SessionStart:env-check" {
+		t.Errorf("hooks[0].HookName = %q", hooks[0].HookName)
+	}
+
+	// SessionStart hook_response
+	if hooks[1].Subtype != "hook_response" {
+		t.Errorf("hooks[1].Subtype = %q", hooks[1].Subtype)
+	}
+	if hooks[1].Output != "environment OK" {
+		t.Errorf("hooks[1].Output = %q", hooks[1].Output)
+	}
+	if hooks[1].Outcome != "success" {
+		t.Errorf("hooks[1].Outcome = %q", hooks[1].Outcome)
+	}
+
+	// PreToolUse hook_started
+	if hooks[2].HookEvent != "PreToolUse" {
+		t.Errorf("hooks[2].HookEvent = %q", hooks[2].HookEvent)
+	}
+
+	// PreToolUse hook_response with stderr
+	if hooks[3].Stderr != "audit warning: sensitive command" {
+		t.Errorf("hooks[3].Stderr = %q", hooks[3].Stderr)
+	}
+
+	// All hooks should have Raw populated
+	for i, h := range hooks {
+		if len(h.Raw) == 0 {
+			t.Errorf("hooks[%d].Raw is empty", i)
+		}
+	}
+}
+
+func TestParseStreamEventsFixture(t *testing.T) {
+	events := filterActivity(collectEvents(t, "testdata/stream_events.jsonl"))
+
+	var streams []*StreamEvent
+	var thinking *ThinkingEvent
+	var text *TextEvent
+	var result *ResultEvent
+	for _, e := range events {
+		switch ev := e.(type) {
+		case *StreamEvent:
+			streams = append(streams, ev)
+		case *ThinkingEvent:
+			thinking = ev
+		case *TextEvent:
+			text = ev
+		case *ResultEvent:
+			result = ev
+		}
+	}
+
+	if len(streams) == 0 {
+		t.Fatal("no StreamEvents from fixture")
+	}
+	// Should have message_start, content_block_start, delta, stop events
+	if len(streams) != 8 {
+		t.Errorf("got %d StreamEvents, want 8", len(streams))
+	}
+	if streams[0].SessionID != "test-stream" {
+		t.Errorf("streams[0].SessionID = %q", streams[0].SessionID)
+	}
+
+	if thinking == nil {
+		t.Fatal("no ThinkingEvent from stream fixture")
+	}
+	if thinking.Signature != "sig_stream_test" {
+		t.Errorf("ThinkingEvent.Signature = %q", thinking.Signature)
+	}
+
+	if text == nil || text.Content != "Hello!" {
+		t.Errorf("TextEvent = %v", text)
+	}
+
+	if result == nil {
+		t.Fatal("no ResultEvent from stream fixture")
+	}
+	cs := result.ContextSnapshot
+	if cs == nil {
+		t.Fatal("ContextSnapshot is nil")
+	}
+	if cs.InputTokens != 250 {
+		t.Errorf("InputTokens = %d, want 250", cs.InputTokens)
+	}
+	if cs.CacheReadInputTokens != 8000 {
+		t.Errorf("CacheReadInputTokens = %d, want 8000", cs.CacheReadInputTokens)
+	}
+	if cs.OutputTokens != 85 {
+		t.Errorf("OutputTokens = %d, want 85", cs.OutputTokens)
+	}
+	if cs.ContextWindow != 1000000 {
+		t.Errorf("ContextWindow = %d, want 1000000", cs.ContextWindow)
+	}
+}
+
+func TestParseErrorEventUnmarshalFailure(t *testing.T) {
+	input := `{"type":"error","error":"not a json object, just a string"}
+{"type":"result","subtype":"error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var errEv *ErrorEvent
+	for e := range ch {
+		if ev, ok := e.(*ErrorEvent); ok {
+			errEv = ev
+		}
+	}
+	if errEv == nil {
+		t.Fatal("no ErrorEvent found")
+	}
+	if !strings.Contains(errEv.Err.Error(), "unmarshal failed") {
+		t.Errorf("expected unmarshal failure hint in error, got %q", errEv.Err.Error())
+	}
+}
+
 // TestPreviewLineTruncation guards the previewLine helper's 200-byte
 // cap so future bumps don't accidentally turn it into an unbounded
 // log-spam vector.

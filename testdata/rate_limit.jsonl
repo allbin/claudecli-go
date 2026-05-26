@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"test-ratelimit","model":"claude-sonnet-4-6","tools":["Bash"]}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it..."}]},"session_id":"test-ratelimit"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1772773200,"rateLimitType":"five_hour","utilization":0.85,"overageStatus":"allowed","overageResetsAt":1772780000,"overageDisabledReason":"","isUsingOverage":true,"surpassedThreshold":0.75},"uuid":"rl-uuid-1","session_id":"test-ratelimit"}
+{"type":"result","subtype":"success","duration_ms":2500,"total_cost_usd":0.02,"session_id":"test-ratelimit","num_turns":1,"usage":{"input_tokens":30,"output_tokens":40}}

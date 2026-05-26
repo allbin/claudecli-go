@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","session_id":"test-hooks","model":"claude-sonnet-4-6","tools":["Bash","Read"]}
+{"type":"system","subtype":"hook_started","hook_id":"hook_001","hook_name":"SessionStart:env-check","hook_event":"SessionStart","uuid":"h1","session_id":"test-hooks"}
+{"type":"system","subtype":"hook_response","hook_id":"hook_001","hook_name":"SessionStart:env-check","hook_event":"SessionStart","output":"environment OK","stdout":"environment OK","stderr":"","exit_code":0,"outcome":"success","uuid":"h2","session_id":"test-hooks"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_01","name":"Bash","input":{"command":"echo hello"}}]},"session_id":"test-hooks"}
+{"type":"system","subtype":"hook_started","hook_id":"hook_002","hook_name":"PreToolUse:audit","hook_event":"PreToolUse","uuid":"h3","session_id":"test-hooks"}
+{"type":"system","subtype":"hook_response","hook_id":"hook_002","hook_name":"PreToolUse:audit","hook_event":"PreToolUse","output":"","stdout":"","stderr":"audit warning: sensitive command","exit_code":0,"outcome":"success","uuid":"h4","session_id":"test-hooks"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_01","content":"hello\n"}]},"session_id":"test-hooks"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"The command output was: hello"}]},"session_id":"test-hooks"}
+{"type":"result","subtype":"success","duration_ms":4000,"total_cost_usd":0.03,"session_id":"test-hooks","num_turns":2,"usage":{"input_tokens":80,"output_tokens":50}}

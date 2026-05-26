@@ -1,0 +1,4 @@
+{"type":"system","subtype":"init","session_id":"test-thinking","model":"claude-opus-4-7","tools":["Bash","Read"]}
+{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me analyze this step by step.\n\nFirst, I need to understand the problem.","signature":"sig_abc123def456"}]},"session_id":"test-thinking"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Here is my analysis of the problem."}]},"session_id":"test-thinking"}
+{"type":"result","subtype":"success","duration_ms":3200,"total_cost_usd":0.035,"session_id":"test-thinking","num_turns":1,"usage":{"input_tokens":50,"output_tokens":120}}
