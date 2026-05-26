@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
@@ -143,26 +144,20 @@ func (p *Pool) CloseAll() error {
 	}
 	p.mu.RUnlock()
 
-	errs := make(chan error, len(entries))
+	errs := make([]error, len(entries))
 	var wg sync.WaitGroup
-	for _, e := range entries {
+	for i, e := range entries {
 		wg.Add(1)
-		go func(s *Session) {
+		go func(idx int, s *Session) {
 			defer wg.Done()
-			if err := s.Close(); err != nil {
-				errs <- err
-			}
-		}(e.session)
+			errs[idx] = s.Close()
+		}(i, e.session)
 	}
 	wg.Wait()
-	close(errs)
 
 	p.Close()
 
-	for err := range errs {
-		return err // return first error
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // Close stops all forwarders and closes the events channel.

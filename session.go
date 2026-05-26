@@ -464,8 +464,9 @@ func (s *Session) ReconnectMCPServerWait(serverName string, timeout time.Duratio
 func (s *Session) Close() error {
 	s.mu.Lock()
 	s.stdinClosed = true
+	var stdinErr error
 	if s.proc.Stdin != nil {
-		s.proc.Stdin.Close()
+		stdinErr = s.proc.Stdin.Close()
 	}
 	s.mu.Unlock()
 
@@ -481,7 +482,7 @@ func (s *Session) Close() error {
 	for range s.events {
 	}
 	<-s.done
-	return nil
+	return stdinErr
 }
 
 // writeStdin writes data to the CLI's stdin, protected by mutex.
