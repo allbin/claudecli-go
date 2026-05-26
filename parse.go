@@ -92,8 +92,10 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 				emit(parseCompactBoundaryEvent(&raw))
 			case "task_started", "task_progress", "task_notification":
 				emit(parseTaskEvent(&raw, line))
-			case "hook_started", "hook_response":
+			case "hook_started", "hook_progress", "hook_response":
 				emit(parseHookEvent(&raw, line))
+			case "files_persisted":
+				emit(parseFilesPersistedEvent(&raw))
 			default:
 				emit(&UnknownEvent{
 					Type: "system/" + raw.Subtype,
@@ -187,6 +189,15 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 		case "user":
 			emit(parseUserEvent(&raw))
 
+		case "tool_progress":
+			emit(parseCLIToolProgressEvent(&raw))
+
+		case "tool_use_summary":
+			emit(parseToolUseSummaryEvent(&raw))
+
+		case "auth_status":
+			emit(parseAuthStatusEvent(&raw))
+
 		default:
 			emit(&UnknownEvent{
 				Type: raw.Type,
@@ -213,6 +224,22 @@ func parseContentBlock(block rawContent, parentToolUseID string, resultText *[]s
 			Name:            block.Name,
 			Input:           block.Input,
 			ParentToolUseID: parentToolUseID,
+		})
+	case "server_tool_use":
+		emit(&ToolUseEvent{
+			ID:              block.ID,
+			Name:            block.Name,
+			Input:           block.Input,
+			ParentToolUseID: parentToolUseID,
+			ServerSide:      true,
+		})
+	case "mcp_tool_use":
+		emit(&ToolUseEvent{
+			ID:              block.ID,
+			Name:            block.Name,
+			Input:           block.Input,
+			ParentToolUseID: parentToolUseID,
+			MCP:             true,
 		})
 	case "tool_result":
 		emit(&ToolResultEvent{
@@ -421,6 +448,20 @@ type rawEvent struct {
 
 	// error event
 	ErrorData json.RawMessage `json:"error,omitempty"`
+
+	// tool_progress (top-level)
+	ToolName           string  `json:"tool_name,omitempty"`
+	ElapsedTimeSeconds float64 `json:"elapsed_time_seconds,omitempty"`
+
+	// tool_use_summary (top-level)
+	PrecedingToolUseIDs []string `json:"preceding_tool_use_ids,omitempty"`
+
+	// auth_status (top-level)
+	IsAuthenticating bool `json:"isAuthenticating,omitempty"`
+
+	// files_persisted (system subtype)
+	Files  json.RawMessage `json:"files,omitempty"`
+	Failed json.RawMessage `json:"failed,omitempty"`
 }
 
 type rawMessage struct {
@@ -742,4 +783,61 @@ func parseTaskEvent(raw *rawEvent, line []byte) *TaskEvent {
 		DurationMs:   raw.Usage.DurationMs,
 		Raw:          append(json.RawMessage(nil), line...),
 	}
+}
+
+func parseCLIToolProgressEvent(raw *rawEvent) *CLIToolProgressEvent {
+	return &CLIToolProgressEvent{
+		ToolUseID:      raw.ToolUseID,
+		ToolName:       raw.ToolName,
+		ElapsedSeconds: raw.ElapsedTimeSeconds,
+		TaskID:         raw.TaskID,
+	}
+}
+
+func parseToolUseSummaryEvent(raw *rawEvent) *ToolUseSummaryEvent {
+	return &ToolUseSummaryEvent{
+		Summary:             raw.Summary,
+		PrecedingToolUseIDs: raw.PrecedingToolUseIDs,
+	}
+}
+
+func parseAuthStatusEvent(raw *rawEvent) *AuthStatusEvent {
+	ev := &AuthStatusEvent{
+		IsAuthenticating: raw.IsAuthenticating,
+		Output:           raw.Output,
+	}
+	if len(raw.ErrorData) > 0 {
+		var errStr string
+		if json.Unmarshal(raw.ErrorData, &errStr) == nil {
+			ev.Error = errStr
+		}
+	}
+	return ev
+}
+
+func parseFilesPersistedEvent(raw *rawEvent) *FilesPersistedEvent {
+	ev := &FilesPersistedEvent{}
+	if len(raw.Files) > 0 {
+		var files []struct {
+			Filename string `json:"filename"`
+			FileID   string `json:"file_id"`
+		}
+		if json.Unmarshal(raw.Files, &files) == nil {
+			for _, f := range files {
+				ev.Files = append(ev.Files, PersistedFile{Filename: f.Filename, FileID: f.FileID})
+			}
+		}
+	}
+	if len(raw.Failed) > 0 {
+		var failed []struct {
+			Filename string `json:"filename"`
+			Error    string `json:"error"`
+		}
+		if json.Unmarshal(raw.Failed, &failed) == nil {
+			for _, f := range failed {
+				ev.Failed = append(ev.Failed, FailedFile{Filename: f.Filename, Error: f.Error})
+			}
+		}
+	}
+	return ev
 }

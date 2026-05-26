@@ -2404,6 +2404,296 @@ func TestParseStreamEventsFixture(t *testing.T) {
 	}
 }
 
+func TestParseServerToolUseFixture(t *testing.T) {
+	events := filterActivity(collectEvents(t, "testdata/server_tool_use.jsonl"))
+
+	var toolUses []*ToolUseEvent
+	for _, e := range events {
+		if tu, ok := e.(*ToolUseEvent); ok {
+			toolUses = append(toolUses, tu)
+		}
+	}
+
+	if len(toolUses) != 2 {
+		t.Fatalf("got %d ToolUseEvents, want 2", len(toolUses))
+	}
+
+	// server_tool_use
+	if !toolUses[0].ServerSide {
+		t.Error("toolUses[0].ServerSide = false, want true")
+	}
+	if toolUses[0].MCP {
+		t.Error("toolUses[0].MCP = true, want false")
+	}
+	if toolUses[0].Name != "web_search" {
+		t.Errorf("toolUses[0].Name = %q, want web_search", toolUses[0].Name)
+	}
+	if toolUses[0].ID != "srvtu_01" {
+		t.Errorf("toolUses[0].ID = %q", toolUses[0].ID)
+	}
+
+	// mcp_tool_use
+	if !toolUses[1].MCP {
+		t.Error("toolUses[1].MCP = false, want true")
+	}
+	if toolUses[1].ServerSide {
+		t.Error("toolUses[1].ServerSide = true, want false")
+	}
+	if toolUses[1].Name != "mcp__playwright__browser_navigate" {
+		t.Errorf("toolUses[1].Name = %q", toolUses[1].Name)
+	}
+}
+
+func TestParseServerToolUseInline(t *testing.T) {
+	input := `{"type":"assistant","message":{"content":[{"type":"server_tool_use","id":"stu_1","name":"web_search","input":{"query":"test"}}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var tu *ToolUseEvent
+	for e := range ch {
+		if t, ok := e.(*ToolUseEvent); ok {
+			tu = t
+		}
+	}
+	if tu == nil {
+		t.Fatal("no ToolUseEvent found")
+	}
+	if !tu.ServerSide {
+		t.Error("ServerSide should be true for server_tool_use")
+	}
+	if tu.MCP {
+		t.Error("MCP should be false for server_tool_use")
+	}
+}
+
+func TestParseMCPToolUseInline(t *testing.T) {
+	input := `{"type":"assistant","message":{"content":[{"type":"mcp_tool_use","id":"mtu_1","name":"mcp__db__query","input":{"sql":"SELECT 1"}}]}}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var tu *ToolUseEvent
+	for e := range ch {
+		if t, ok := e.(*ToolUseEvent); ok {
+			tu = t
+		}
+	}
+	if tu == nil {
+		t.Fatal("no ToolUseEvent found")
+	}
+	if !tu.MCP {
+		t.Error("MCP should be true for mcp_tool_use")
+	}
+	if tu.ServerSide {
+		t.Error("ServerSide should be false for mcp_tool_use")
+	}
+	if tu.Name != "mcp__db__query" {
+		t.Errorf("Name = %q", tu.Name)
+	}
+}
+
+func TestParseTelemetryFixture(t *testing.T) {
+	events := filterActivity(collectEvents(t, "testdata/telemetry.jsonl"))
+
+	var toolProgress []*CLIToolProgressEvent
+	var toolSummary *ToolUseSummaryEvent
+	for _, e := range events {
+		switch ev := e.(type) {
+		case *CLIToolProgressEvent:
+			toolProgress = append(toolProgress, ev)
+		case *ToolUseSummaryEvent:
+			toolSummary = ev
+		}
+	}
+
+	// tool_progress events
+	if len(toolProgress) != 2 {
+		t.Fatalf("got %d CLIToolProgressEvents, want 2", len(toolProgress))
+	}
+	if toolProgress[0].ToolUseID != "tu_01" {
+		t.Errorf("toolProgress[0].ToolUseID = %q", toolProgress[0].ToolUseID)
+	}
+	if toolProgress[0].ToolName != "Bash" {
+		t.Errorf("toolProgress[0].ToolName = %q", toolProgress[0].ToolName)
+	}
+	if toolProgress[0].ElapsedSeconds != 2.5 {
+		t.Errorf("toolProgress[0].ElapsedSeconds = %f, want 2.5", toolProgress[0].ElapsedSeconds)
+	}
+	if toolProgress[1].ElapsedSeconds != 5.1 {
+		t.Errorf("toolProgress[1].ElapsedSeconds = %f, want 5.1", toolProgress[1].ElapsedSeconds)
+	}
+
+	// tool_use_summary event
+	if toolSummary == nil {
+		t.Fatal("no ToolUseSummaryEvent found")
+	}
+	if !strings.Contains(toolSummary.Summary, "shell command") {
+		t.Errorf("ToolUseSummaryEvent.Summary = %q", toolSummary.Summary)
+	}
+	if len(toolSummary.PrecedingToolUseIDs) != 1 || toolSummary.PrecedingToolUseIDs[0] != "tu_01" {
+		t.Errorf("PrecedingToolUseIDs = %v", toolSummary.PrecedingToolUseIDs)
+	}
+}
+
+func TestParseAuthStatusEvent(t *testing.T) {
+	input := `{"type":"auth_status","isAuthenticating":true,"output":"Refreshing tokens..."}
+{"type":"auth_status","isAuthenticating":false,"output":"Authenticated","error":""}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var auths []*AuthStatusEvent
+	for e := range ch {
+		if a, ok := e.(*AuthStatusEvent); ok {
+			auths = append(auths, a)
+		}
+	}
+	if len(auths) != 2 {
+		t.Fatalf("got %d AuthStatusEvents, want 2", len(auths))
+	}
+	if !auths[0].IsAuthenticating {
+		t.Error("auths[0].IsAuthenticating = false, want true")
+	}
+	if auths[0].Output != "Refreshing tokens..." {
+		t.Errorf("auths[0].Output = %q", auths[0].Output)
+	}
+	if auths[1].IsAuthenticating {
+		t.Error("auths[1].IsAuthenticating = true, want false")
+	}
+}
+
+func TestParseAuthStatusEventWithError(t *testing.T) {
+	input := `{"type":"auth_status","isAuthenticating":false,"output":"","error":"token expired"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var auth *AuthStatusEvent
+	for e := range ch {
+		if a, ok := e.(*AuthStatusEvent); ok {
+			auth = a
+		}
+	}
+	if auth == nil {
+		t.Fatal("no AuthStatusEvent found")
+	}
+	if auth.Error != "token expired" {
+		t.Errorf("auth.Error = %q, want 'token expired'", auth.Error)
+	}
+}
+
+func TestParseHookProgressEvent(t *testing.T) {
+	input := `{"type":"system","subtype":"init","session_id":"test","model":"sonnet"}
+{"type":"system","subtype":"hook_progress","hook_id":"h1","hook_name":"PreToolUse:lint","hook_event":"PreToolUse","output":"running lint...","stdout":"checking files","stderr":"","uuid":"u1","session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var hook *HookEvent
+	for e := range ch {
+		if h, ok := e.(*HookEvent); ok {
+			hook = h
+		}
+	}
+	if hook == nil {
+		t.Fatal("no HookEvent found for hook_progress")
+	}
+	if hook.Subtype != "hook_progress" {
+		t.Errorf("hook.Subtype = %q, want hook_progress", hook.Subtype)
+	}
+	if hook.Output != "running lint..." {
+		t.Errorf("hook.Output = %q", hook.Output)
+	}
+	if hook.Stdout != "checking files" {
+		t.Errorf("hook.Stdout = %q", hook.Stdout)
+	}
+}
+
+func TestParseFilesPersistedEvent(t *testing.T) {
+	input := `{"type":"system","subtype":"init","session_id":"test","model":"sonnet"}
+{"type":"system","subtype":"files_persisted","session_id":"test","files":[{"filename":"main.go","file_id":"f_001"},{"filename":"go.mod","file_id":"f_002"}],"failed":[{"filename":"large.bin","error":"file too large"}]}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var fp *FilesPersistedEvent
+	for e := range ch {
+		if f, ok := e.(*FilesPersistedEvent); ok {
+			fp = f
+		}
+	}
+	if fp == nil {
+		t.Fatal("no FilesPersistedEvent found")
+	}
+	if len(fp.Files) != 2 {
+		t.Fatalf("Files len = %d, want 2", len(fp.Files))
+	}
+	if fp.Files[0].Filename != "main.go" || fp.Files[0].FileID != "f_001" {
+		t.Errorf("Files[0] = %+v", fp.Files[0])
+	}
+	if fp.Files[1].Filename != "go.mod" || fp.Files[1].FileID != "f_002" {
+		t.Errorf("Files[1] = %+v", fp.Files[1])
+	}
+	if len(fp.Failed) != 1 {
+		t.Fatalf("Failed len = %d, want 1", len(fp.Failed))
+	}
+	if fp.Failed[0].Filename != "large.bin" || fp.Failed[0].Error != "file too large" {
+		t.Errorf("Failed[0] = %+v", fp.Failed[0])
+	}
+}
+
+func TestParseFilesPersistedEmpty(t *testing.T) {
+	input := `{"type":"system","subtype":"files_persisted","session_id":"test"}
+{"type":"result","subtype":"success","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var fp *FilesPersistedEvent
+	for e := range ch {
+		if f, ok := e.(*FilesPersistedEvent); ok {
+			fp = f
+		}
+	}
+	if fp == nil {
+		t.Fatal("no FilesPersistedEvent found")
+	}
+	if len(fp.Files) != 0 {
+		t.Errorf("Files = %v, want empty", fp.Files)
+	}
+	if len(fp.Failed) != 0 {
+		t.Errorf("Failed = %v, want empty", fp.Failed)
+	}
+}
+
 func TestParseErrorEventUnmarshalFailure(t *testing.T) {
 	input := `{"type":"error","error":"not a json object, just a string"}
 {"type":"result","subtype":"error","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}

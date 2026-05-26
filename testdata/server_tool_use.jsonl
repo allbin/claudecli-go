@@ -1,0 +1,7 @@
+{"type":"system","subtype":"init","session_id":"test-server-tools","model":"claude-sonnet-4-6","tools":["WebSearch","Bash"]}
+{"type":"assistant","message":{"content":[{"type":"server_tool_use","id":"srvtu_01","name":"web_search","input":{"query":"golang error handling best practices"}}]},"session_id":"test-server-tools"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"srvtu_01","content":[{"type":"text","text":"Results for golang error handling..."}]}]},"session_id":"test-server-tools"}
+{"type":"assistant","message":{"content":[{"type":"mcp_tool_use","id":"mcptu_01","name":"mcp__playwright__browser_navigate","input":{"url":"https://example.com"}}]},"session_id":"test-server-tools"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"mcptu_01","content":"Navigation complete"}]},"session_id":"test-server-tools"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"I found the information you needed."}]},"session_id":"test-server-tools"}
+{"type":"result","subtype":"success","duration_ms":8000,"total_cost_usd":0.05,"session_id":"test-server-tools","num_turns":3,"usage":{"input_tokens":300,"output_tokens":150}}

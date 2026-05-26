@@ -207,11 +207,17 @@ func (e *TurnEvent) String() string {
 // ToolUseEvent is emitted when the assistant invokes a tool.
 // ParentToolUseID is set when this event comes from a subagent (links to the
 // parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
+//
+// ServerSide is true for server_tool_use blocks (web search, code execution)
+// and MCP is true for mcp_tool_use blocks. Both carry the same ID/Name/Input
+// shape as regular tool_use.
 type ToolUseEvent struct {
 	ID              string
 	Name            string
 	Input           json.RawMessage
 	ParentToolUseID string
+	ServerSide      bool
+	MCP             bool
 }
 
 func (*ToolUseEvent) event() {}
@@ -551,6 +557,72 @@ type ToolProgressEvent struct {
 func (*ToolProgressEvent) event() {}
 func (e *ToolProgressEvent) String() string {
 	return fmt.Sprintf("ToolProgressEvent{Tool: %s, ID: %s, Elapsed: %s}", e.ToolName, e.ToolUseID, e.Elapsed)
+}
+
+// CLIToolProgressEvent is emitted by the CLI (not the SDK) when a tool
+// execution is in progress. Unlike the synthetic ToolProgressEvent (emitted
+// by Session's ticker), this comes directly from the CLI's JSONL stream
+// as a top-level "tool_progress" event.
+type CLIToolProgressEvent struct {
+	ToolUseID      string
+	ToolName       string
+	ElapsedSeconds float64
+	TaskID         string
+}
+
+func (*CLIToolProgressEvent) event() {}
+func (e *CLIToolProgressEvent) String() string {
+	return fmt.Sprintf("CLIToolProgressEvent{Tool: %s, ID: %s, Elapsed: %.1fs}", e.ToolName, e.ToolUseID, e.ElapsedSeconds)
+}
+
+// ToolUseSummaryEvent is emitted after tool execution with a summary of what
+// the tool did. PrecedingToolUseIDs lists the tool_use IDs that this summary
+// covers.
+type ToolUseSummaryEvent struct {
+	Summary              string
+	PrecedingToolUseIDs  []string
+}
+
+func (*ToolUseSummaryEvent) event() {}
+func (e *ToolUseSummaryEvent) String() string {
+	return fmt.Sprintf("ToolUseSummaryEvent{Summary: %s, IDs: %d}", e.Summary, len(e.PrecedingToolUseIDs))
+}
+
+// AuthStatusEvent is emitted when the CLI reports authentication status
+// changes during a session (e.g. token refresh).
+type AuthStatusEvent struct {
+	IsAuthenticating bool
+	Output           string
+	Error            string
+}
+
+func (*AuthStatusEvent) event() {}
+func (e *AuthStatusEvent) String() string {
+	return fmt.Sprintf("AuthStatusEvent{IsAuthenticating: %v}", e.IsAuthenticating)
+}
+
+// FilesPersistedEvent is emitted when the CLI confirms file persistence.
+// Files lists successfully persisted files; Failed lists files that failed.
+type FilesPersistedEvent struct {
+	Files  []PersistedFile
+	Failed []FailedFile
+}
+
+// PersistedFile describes a successfully persisted file.
+type PersistedFile struct {
+	Filename string
+	FileID   string
+}
+
+// FailedFile describes a file that failed to persist.
+type FailedFile struct {
+	Filename string
+	Error    string
+}
+
+func (*FilesPersistedEvent) event() {}
+func (e *FilesPersistedEvent) String() string {
+	return fmt.Sprintf("FilesPersistedEvent{Files: %d, Failed: %d}", len(e.Files), len(e.Failed))
 }
 
 // ExitReason classifies why the CLI process terminated. Carried by

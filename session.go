@@ -750,8 +750,10 @@ func (s *Session) readLoop() {
 				pumpSend(parseCompactBoundaryEvent(&raw))
 			case "task_started", "task_progress", "task_notification":
 				pumpSend(parseTaskEvent(&raw, line))
-			case "hook_started", "hook_response":
+			case "hook_started", "hook_progress", "hook_response":
 				pumpSend(parseHookEvent(&raw, line))
+			case "files_persisted":
+				pumpSend(parseFilesPersistedEvent(&raw))
 			default:
 				pumpSend(&UnknownEvent{
 					Type: "system/" + raw.Subtype,
@@ -794,6 +796,22 @@ func (s *Session) readLoop() {
 						Name:            block.Name,
 						Input:           block.Input,
 						ParentToolUseID: parentToolUseID,
+					})
+				case "server_tool_use":
+					pumpSend(&ToolUseEvent{
+						ID:              block.ID,
+						Name:            block.Name,
+						Input:           block.Input,
+						ParentToolUseID: parentToolUseID,
+						ServerSide:      true,
+					})
+				case "mcp_tool_use":
+					pumpSend(&ToolUseEvent{
+						ID:              block.ID,
+						Name:            block.Name,
+						Input:           block.Input,
+						ParentToolUseID: parentToolUseID,
+						MCP:             true,
 					})
 				case "tool_result":
 					pumpSend(&ToolResultEvent{
@@ -869,6 +887,15 @@ func (s *Session) readLoop() {
 
 		case "user":
 			pumpSend(parseUserEvent(&raw))
+
+		case "tool_progress":
+			pumpSend(parseCLIToolProgressEvent(&raw))
+
+		case "tool_use_summary":
+			pumpSend(parseToolUseSummaryEvent(&raw))
+
+		case "auth_status":
+			pumpSend(parseAuthStatusEvent(&raw))
 
 		default:
 			ev := &UnknownEvent{
