@@ -2,9 +2,8 @@ package claudecli
 
 import "fmt"
 
-// EffortLevel controls reasoning intensity. On Opus 4.7+ this drives adaptive
-// thinking (the model decides when and how much to think per step). On earlier
-// models it maps to extended thinking with a fixed budget.
+// EffortLevel controls reasoning intensity. WithEffort emits --effort <level>;
+// how a given model uses it is the model's business.
 type EffortLevel string
 
 const (
@@ -14,7 +13,7 @@ const (
 	EffortXHigh  EffortLevel = "xhigh"
 	EffortMax    EffortLevel = "max"
 
-	// DefaultEffort is the Claude Code default since Opus 4.7.
+	// DefaultEffort matches the Claude Code CLI default.
 	DefaultEffort = EffortXHigh
 )
 
@@ -38,8 +37,7 @@ type ThinkingConfig interface {
 	appendArgs(args *[]string)
 }
 
-// ThinkingAdaptive selects adaptive thinking mode (the only mode on Opus 4.7+).
-// Emits --thinking adaptive.
+// ThinkingAdaptive selects adaptive thinking. Emits --thinking adaptive.
 type ThinkingAdaptive struct{}
 
 func (ThinkingAdaptive) thinkingConfig() {}
@@ -47,10 +45,9 @@ func (ThinkingAdaptive) appendArgs(args *[]string) {
 	*args = append(*args, "--thinking", "adaptive")
 }
 
-// ThinkingEnabled selects extended thinking with an explicit token budget.
-// Emits --max-thinking-tokens <BudgetTokens> (matches the Python SDK's path
-// for enabled mode — the CLI infers enabled state from the flag).
-// Primarily for pre-Opus 4.7 models; ignored or treated as adaptive on 4.7+.
+// ThinkingEnabled requests thinking with an explicit token budget.
+// Emits --max-thinking-tokens <BudgetTokens> (the CLI infers enabled state
+// from the flag). Whether a model honors the budget depends on the model.
 type ThinkingEnabled struct {
 	BudgetTokens int
 }

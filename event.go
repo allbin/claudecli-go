@@ -153,13 +153,12 @@ func (e *HookEvent) String() string {
 	return fmt.Sprintf("HookEvent{%s %s}", e.Subtype, e.HookName)
 }
 
-// ThinkingEvent contains model thinking output (extended thinking on pre-4.7
-// models, adaptive thinking on Opus 4.7+).
+// ThinkingEvent contains the model's thinking output.
 //
-// On Claude Opus 4.7, adaptive thinking defaults to display:"omitted" — the
-// model thinks but the text is hidden. The SDK surfaces this as Content=""
-// with Signature set. Callers should treat a non-empty Signature with empty
-// Content as "thinking hidden", not "no thinking occurred".
+// Content may be empty while Signature is set: the CLI can emit a thinking
+// block whose text is withheld but whose signature is present. Treat
+// Content=="" with a non-empty Signature as "thinking hidden", not "no
+// thinking occurred".
 //
 // ParentToolUseID is set when this event comes from a subagent (links to the
 // parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
