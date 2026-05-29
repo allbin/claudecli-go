@@ -47,6 +47,12 @@ func (e *InitEvent) String() string {
 	return fmt.Sprintf("InitEvent{SessionID: %s, Model: %s}", e.SessionID, e.Model)
 }
 
+// ModelDisplayName returns the human-readable name of the session model, e.g.
+// "Opus 4.8". It is shorthand for ModelDisplayName(e.Model).
+func (e *InitEvent) ModelDisplayName() string {
+	return ModelDisplayName(e.Model)
+}
+
 // CompactStatusEvent is emitted when the CLI's compaction status changes.
 // Status is "compacting" when compaction starts, or "" when cleared.
 type CompactStatusEvent struct {
