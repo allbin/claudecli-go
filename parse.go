@@ -107,6 +107,30 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 			if raw.Message == nil {
 				continue
 			}
+			// claude-cli emits a synthetic assistant message when the
+			// upstream Anthropic stream drops mid-turn: model="<synthetic>",
+			// isApiErrorMessage=true, content=[{type:"text", text:"API
+			// Error: ..."}]. Forwarding that text as a real reply leaks the
+			// transport error into the application (Neo discord-agent
+			// incident 2026-05-22). Emit as fatal ErrorEvent and terminate
+			// the stream — caller's session goes to StateFailed and next
+			// query reconnects with a fresh session.
+			if raw.IsApiErrorMessage {
+				msg := ""
+				for _, block := range raw.Message.Content {
+					if block.Type == "text" {
+						msg += block.Text
+					}
+				}
+				if msg == "" {
+					msg = "synthetic CLI api-error message"
+				}
+				emit(&ErrorEvent{
+					Err:   fmt.Errorf("%w: %s", ErrAPI, msg),
+					Fatal: true,
+				})
+				return
+			}
 			parentToolUseID := ""
 			if raw.ParentToolUseID != nil {
 				parentToolUseID = *raw.ParentToolUseID
@@ -421,6 +445,13 @@ type rawEvent struct {
 	Timestamp       string          `json:"timestamp,omitempty"`
 	ToolUseResult   json.RawMessage `json:"tool_use_result,omitempty"`
 	IsReplay        bool            `json:"isReplay,omitempty"`
+
+	// Set on synthetic assistant messages that claude-cli emits when the
+	// upstream Anthropic stream drops mid-turn. The accompanying content
+	// is the error text rendered as if the model wrote it, with
+	// "model":"<synthetic>". Used to discriminate transport errors from
+	// real model output — see assistant-case in ParseEvents.
+	IsApiErrorMessage bool `json:"isApiErrorMessage,omitempty"`
 
 	// result event
 	Result           string          `json:"result,omitempty"`

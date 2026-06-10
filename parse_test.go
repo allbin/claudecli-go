@@ -468,6 +468,47 @@ func TestParseReturnsAfterResult(t *testing.T) {
 	}
 }
 
+func TestParseSyntheticAPIErrorMessage(t *testing.T) {
+	// Real-world capture from neo discord-agent incident 2026-05-22:
+	// chat-Neo session lost its Anthropic socket mid-turn after ~6 days
+	// of uptime + 485K cached tokens. claude-cli emitted the error text
+	// wrapped as a synthetic assistant message (model="<synthetic>",
+	// isApiErrorMessage=true) which the agent forwarded to the end user
+	// as if Neo had written it. Detection must convert the synthetic
+	// message into a fatal ErrorEvent and suppress the misleading text.
+	input := `{"type":"system","session_id":"test","model":"opus"}
+{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"API Error: The socket connection was closed unexpectedly."}]},"isApiErrorMessage":true}
+{"type":"result","subtype":"success","total_cost_usd":0,"usage":{"input_tokens":0,"output_tokens":0}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	var sawFatalAPI bool
+	for e := range ch {
+		switch ev := e.(type) {
+		case *TextEvent:
+			t.Errorf("did not expect TextEvent for synthetic api-error message, got %q", ev.Content)
+		case *ResultEvent:
+			t.Error("did not expect ResultEvent — stream should terminate at fatal ErrorEvent")
+		case *ErrorEvent:
+			if !ev.Fatal {
+				continue
+			}
+			if !errors.Is(ev.Err, ErrAPI) {
+				t.Errorf("expected fatal ErrorEvent classified as ErrAPI, got %v", ev.Err)
+				continue
+			}
+			sawFatalAPI = true
+		}
+	}
+	if !sawFatalAPI {
+		t.Fatal("expected fatal ErrorEvent for synthetic api-error message, got none")
+	}
+}
+
 func TestParseResultStopReason(t *testing.T) {
 	input := `{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}
 {"type":"result","subtype":"success","stop_reason":"end_turn","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}
