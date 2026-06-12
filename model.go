@@ -27,6 +27,8 @@ const (
 	ModelHaiku  Model = "haiku"
 	ModelSonnet Model = "sonnet"
 	ModelOpus   Model = "opus"
+	// ModelFable is Claude Fable 5, the most capable tier (above Opus).
+	ModelFable Model = "fable"
 
 	// DefaultModel is used when no model is specified.
 	DefaultModel = ModelSonnet

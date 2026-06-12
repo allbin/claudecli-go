@@ -614,7 +614,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | Option                               | Description                                                                                           |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | `WithBinaryPath(string)`             | Path to the `claude` binary. Only effective in `New()`. Default: `"claude"`.                          |
-| `WithModel(Model)`                   | Model to use (`ModelHaiku`, `ModelSonnet`, `ModelOpus`). Default: `ModelSonnet`.                      |
+| `WithModel(Model)`                   | Model to use (`ModelHaiku`, `ModelSonnet`, `ModelOpus`, `ModelFable`). Default: `ModelSonnet`. Also accepts any CLI alias or full name as a string, e.g. `Model("claude-fable-5")`. |
 | `WithFallbackModel(Model)`           | Fallback model if primary is unavailable.                                                             |
 | `WithBetas(...string)`               | Beta features to enable.                                                                              |
 | `WithSystemPrompt(string)`           | System prompt.                                                                                        |
