@@ -479,6 +479,18 @@ type Usage struct {
 	CacheCreateTokens int
 }
 
+// TotalTokens returns the sum of every token field — input, output, cache
+// read and cache create. This is the headline "tokens used" figure for a run;
+// pair it with ResultEvent.CostUSD (or ModelUsage.CostUSD) to report cost.
+func (u Usage) TotalTokens() int {
+	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheCreateTokens
+}
+
+func (u Usage) String() string {
+	return fmt.Sprintf("Usage{in: %d, out: %d, cacheRead: %d, cacheCreate: %d, total: %d}",
+		u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheCreateTokens, u.TotalTokens())
+}
+
 // ModelUsage contains per-model usage statistics including context window metadata.
 // The result event reports one entry per model used during the session.
 type ModelUsage struct {
@@ -491,6 +503,11 @@ type ModelUsage struct {
 	MaxOutputTokens   int
 	WebSearchRequests int
 	WebFetchRequests  int
+}
+
+// TotalTokens returns the sum of every token field for this model.
+func (m ModelUsage) TotalTokens() int {
+	return m.InputTokens + m.OutputTokens + m.CacheReadTokens + m.CacheCreateTokens
 }
 
 // ContextSnapshot captures token usage from the last API call in a streaming session.

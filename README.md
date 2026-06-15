@@ -30,8 +30,9 @@ func main() {
         log.Fatal(err)
     }
     fmt.Println(text)
-    fmt.Printf("Cost: $%.4f, Tokens: %d in / %d out\n",
-        result.CostUSD, result.Usage.InputTokens, result.Usage.OutputTokens)
+    fmt.Printf("Cost: $%.4f, Tokens: %d (%d in / %d out)\n",
+        result.CostUSD, result.Usage.TotalTokens(),
+        result.Usage.InputTokens, result.Usage.OutputTokens)
 }
 ```
 
@@ -99,6 +100,28 @@ analysis, result, err := claudecli.RunBlockingJSON[Analysis](ctx, client, prompt
     claudecli.WithJSONSchema(`{"type":"object","properties":{"summary":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}}},"required":["summary","tags"]}`),
 )
 ```
+
+## Cost & token usage
+
+Every run reports its cost and token usage. `CostUSD` is the dollar cost; `Usage`
+holds the token breakdown. Use `Usage.TotalTokens()` for the headline "tokens
+used" figure (input + output + cache read + cache create) instead of summing the
+fields by hand.
+
+```go
+text, result, err := claudecli.RunText(ctx, "Say hello")
+// ...
+fmt.Printf("cost $%.4f for %d tokens\n", result.CostUSD, result.Usage.TotalTokens())
+fmt.Println(result.Usage) // Usage{in: 12, out: 5, cacheRead: 0, cacheCreate: 0, total: 17}
+```
+
+The same fields are on `BlockingResult` (from `RunBlocking`) and on each
+`*ResultEvent` in streaming mode. The SDK reports cost and usage per call and
+holds no running total — accumulating across runs is the caller's concern.
+
+For a per-model breakdown (including context window and web search/fetch counts),
+read `ResultEvent.ModelUsage`, keyed by model ID; each entry has its own
+`CostUSD` and `TotalTokens()`.
 
 ## Client with defaults
 
