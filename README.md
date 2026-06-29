@@ -10,6 +10,8 @@ Go package for invoking the [Claude Code CLI](https://docs.anthropic.com/en/docs
 go get github.com/allbin/claudecli-go
 ```
 
+See [CHANGELOG.md](CHANGELOG.md) for what changed between versions and upgrade notes.
+
 ## Quick start
 
 ```go

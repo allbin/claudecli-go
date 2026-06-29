@@ -47,7 +47,7 @@ Items to fix, improve, or investigate before calling this package production-rea
 - [x] **Add package-level godoc comment** — fixed: `doc.go` with package overview, prerequisites, thread safety, and RunJSON rationale.
 - [x] **Document JSONL format version compatibility** — fixed: noted in README known limitations.
 - [x] **Document thread safety** — fixed: documented in `doc.go`.
-- [ ] **Add CHANGELOG.md** — track changes from the start.
+- [x] **Add CHANGELOG.md** — added (Keep a Changelog format, `[Unreleased]` seeded from recent untagged history; includes upgrade notes).
 - [x] **Add LICENSE file** — fixed: MIT license added.
 
 ## Future considerations
