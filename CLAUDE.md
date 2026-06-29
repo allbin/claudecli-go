@@ -27,3 +27,4 @@ Flags: `-prompt` (default triggers Agent tool), `-out` (output dir, default `tmp
 
 - Verify CLI flags exist (`claude --help | grep`) before adding new options to `buildArgs()` — the CLI has no formal spec and flags change between versions.
 - Update README.md (options table, architecture, known limitations) before considering a task complete.
+- Keep `CHANGELOG.md` up to date as you make changes: add user-facing changes under `## [Unreleased]` (Added/Changed/Fixed, with upgrade notes for behavior changes) in the same PR. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). On release, rename `[Unreleased]` to the version with a date and add a fresh empty `[Unreleased]` on top.
