@@ -82,7 +82,7 @@ func (e *CompactBoundaryEvent) String() string {
 }
 
 // TaskEvent is emitted for subagent lifecycle updates (system subtypes
-// "task_started", "task_progress", "task_notification").
+// "task_started", "task_progress", "task_updated", "task_notification").
 //
 // ToolUseID links to the parent Agent ToolUseEvent.ID that spawned this task.
 // TaskID is a unique identifier for the subagent task instance.
@@ -90,24 +90,44 @@ func (e *CompactBoundaryEvent) String() string {
 // Subtype meanings:
 //   - "task_started": subagent spawned. Description, TaskType, Prompt are set.
 //   - "task_progress": subagent working. Usage fields update, LastToolName shows current tool.
+//   - "task_updated": lightweight status patch (Status, EndTime).
 //   - "task_notification": subagent finished. Status ("completed"), Summary, final Usage.
+//
+// Dynamic workflows (https://code.claude.com/docs/en/workflows) surface
+// through this same machinery as a single synthetic task with
+// TaskType == "local_workflow" (see IsWorkflow). For those, WorkflowName
+// is set, Prompt carries the full workflow script (on task_started),
+// WorkflowProgress carries per-phase / per-agent progress (on
+// task_progress), and OutputFile points at the workflow's result file (on
+// a completed task_notification). To monitor a workflow out-of-band, see
+// UserEvent.WorkflowLaunch and WatchWorkflow.
 type TaskEvent struct {
-	Subtype   string // "task_started", "task_progress", "task_notification"
+	Subtype   string // "task_started", "task_progress", "task_updated", "task_notification"
 	TaskID    string
 	ToolUseID string // parent Agent ToolUseEvent.ID
 	SessionID string
 
 	// task_started
-	Description string
-	TaskType    string // e.g. "local_agent"
-	Prompt      string
+	Description  string
+	TaskType     string // e.g. "local_agent", "local_workflow"
+	Prompt       string
+	WorkflowName string // set when TaskType == "local_workflow"
 
 	// task_progress
 	LastToolName string
+	// WorkflowProgress carries per-phase and per-agent state for a workflow
+	// task (TaskType == "local_workflow"). Empty for ordinary subagent tasks.
+	WorkflowProgress []WorkflowProgressEntry
 
 	// task_notification
 	Status  string
 	Summary string
+	// OutputFile is the path to the workflow's result file, set on a
+	// completed workflow task_notification. Empty otherwise.
+	OutputFile string
+
+	// task_updated
+	EndTime int64 // patch.end_time, epoch milliseconds; 0 if absent
 
 	// task_progress + task_notification
 	TotalTokens int
@@ -120,8 +140,15 @@ type TaskEvent struct {
 
 func (*TaskEvent) event() {}
 func (e *TaskEvent) String() string {
+	if e.IsWorkflow() {
+		return fmt.Sprintf("TaskEvent{Subtype: %s, Workflow: %s, TaskID: %s}", e.Subtype, e.WorkflowName, e.TaskID)
+	}
 	return fmt.Sprintf("TaskEvent{Subtype: %s, TaskID: %s, ToolUseID: %s}", e.Subtype, e.TaskID, e.ToolUseID)
 }
+
+// IsWorkflow reports whether this task is a dynamic workflow run
+// (TaskType == "local_workflow") rather than an ordinary subagent.
+func (e *TaskEvent) IsWorkflow() bool { return e.TaskType == "local_workflow" }
 
 // HookEvent is emitted when the CLI runs a configured hook (SessionStart,
 // PreToolUse, PostToolUse, etc.). Subtype is "hook_started" when the hook
@@ -319,10 +346,16 @@ func (e *ToolResultEvent) Text() string {
 //
 // When AgentResult is non-nil, this event completes a subagent execution and
 // contains its metadata (agent type, duration, token usage).
+//
+// When WorkflowLaunch is non-nil, this event reports that a dynamic
+// workflow was launched in the background (tool_use_result
+// status "async_launched"). Use it to monitor the run out-of-band — see
+// WatchWorkflow and ReadWorkflowSnapshot.
 type UserEvent struct {
 	Content         []UserContent
 	ParentToolUseID string
 	AgentResult     *AgentResult
+	WorkflowLaunch  *WorkflowLaunch
 	SessionID       string
 	UUID            string
 	Timestamp       string
@@ -334,10 +367,14 @@ type UserEvent struct {
 
 func (*UserEvent) event() {}
 func (e *UserEvent) String() string {
-	if e.AgentResult != nil {
+	switch {
+	case e.WorkflowLaunch != nil:
+		return fmt.Sprintf("UserEvent{WorkflowLaunch: %s, RunID: %s}", e.WorkflowLaunch.WorkflowName, e.WorkflowLaunch.RunID)
+	case e.AgentResult != nil:
 		return fmt.Sprintf("UserEvent{AgentResult: %s, ParentToolUseID: %s}", e.AgentResult.AgentID, e.ParentToolUseID)
+	default:
+		return fmt.Sprintf("UserEvent{Blocks: %d, ParentToolUseID: %s}", len(e.Content), e.ParentToolUseID)
 	}
-	return fmt.Sprintf("UserEvent{Blocks: %d, ParentToolUseID: %s}", len(e.Content), e.ParentToolUseID)
 }
 
 // Text returns the concatenated text of all text content blocks.
@@ -531,6 +568,25 @@ type ContextManagementEvent struct {
 func (*ContextManagementEvent) event() {}
 func (e *ContextManagementEvent) String() string {
 	return fmt.Sprintf("ContextManagementEvent{len: %d}", len(e.Raw))
+}
+
+// ThinkingTokensEvent is emitted by the CLI as a running estimate of the
+// model's thinking-token usage during a turn (system subtype
+// "thinking_tokens"). EstimatedTokens is the cumulative estimate and
+// EstimatedTokensDelta is the increment since the previous tick. It is a
+// progress/telemetry signal, not authoritative accounting — use
+// ResultEvent.Usage for final token counts. Appears in ordinary sessions,
+// not only during workflows.
+type ThinkingTokensEvent struct {
+	EstimatedTokens      int
+	EstimatedTokensDelta int
+	SessionID            string
+	UUID                 string
+}
+
+func (*ThinkingTokensEvent) event() {}
+func (e *ThinkingTokensEvent) String() string {
+	return fmt.Sprintf("ThinkingTokensEvent{Estimated: %d (+%d)}", e.EstimatedTokens, e.EstimatedTokensDelta)
 }
 
 // ActivityState describes the high-level activity of a CLI session.

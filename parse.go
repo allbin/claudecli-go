@@ -90,10 +90,17 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 				})
 			case "compact_boundary":
 				emit(parseCompactBoundaryEvent(&raw))
-			case "task_started", "task_progress", "task_notification":
+			case "task_started", "task_progress", "task_updated", "task_notification":
 				emit(parseTaskEvent(&raw, line))
 			case "hook_started", "hook_progress", "hook_response":
 				emit(parseHookEvent(&raw, line))
+			case "thinking_tokens":
+				emit(&ThinkingTokensEvent{
+					EstimatedTokens:      raw.EstimatedTokens,
+					EstimatedTokensDelta: raw.EstimatedTokensDelta,
+					SessionID:            raw.SessionID,
+					UUID:                 raw.UUID,
+				})
 			case "files_persisted":
 				emit(parseFilesPersistedEvent(&raw))
 			default:
@@ -420,14 +427,22 @@ type rawEvent struct {
 	// system event (compact_boundary subtype)
 	CompactMetadata json.RawMessage `json:"compact_metadata,omitempty"`
 
-	// system task subtypes (task_started, task_progress, task_notification)
-	TaskID       string `json:"task_id,omitempty"`
-	ToolUseID    string `json:"tool_use_id,omitempty"`
-	Description  string `json:"description,omitempty"`
-	TaskType     string `json:"task_type,omitempty"`
-	Prompt       string `json:"prompt,omitempty"`
-	LastToolName string `json:"last_tool_name,omitempty"`
-	Summary      string `json:"summary,omitempty"`
+	// system task subtypes (task_started, task_progress, task_updated, task_notification)
+	TaskID           string                  `json:"task_id,omitempty"`
+	ToolUseID        string                  `json:"tool_use_id,omitempty"`
+	Description      string                  `json:"description,omitempty"`
+	TaskType         string                  `json:"task_type,omitempty"`
+	Prompt           string                  `json:"prompt,omitempty"`
+	LastToolName     string                  `json:"last_tool_name,omitempty"`
+	Summary          string                  `json:"summary,omitempty"`
+	WorkflowName     string                  `json:"workflow_name,omitempty"`
+	OutputFile       string                  `json:"output_file,omitempty"`
+	WorkflowProgress []WorkflowProgressEntry `json:"workflow_progress,omitempty"`
+	Patch            json.RawMessage         `json:"patch,omitempty"`
+
+	// system subtype thinking_tokens
+	EstimatedTokens      int `json:"estimated_tokens,omitempty"`
+	EstimatedTokensDelta int `json:"estimated_tokens_delta,omitempty"`
 
 	// system hook subtypes (hook_started, hook_response)
 	HookID    string `json:"hook_id,omitempty"`
@@ -737,7 +752,14 @@ func parseUserEvent(raw *rawEvent) *UserEvent {
 	}
 
 	if len(raw.ToolUseResult) > 0 {
-		ev.AgentResult = parseAgentResult(raw.ToolUseResult)
+		// A dynamic workflow launch and an ordinary subagent result share the
+		// tool_use_result slot. Disambiguate on the launch markers before
+		// falling back to AgentResult parsing.
+		if wl := parseWorkflowLaunch(raw.ToolUseResult); wl != nil {
+			ev.WorkflowLaunch = wl
+		} else {
+			ev.AgentResult = parseAgentResult(raw.ToolUseResult)
+		}
 	}
 
 	return ev
@@ -798,21 +820,40 @@ func parseTaskEvent(raw *rawEvent, line []byte) *TaskEvent {
 	if raw.Status != nil {
 		status = *raw.Status
 	}
+	var endTime int64
+	// task_updated carries its status (and an end_time) inside a "patch"
+	// object rather than as top-level fields.
+	if len(raw.Patch) > 0 {
+		var patch struct {
+			Status  *string `json:"status"`
+			EndTime int64   `json:"end_time"`
+		}
+		if json.Unmarshal(raw.Patch, &patch) == nil {
+			if patch.Status != nil {
+				status = *patch.Status
+			}
+			endTime = patch.EndTime
+		}
+	}
 	return &TaskEvent{
-		Subtype:      raw.Subtype,
-		TaskID:       raw.TaskID,
-		ToolUseID:    raw.ToolUseID,
-		SessionID:    raw.SessionID,
-		Description:  raw.Description,
-		TaskType:     raw.TaskType,
-		Prompt:       raw.Prompt,
-		LastToolName: raw.LastToolName,
-		Status:       status,
-		Summary:      raw.Summary,
-		TotalTokens:  raw.Usage.TotalTokens,
-		ToolUses:     raw.Usage.ToolUses,
-		DurationMs:   raw.Usage.DurationMs,
-		Raw:          append(json.RawMessage(nil), line...),
+		Subtype:          raw.Subtype,
+		TaskID:           raw.TaskID,
+		ToolUseID:        raw.ToolUseID,
+		SessionID:        raw.SessionID,
+		Description:      raw.Description,
+		TaskType:         raw.TaskType,
+		Prompt:           raw.Prompt,
+		WorkflowName:     raw.WorkflowName,
+		LastToolName:     raw.LastToolName,
+		WorkflowProgress: raw.WorkflowProgress,
+		Status:           status,
+		Summary:          raw.Summary,
+		OutputFile:       raw.OutputFile,
+		EndTime:          endTime,
+		TotalTokens:      raw.Usage.TotalTokens,
+		ToolUses:         raw.Usage.ToolUses,
+		DurationMs:       raw.Usage.DurationMs,
+		Raw:              append(json.RawMessage(nil), line...),
 	}
 }
 
