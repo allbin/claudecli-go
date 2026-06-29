@@ -480,6 +480,67 @@ case *claudecli.ToolUseEvent:
     }
 ```
 
+## Dynamic workflows
+
+[Dynamic workflows](https://code.claude.com/docs/en/workflows) orchestrate many
+subagents from a script the CLI runtime runs in the background. There is no new
+flag or API to trigger one — it is prompt content: include `ultracode`, ask in
+your own words ("run a workflow…"), or invoke a saved/bundled command like
+`/deep-research`. In headless mode (`-p`) the run starts automatically.
+
+A workflow surfaces through the ordinary event stream as a single synthetic task
+with `TaskType == "local_workflow"`. The run is a **two-turn lifecycle** that
+emits **two `ResultEvent`s**: the first says the workflow is running in the
+background, the second (after it completes) carries the real answer — so **take
+the last `ResultEvent`**, not the first.
+
+```go
+for event := range stream.Events() {
+    switch e := event.(type) {
+    case *claudecli.UserEvent:
+        if wl := e.WorkflowLaunch; wl != nil {
+            fmt.Printf("workflow %q launched (run %s)\n", wl.WorkflowName, wl.RunID)
+        }
+    case *claudecli.TaskEvent:
+        if e.IsWorkflow() {
+            for _, p := range e.WorkflowProgress { // per-phase / per-agent state
+                if p.IsAgent() {
+                    fmt.Printf("  [%s] %s: %s (%d tok)\n", p.PhaseTitle, p.Label, p.State, p.Tokens)
+                }
+            }
+        }
+    case *claudecli.ResultEvent:
+        fmt.Println("answer:", e.Text) // keep the LAST one
+    }
+}
+```
+
+### Monitoring out-of-band
+
+The runtime also persists live run state on disk keyed by `RunID` (it survives
+the SDK's `--no-session-persistence`). Given a `WorkflowLaunch`, you can monitor
+the run from a separate goroutine without consuming the event stream:
+
+```go
+launch := userEvent.WorkflowLaunch
+snaps, err := claudecli.WatchWorkflow(ctx, launch,
+    claudecli.WithPollInterval(time.Second))
+for snap := range snaps { // closes on terminal status (completed/stopped/killed)
+    fmt.Printf("%s: %d/%d agents, %d tokens\n",
+        snap.Status, len(snap.Agents()), snap.AgentCount, snap.TotalTokens)
+}
+
+// Or a one-shot read (e.g. to fetch the final Result after completion):
+snap, err := claudecli.ReadWorkflowSnapshot(launch)
+```
+
+`WorkflowLaunch.ManifestPath()` / `JournalPath()` expose the underlying file
+paths. This reads an **undocumented internal CLI layout** that may change between
+versions, so it degrades gracefully (transient read/parse errors are retried;
+`Raw` preserves the full manifest). The in-stream `WorkflowProgress` carries the
+same live data, so the filesystem path is a complement for out-of-band or
+fire-and-forget monitoring, not a requirement.
+
 ## Multimodal input
 
 Send images and documents alongside text in interactive sessions:
@@ -608,19 +669,20 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers. `ModelDisplayName()` renders the model ID as e.g. `"Opus 4.8"`. |
 | `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
 | `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
-| `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`. |
+| `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_updated`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`, `EndTime`. `IsWorkflow()` is true for dynamic-workflow runs (`TaskType == "local_workflow"`), where `WorkflowName`, `WorkflowProgress` (per-phase/per-agent `[]WorkflowProgressEntry`), and `OutputFile` (on completion) are also set. See [Dynamic workflows](#dynamic-workflows). |
 | `*HookEvent`       | Hook lifecycle event (system subtypes `hook_started`, `hook_progress`, `hook_response`). Fields: `HookID`, `HookName`, `HookEvent` (e.g. `"SessionStart"`), and on `hook_response`: `Output`, `Stdout`, `Stderr`, `ExitCode`, `Outcome`. |
 | `*ThinkingEvent`   | Model thinking output. Includes `Signature` for verification. `Content` may be empty while `Signature` is set — treat `Content=="" && Signature!=""` as "thinking hidden", not "no thinking". `ParentToolUseID` set when from a subagent. |
 | `*TextEvent`       | Assistant text output. `ParentToolUseID` set when from a subagent.                                                           |
 | `*TurnEvent`       | New assistant turn started. `Turn` is a 1-based counter, `ToolName` is the first tool in the turn (empty for text-only turns). Only emitted for top-level turns (subagent messages excluded). |
 | `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent. `ServerSide` is true for server-side tools (web search, code execution). `MCP` is true for MCP tool calls. |
 | `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. `ParentToolUseID` set when from a subagent. |
-| `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil on subagent completion) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `IsReplay` is true when echoed via `--replay-user-messages`. `Text()` returns concatenated text. |
+| `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil on subagent completion) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `WorkflowLaunch` (non-nil when a dynamic workflow is launched in the background) carries `RunID`, `WorkflowName`, `ScriptPath`, `TranscriptDir` and helpers for out-of-band monitoring — see [Dynamic workflows](#dynamic-workflows). `IsReplay` is true when echoed via `--replay-user-messages`. `Text()` returns concatenated text. |
 | `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string (or `"content/<type>"` for unknown content blocks), `Raw` is the full JSON. Forward-compat catch-all — also used for error fallback diagnostics on non-zero exit. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
 | `*ResultEvent`     | Session complete. Text, cost, duration, usage, `NumTurns`, `StopReason`, `StructuredOutput`, `ModelUsage` (per-model context window, token limits, web search/fetch counts), `ContextSnapshot` (per-API-call usage from last `message_start`/`message_delta`; requires `WithIncludePartialMessages`; nil otherwise). Synthesized if CLI exits cleanly without one. |
 | `*ContextManagementEvent` | Emitted when the CLI compresses or summarizes older turns to fit the context window. `Raw` contains the full JSON payload. |
+| `*ThinkingTokensEvent` | Running estimate of thinking-token usage during a turn (system subtype `thinking_tokens`). `EstimatedTokens` (cumulative) and `EstimatedTokensDelta` (increment). A progress signal, not authoritative accounting — use `ResultEvent.Usage` for final counts. |
 | `*CLIStateChangeEvent` | Activity-state transition (`idle` / `thinking` / `awaiting_tool_result`). Emitted immediately BEFORE the triggering event so consumers can flip their state before processing the event. Lets watchdogs distinguish "model generating" from "CLI running a tool" without inferring pairing from `ToolUseEvent`/`ToolResultEvent`. Backward-compatible: ignore in the type switch if unused. |
 | `*ToolProgressEvent` | Periodic heartbeat (every 30 s) while in `awaiting_tool_result`. Carries `ToolUseID`, `ToolName`, and `Elapsed` for the first pending top-level tool_use (stable across parallel tool_use calls). Pushed liveness signal so consumers don't poll `ProcessInfo()` to render "Bash running for 4m 12s". Backward-compatible: ignore in the type switch if unused. |
 | `*CLIToolProgressEvent` | Tool progress event from the CLI JSONL stream (top-level `tool_progress` type). Unlike the synthetic `ToolProgressEvent`, this comes directly from the CLI and carries `ElapsedSeconds` and optional `TaskID`. |
@@ -787,3 +849,5 @@ claudecli-go/
 - **Fork-session needs a persisted parent** — `RunBlocking` by default emits `--no-session-persistence`, so the parent must be started with `WithSessionID`, `WithResume`/`WithContinue`, or via `Connect` for `WithForkSession` to find the parent on disk.
 - **`AuthStatus` fail-close** — When the CLI exits 0 with non-JSON output, `AuthStatus` returns `AuthStateUnknown` (not `AuthStateAuthenticated`). Callers should handle this explicitly.
 - **Thinking text may be hidden** — The CLI can emit `ThinkingEvent`s with empty `Content` but a set `Signature` (the model thought, but the text was withheld). No SDK option changes this. Distinguish "thinking hidden" from "no thinking" via `Content == "" && Signature != ""`.
+- **Workflows emit two `ResultEvent`s** — A [dynamic workflow](#dynamic-workflows) run produces two result events: the first reports it launched in the background, the second carries the real answer once it completes. Consume the **last** `ResultEvent`. A workflow also does not survive its parent CLI process (the run settles at `status: "killed"`).
+- **Workflow on-disk state is an internal layout** — `WatchWorkflow`/`ReadWorkflowSnapshot` read CLI run-state files (`~/.claude/projects/.../workflows/<runId>.json`) whose paths and JSON shape are undocumented and may change across CLI versions. They parse defensively and preserve `Raw`, but treat this as best-effort. File GC/lifetime is unverified.
