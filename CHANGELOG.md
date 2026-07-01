@@ -15,6 +15,25 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`TaskEvent.IsWorkflow()` now stays correct across a task's whole lifecycle.**
+  The CLI stamps `task_type` only on the `task_started` event; the later
+  `task_progress`, `task_updated`, and `task_notification` events for the same
+  `task_id` omit it (verified against claude CLI 2.1.197). Previously `TaskType`
+  was empty on those, so `IsWorkflow()` returned `false` and `WorkflowName` was
+  blank for every workflow event after launch — including the terminal
+  `task_notification` carrying `status:"completed"`. The SDK now backfills
+  `TaskType` and `WorkflowName` onto a task's subsequent events from its
+  `task_started`, so consumers can gate on `IsWorkflow()` for progress and
+  terminal events, not only the launch. `TaskEvent.Raw` is unchanged (only the
+  typed convenience fields are populated). Ordinary `local_agent` subagents are
+  unaffected — they get their own `task_type` backfilled and `IsWorkflow()`
+  stays `false`.
+- Interactive `Connect()` sessions now emit `task_updated` as a `*TaskEvent`.
+  It was previously surfaced as an `*UnknownEvent` (the one-shot `Run()` /
+  `ParseEvents` path already handled it).
+
 ## [0.1.0] - 2026-06-29
 
 ### Added

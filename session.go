@@ -692,6 +692,7 @@ func (s *Session) readLoop() {
 	var lastStdoutErr error
 	var unknowns []*UnknownEvent
 	var turnCounter int
+	taskBackfill := newTaskTypeBackfiller()
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -748,8 +749,8 @@ func (s *Session) readLoop() {
 				})
 			case "compact_boundary":
 				pumpSend(parseCompactBoundaryEvent(&raw))
-			case "task_started", "task_progress", "task_notification":
-				pumpSend(parseTaskEvent(&raw, line))
+			case "task_started", "task_progress", "task_updated", "task_notification":
+				pumpSend(taskBackfill.apply(parseTaskEvent(&raw, line)))
 			case "hook_started", "hook_progress", "hook_response":
 				pumpSend(parseHookEvent(&raw, line))
 			case "files_persisted":

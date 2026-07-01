@@ -517,6 +517,13 @@ for event := range stream.Events() {
 }
 ```
 
+The CLI stamps `task_type` only on the `task_started` event; the later
+`task_progress`, `task_updated`, and `task_notification` events for the same
+task omit it. The SDK backfills `TaskType` and `WorkflowName` from the matching
+`task_started`, so `IsWorkflow()` and `WorkflowName` stay correct across the
+whole lifecycle — you can gate on `IsWorkflow()` for progress and the terminal
+`task_notification` too, not just the launch.
+
 ### Monitoring out-of-band
 
 The runtime also persists live run state on disk keyed by `RunID` (it survives

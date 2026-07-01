@@ -39,6 +39,7 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 	var snapshot *ContextSnapshot
 	var lastModel string
 	var turnCounter int
+	taskBackfill := newTaskTypeBackfiller()
 
 	tracker := newActivityTracker()
 	// emit wraps ch-send with activity tracking: a CLIStateChangeEvent is
@@ -91,7 +92,7 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 			case "compact_boundary":
 				emit(parseCompactBoundaryEvent(&raw))
 			case "task_started", "task_progress", "task_updated", "task_notification":
-				emit(parseTaskEvent(&raw, line))
+				emit(taskBackfill.apply(parseTaskEvent(&raw, line)))
 			case "hook_started", "hook_progress", "hook_response":
 				emit(parseHookEvent(&raw, line))
 			case "thinking_tokens":

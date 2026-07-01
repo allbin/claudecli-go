@@ -108,10 +108,15 @@ type TaskEvent struct {
 	SessionID string
 
 	// task_started
-	Description  string
-	TaskType     string // e.g. "local_agent", "local_workflow"
-	Prompt       string
-	WorkflowName string // set when TaskType == "local_workflow"
+	Description string
+	// TaskType classifies the task, e.g. "local_agent" or "local_workflow".
+	// The CLI sends it only on task_started; the SDK backfills it onto the
+	// same task's later events (see IsWorkflow).
+	TaskType string
+	Prompt   string
+	// WorkflowName is set when TaskType == "local_workflow". Like TaskType it
+	// is backfilled onto the task's later events from its task_started.
+	WorkflowName string
 
 	// task_progress
 	LastToolName string
@@ -148,6 +153,12 @@ func (e *TaskEvent) String() string {
 
 // IsWorkflow reports whether this task is a dynamic workflow run
 // (TaskType == "local_workflow") rather than an ordinary subagent.
+//
+// The CLI stamps task_type only on task_started; later task_progress,
+// task_updated, and task_notification events for the same task_id omit it.
+// The SDK backfills TaskType (and WorkflowName) onto those events from the
+// task_started of the same task_id, so IsWorkflow stays correct across the
+// whole lifecycle — including the terminal task_notification.
 func (e *TaskEvent) IsWorkflow() bool { return e.TaskType == "local_workflow" }
 
 // HookEvent is emitted when the CLI runs a configured hook (SessionStart,
