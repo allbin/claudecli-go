@@ -15,6 +15,8 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-02
+
 ### Fixed
 
 - **`TaskEvent.IsWorkflow()` now stays correct across a task's whole lifecycle.**
@@ -90,5 +92,6 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/allbin/claudecli-go/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/allbin/claudecli-go/releases/tag/v0.1.0
