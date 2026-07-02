@@ -170,7 +170,7 @@ func buildEnv(overrides map[string]string) []string {
 		env = append(env, "CLAUDE_CODE_ENTRYPOINT=sdk-go")
 	}
 	// SDK version is always set (not overridable).
-	env = append(env, "CLAUDE_AGENT_SDK_VERSION="+SDKVersion)
+	env = append(env, "CLAUDE_AGENT_SDK_VERSION="+sdkVersion())
 	return env
 }
 

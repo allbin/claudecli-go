@@ -834,7 +834,7 @@ claudecli-go/
   blocking.go    RunBlocking/RunBlockingJSON — non-streaming JSON output mode
   auth.go        AuthStatus (defensive three-state parsing), AuthLogin (BROWSER capture + localhost callback), AuthLogout, LoginProcess
   pool.go        Pool multi-session registry, FormatAgentMessage, SendAgentMessage
-  version.go     SDKVersion, MinCLIVersion, CLI version checking with semver parsing
+  version.go     sdkVersion (module version reported to CLI, build-info sourced), SDKVersion dev fallback, MinCLIVersion, CLI version checking with semver parsing
   internal.go    Stderr ring buffer, processExitError with heuristic inference, code fence stripping
   error.go       Sentinel errors (ErrInvalidRequest, ErrAuth, ErrBilling, ErrPermission, ErrNotFound, ErrRequestTooLarge, ErrRateLimit, ErrAPI, ErrOverloaded, ErrMaxTurns, ErrContextWindowExceeded), RateLimitError, MaxTurnsError, Error, UnmarshalError
 ```

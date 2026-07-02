@@ -15,6 +15,22 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-02
+
+### Changed
+
+- **`CLAUDE_AGENT_SDK_VERSION` now reports this module's own version** instead of
+  a hardcoded `"0.3.0"`. The value is read from the enclosing binary's module
+  info (`runtime/debug.ReadBuildInfo`), so consumers that import a tagged release
+  advertise their pinned version automatically. Local/dev builds fall back to the
+  `SDKVersion` placeholder, whose value changed from `"0.3.0"` to `"0.0.0-dev"`.
+  This is a telemetry/User-Agent attribution field only — the CLI does not gate
+  behavior on it (verified against claude CLI 2.1.197: the var is used solely for
+  the API User-Agent and analytics, and defaults to `"unknown"` when unset).
+  Paired with the existing `CLAUDE_CODE_ENTRYPOINT=sdk-go`, traffic is now
+  honestly attributed to this Go SDK at its real version rather than
+  impersonating the upstream Agent SDK.
+
 ## [0.1.1] - 2026-07-02
 
 ### Fixed
@@ -92,6 +108,7 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/allbin/claudecli-go/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/allbin/claudecli-go/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/allbin/claudecli-go/releases/tag/v0.1.0

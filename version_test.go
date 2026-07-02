@@ -51,3 +51,29 @@ func TestCheckCLIVersion_InvalidBinary(t *testing.T) {
 		t.Errorf("expected nil (fail-open), got %v", err)
 	}
 }
+
+func TestNormalizeVersion(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"v1.2.3", "1.2.3"},
+		{"1.2.3", "1.2.3"},
+		{"v0.0.0-20240101120000-abcdef123456", "0.0.0-20240101120000-abcdef123456"},
+		{"(devel)", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := normalizeVersion(tt.in); got != tt.want {
+			t.Errorf("normalizeVersion(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestSDKVersion_FallbackInDevBuild(t *testing.T) {
+	// Under `go test` this repo is the main module with version "(devel)", so
+	// sdkVersion cannot resolve a real version and falls back to SDKVersion.
+	if got := sdkVersion(); got != SDKVersion {
+		t.Errorf("sdkVersion() = %q, want dev fallback %q", got, SDKVersion)
+	}
+	if SDKVersion == "" {
+		t.Error("SDKVersion fallback must be non-empty; the CLI env var must never be blank")
+	}
+}
