@@ -111,7 +111,7 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 	parsed := make(chan Event, 64)
 	var sawResult bool
 	var accText []string
-	var lastStdoutErr error    // last classified error from stdout "error" events
+	var lastStdoutErr error      // last classified error from stdout "error" events
 	var unknowns []*UnknownEvent // unrecognized event types for fallback diagnostics
 	parseDone := make(chan struct{})
 	go func() {
@@ -288,7 +288,7 @@ type discardHandler struct{}
 func (discardHandler) Enabled(context.Context, slog.Level) bool  { return false }
 func (discardHandler) Handle(context.Context, slog.Record) error { return nil }
 func (d discardHandler) WithAttrs([]slog.Attr) slog.Handler      { return d }
-func (d discardHandler) WithGroup(string) slog.Handler            { return d }
+func (d discardHandler) WithGroup(string) slog.Handler           { return d }
 
 // binaryPath returns the CLI binary path from the executor, falling back to "claude".
 func (c *Client) binaryPath() string {

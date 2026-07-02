@@ -470,17 +470,17 @@ type rawEvent struct {
 	IsApiErrorMessage bool `json:"isApiErrorMessage,omitempty"`
 
 	// result event
-	Result           string          `json:"result,omitempty"`
-	DurationMS       float64         `json:"duration_ms,omitempty"`
-	CostUSD          float64         `json:"total_cost_usd,omitempty"`
-	StopReason       string          `json:"stop_reason,omitempty"`
-	StructuredOutput json.RawMessage `json:"structured_output,omitempty"`
-	NumTurns         int             `json:"num_turns,omitempty"`
-	IsError          bool            `json:"is_error,omitempty"`
-	TerminalReason   string          `json:"terminal_reason,omitempty"`
-	Errors           []string        `json:"errors,omitempty"`
-	Usage            rawUsage                   `json:"usage,omitempty"`
-	ModelUsage       map[string]rawModelUsage   `json:"modelUsage,omitempty"`
+	Result           string                   `json:"result,omitempty"`
+	DurationMS       float64                  `json:"duration_ms,omitempty"`
+	CostUSD          float64                  `json:"total_cost_usd,omitempty"`
+	StopReason       string                   `json:"stop_reason,omitempty"`
+	StructuredOutput json.RawMessage          `json:"structured_output,omitempty"`
+	NumTurns         int                      `json:"num_turns,omitempty"`
+	IsError          bool                     `json:"is_error,omitempty"`
+	TerminalReason   string                   `json:"terminal_reason,omitempty"`
+	Errors           []string                 `json:"errors,omitempty"`
+	Usage            rawUsage                 `json:"usage,omitempty"`
+	ModelUsage       map[string]rawModelUsage `json:"modelUsage,omitempty"`
 
 	// rate_limit_event
 	RateLimitInfo rawRateLimitInfo `json:"rate_limit_info,omitempty"`
@@ -676,7 +676,7 @@ type rawInnerEventType struct {
 
 type rawMessageStart struct {
 	Message struct {
-		Model string       `json:"model"`
+		Model string        `json:"model"`
 		Usage rawInnerUsage `json:"usage"`
 	} `json:"message"`
 }

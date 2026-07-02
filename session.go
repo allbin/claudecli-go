@@ -71,8 +71,8 @@ type Session struct {
 	// readLoop goroutine (start/stop are driven by transition observations,
 	// not user calls). Interval override is atomic so tests can adjust it
 	// between Connect() and the first tool_use.
-	toolProgressStop         chan struct{}
-	toolProgressIntervalNs   atomic.Int64
+	toolProgressStop       chan struct{}
+	toolProgressIntervalNs atomic.Int64
 }
 
 // ProcessInfo reports process-level state for watchdogs and health monitoring.
@@ -384,7 +384,7 @@ func (s *Session) ReconnectMCPServer(serverName string) error {
 func (s *Session) ToggleMCPServer(serverName string, enabled bool) error {
 	return s.sendControlRequest("mcp_toggle", map[string]any{
 		"serverName": serverName,
-		"enabled":     enabled,
+		"enabled":    enabled,
 	})
 }
 

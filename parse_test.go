@@ -20,7 +20,7 @@ func collectEvents(t *testing.T, path string) []Event {
 	ch := make(chan Event, 64)
 	go func() {
 		defer close(ch)
-		ParseEvents(context.Background(),f, ch)
+		ParseEvents(context.Background(), f, ch)
 	}()
 
 	var events []Event
@@ -184,7 +184,7 @@ also broken {{{
 
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -229,7 +229,7 @@ func TestParseToolResultArrayContent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -273,7 +273,7 @@ func TestParseToolResultStringContent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -313,7 +313,7 @@ func TestParseToolResultMixedContent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -376,7 +376,7 @@ func TestParseControlRequest(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -409,7 +409,7 @@ func TestParseStreamEvent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -442,7 +442,7 @@ func TestParseReturnsAfterResult(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -515,7 +515,7 @@ func TestParseResultStopReason(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -546,7 +546,7 @@ func TestParseResultStructuredOutput(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -584,7 +584,7 @@ func TestParseRateLimitEventNestedFields(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -623,7 +623,7 @@ func TestParseRateLimitEventAllFields(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -679,7 +679,7 @@ func TestParseRateLimitEventMinimal(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -709,7 +709,7 @@ func TestParseThinkingSignature(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -742,7 +742,7 @@ func TestParseCompactStatusEvent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -770,7 +770,7 @@ func TestParseCompactStatusNull(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -795,7 +795,7 @@ func TestParseCompactBoundaryEvent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -829,7 +829,7 @@ func TestParseSystemInitSubtype(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -854,7 +854,7 @@ func TestParseSystemNoSubtype(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -883,7 +883,7 @@ func TestParseCompactionSequence(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -920,7 +920,7 @@ func TestParseUnknownSystemSubtype(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -949,7 +949,7 @@ func TestParseContextManagementEvent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -988,7 +988,7 @@ func TestParseContextManagementNull(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1007,7 +1007,7 @@ func TestParseContextManagementAbsent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1025,7 +1025,7 @@ func TestParseErrorEvent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1071,7 +1071,7 @@ func TestParseErrorEventClassified(t *testing.T) {
 `
 			ch := make(chan Event, 64)
 			go func() {
-				ParseEvents(context.Background(),strings.NewReader(input), ch)
+				ParseEvents(context.Background(), strings.NewReader(input), ch)
 				close(ch)
 			}()
 
@@ -1103,7 +1103,7 @@ func TestParseErrorEventMinimal(t *testing.T) {
 	for i, input := range inputs {
 		ch := make(chan Event, 64)
 		go func() {
-			ParseEvents(context.Background(),strings.NewReader(input), ch)
+			ParseEvents(context.Background(), strings.NewReader(input), ch)
 			close(ch)
 		}()
 
@@ -1169,7 +1169,7 @@ func TestContextSnapshotFromStreamEvents(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1210,7 +1210,7 @@ func TestContextSnapshotNilWithoutStreamEvents(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1238,7 +1238,7 @@ func TestContextSnapshotResetOnMessageStart(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1277,7 +1277,7 @@ func TestContextSnapshotMessageStartOnly(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1313,7 +1313,7 @@ func TestContextSnapshotModelMismatch(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1348,7 +1348,7 @@ func TestContextSnapshotModelSuffixMatch(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1384,7 +1384,7 @@ func TestParseUnknownEventType(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1460,7 +1460,7 @@ func TestParseUserEventToolResult(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1512,7 +1512,7 @@ func TestParseUserEventSubagentPrompt(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1543,7 +1543,7 @@ func TestParseUserEventAgentCompletion(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1603,7 +1603,7 @@ func TestParseTaskEvents(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1746,7 +1746,7 @@ func TestParseParentToolUseID(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1792,7 +1792,7 @@ func TestParseToolResultFallbackContent(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1822,7 +1822,7 @@ func TestParseStreamEventMessageDelta(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1857,7 +1857,7 @@ func TestParseStreamEventDeltaWithoutStart(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1883,7 +1883,7 @@ func TestParseUserEventReplay(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 
@@ -1917,7 +1917,7 @@ func TestParseUserEventReplayFalseByDefault(t *testing.T) {
 `
 	ch := make(chan Event, 64)
 	go func() {
-		ParseEvents(context.Background(),strings.NewReader(input), ch)
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
 		close(ch)
 	}()
 

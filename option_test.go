@@ -317,9 +317,9 @@ func TestBuildArgsBare(t *testing.T) {
 func TestBuildArgsBareInAllBuilders(t *testing.T) {
 	opts := resolveOptions(nil, []Option{WithBare()})
 	for name, args := range map[string][]string{
-		"buildArgs":        opts.buildArgs(),
+		"buildArgs":         opts.buildArgs(),
 		"buildBlockingArgs": opts.buildBlockingArgs(),
-		"buildSessionArgs": opts.buildSessionArgs(),
+		"buildSessionArgs":  opts.buildSessionArgs(),
 	} {
 		if !slices.Contains(args, "--bare") {
 			t.Errorf("--bare missing from %s", name)

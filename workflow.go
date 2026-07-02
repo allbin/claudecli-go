@@ -96,8 +96,8 @@ func (l *WorkflowLaunch) JournalPath() string {
 // entries describe a single subagent. Unknown fields are ignored; consult the
 // owning event's or snapshot's raw JSON for forward compatibility.
 type WorkflowProgressEntry struct {
-	Type string `json:"type"` // "workflow_agent" or "workflow_phase"
-	Index int   `json:"index"`
+	Type  string `json:"type"` // "workflow_agent" or "workflow_phase"
+	Index int    `json:"index"`
 
 	// workflow_phase
 	Title string `json:"title,omitempty"`

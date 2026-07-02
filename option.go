@@ -155,9 +155,9 @@ func WithSettings(s string) Option { return func(o *options) { o.settings = s } 
 func WithSettingSources(sources ...string) Option {
 	return func(o *options) { o.settingSources = sources }
 }
-func WithPluginDirs(dirs ...string) Option        { return func(o *options) { o.pluginDirs = dirs } }
-func WithWorkDir(dir string) Option               { return func(o *options) { o.workDir = dir } }
-func WithEffort(level EffortLevel) Option         { return func(o *options) { o.effort = level } }
+func WithPluginDirs(dirs ...string) Option { return func(o *options) { o.pluginDirs = dirs } }
+func WithWorkDir(dir string) Option        { return func(o *options) { o.workDir = dir } }
+func WithEffort(level EffortLevel) Option  { return func(o *options) { o.effort = level } }
 
 // WithThinking configures extended thinking mode directly, emitting the
 // CLI's --thinking or --max-thinking-tokens flag. Use ThinkingAdaptive{},
@@ -175,8 +175,9 @@ func WithThinking(cfg ThinkingConfig) Option {
 func WithTaskBudget(totalTokens int) Option {
 	return func(o *options) { o.taskBudget = totalTokens }
 }
-func WithEnv(env map[string]string) Option        { return func(o *options) { o.env = env } }
-func WithResume(sessionID string) Option          { return func(o *options) { o.resume = sessionID } }
+func WithEnv(env map[string]string) Option { return func(o *options) { o.env = env } }
+func WithResume(sessionID string) Option   { return func(o *options) { o.resume = sessionID } }
+
 // WithExtraArgs passes additional CLI flags. Keys are flag names without the
 // leading "--". Flags managed by the SDK (print, output-format, input-format,
 // verbose, model) are rejected with a panic to prevent conflicting arguments.
@@ -207,14 +208,14 @@ func WithReplayUserMessages() Option {
 func WithDangerouslySkipPermissions() Option {
 	return func(o *options) { o.dangerouslySkipPerms = true }
 }
-func WithSessionName(name string) Option { return func(o *options) { o.sessionName = name } }
-func WithDebugFile(path string) Option   { return func(o *options) { o.debugFile = path } }
-func WithDisableSlashCommands() Option   { return func(o *options) { o.disableSlashCommands = true } }
-func WithUser(user string) Option                 { return func(o *options) { o.user = user } }
-func WithTimeout(d time.Duration) Option          { return func(o *options) { o.timeout = d } }
-func WithStderrCallback(fn func(string)) Option   { return func(o *options) { o.stderrCallback = fn } }
-func WithFileCheckpointing() Option               { return func(o *options) { o.enableFileCheckpointing = true } }
-func WithSkipVersionCheck() Option                { return func(o *options) { o.skipVersionCheck = true } }
+func WithSessionName(name string) Option        { return func(o *options) { o.sessionName = name } }
+func WithDebugFile(path string) Option          { return func(o *options) { o.debugFile = path } }
+func WithDisableSlashCommands() Option          { return func(o *options) { o.disableSlashCommands = true } }
+func WithUser(user string) Option               { return func(o *options) { o.user = user } }
+func WithTimeout(d time.Duration) Option        { return func(o *options) { o.timeout = d } }
+func WithStderrCallback(fn func(string)) Option { return func(o *options) { o.stderrCallback = fn } }
+func WithFileCheckpointing() Option             { return func(o *options) { o.enableFileCheckpointing = true } }
+func WithSkipVersionCheck() Option              { return func(o *options) { o.skipVersionCheck = true } }
 
 // WithCanUseTool registers a callback for tool permission requests.
 // Only effective with Connect() sessions.

@@ -675,8 +675,8 @@ func (e *CLIToolProgressEvent) String() string {
 // the tool did. PrecedingToolUseIDs lists the tool_use IDs that this summary
 // covers.
 type ToolUseSummaryEvent struct {
-	Summary              string
-	PrecedingToolUseIDs  []string
+	Summary             string
+	PrecedingToolUseIDs []string
 }
 
 func (*ToolUseSummaryEvent) event() {}

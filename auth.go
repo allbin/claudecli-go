@@ -37,8 +37,8 @@ type AuthStatusResult struct {
 	Message string `json:"-"`
 
 	LoggedIn         bool   `json:"loggedIn"`
-	AuthMethod       string `json:"authMethod,omitempty"`       // e.g. "claude.ai", "api-key"
-	APIProvider      string `json:"apiProvider,omitempty"`       // e.g. "firstParty", "bedrock", "vertex"
+	AuthMethod       string `json:"authMethod,omitempty"`  // e.g. "claude.ai", "api-key"
+	APIProvider      string `json:"apiProvider,omitempty"` // e.g. "firstParty", "bedrock", "vertex"
 	Email            string `json:"email,omitempty"`
 	OrgID            string `json:"orgId,omitempty"`
 	OrgName          string `json:"orgName,omitempty"`
@@ -50,7 +50,7 @@ type AuthMethod string
 
 const (
 	AuthMethodClaudeAI AuthMethod = "claudeai" // Claude subscription (default)
-	AuthMethodConsole  AuthMethod = "console"   // Anthropic Console (API billing)
+	AuthMethodConsole  AuthMethod = "console"  // Anthropic Console (API billing)
 )
 
 // authLoginConfig holds resolved login options.
@@ -642,4 +642,3 @@ func waitForAutoURL(urlFile string, timeout time.Duration) (string, error) {
 	}
 	return "", fmt.Errorf("timed out waiting for browser URL capture")
 }
-
