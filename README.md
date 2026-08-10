@@ -320,7 +320,41 @@ Session methods:
 - `StopTask(taskID)` — stop a running task
 - `GetMCPStatus()` — query MCP server status (fire-and-forget)
 - `QueryMCPStatus()` — query MCP server status, returns `[]MCPServerStatus`
+- `LastEventAt()` — arrival stamp of the most recent event, including synthetic ones (`ToolProgressEvent`, `CLIStateChangeEvent`, `StderrEvent`). A stronger hang signal for watchdogs than `ProcessInfo().LastStdoutAt`, which does not move during long tool executions
 - `Close()` — terminate session
+
+### Query-scoped events (QueryCtx)
+
+`Events()` is session-scoped: events keep flowing into one shared channel whether anyone reads or not. A consumer that reads per-query (start query → read until result → stop reading) will find the *previous* query's buffered `ResultEvent` at the top of the channel on its next query — the classic off-by-one answer bug. `QueryCtx` eliminates this by correlating events to queries at arrival time:
+
+```go
+handle, err := session.QueryCtx(ctx, "What is Go?")
+if err != nil { ... }
+
+for event := range handle.Events() { // only THIS query's events
+    switch e := event.(type) {
+    case *claudecli.TextEvent:
+        fmt.Print(e.Content)
+    case *claudecli.ResultEvent:
+        fmt.Printf("\nDone: $%.4f\n", e.CostUSD)
+    }
+}
+
+// Or: result, err := handle.Wait(ctx)
+```
+
+Every event is stamped on arrival with the query generation that was active when it arrived (terminal events clear the generation). A dedicated router delivers events to the active query's bounded mailbox, and everything else — events before the first query, between queries, or after a handle was abandoned — to a bounded orphan mailbox. The router never blocks the stdout read loop: both mailboxes drop oldest first under overflow (see `RouterStats`).
+
+- `QueryCtx(ctx, prompt)` / `QueryCtxWithContent(ctx, prompt, blocks...)` — like `Query`/`QueryWithContent` but returns a `*QueryHandle`. First call switches the session into routed mode
+- `EnableRouting()` — switch to routed mode explicitly (idempotent; implied by first `QueryCtx`). After this, `Session.Events()` no longer delivers — consume via handles + `DrainOrphans` and do not mix with `Query()`/`Events()`
+- `DrainOrphans() []OrphanEvent` — fetch and clear the orphan mailbox. Each entry carries `Event`, `ArrivedAt` and `ActiveQueryAtArrival` (0 = none). Call before each new query; a late `ResultEvent` from an interrupted query shows up here and should be delivered separately, not thrown away
+- `RouterStats()` — drop counters for the bounded mailboxes
+- `QueryHandle.Events()` — the query's private channel; closed on session end, `Detach()`, or when a newer `QueryCtx` supersedes it (buffered events remain drainable after close)
+- `QueryHandle.Wait(ctx)` — consume until this query's terminal event (`ResultEvent`, fatal `ErrorEvent`, `CLIExitEvent`)
+- `QueryHandle.Detach()` — stop delivery when abandoning a query (supersede/interrupt); later events for it land in the orphan mailbox tagged with `Gen()`
+- `QueryHandle.Gen()` / `Dropped()` — generation for orphan correlation; drop counter for this mailbox
+
+A `QueryCtx` whose stdin write fails marks the session `StateFailed` (stdin is poisoned — no events will ever arrive) so callers can recycle it instead of hanging in `StateRunning`.
 
 ### Mid-turn message injection
 
@@ -748,6 +782,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithUserInput(UserInputFunc)`       | Dedicated callback for `AskUserQuestion` tool requests (sessions only).                               |
 | `WithControlTimeout(time.Duration)` | Timeout for control protocol round-trips (default: 30s). Sessions only.                               |
 | `WithInitTimeout(time.Duration)`   | Timeout for the initialize handshake (default: 60s). Increase if MCP servers are slow to connect. Sessions only. |
+| `WithStdinWriteTimeout(time.Duration)` | Deadline for individual stdin writes (default: 30s). A write that blocks past it means the CLI stopped reading stdin: the write fails, stdin is closed permanently and the session must be recycled. Keeps `Close()` from deadlocking against a blocked write. Sessions only. |
 | `WithPermissionPromptToolName(string)` | Custom permission prompt tool name (default: `"stdio"`). Sessions only.                             |
 | `WithEnv(map[string]string)`         | Additional environment variables. Can override `CLAUDE_CODE_ENTRYPOINT` (default: `"sdk-go"`).        |
 | `WithExtraArgs(map[string]string)`   | Arbitrary `--key value` flags for forward compatibility. Empty value emits flag only.                  |

@@ -240,19 +240,21 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 	}
 
 	session := &Session{
-		proc:           proc,
-		events:         make(chan Event, 64),
-		done:           make(chan struct{}),
-		ctx:            ctx,
-		cancel:         cancel,
-		canUseTool:     resolved.canUseTool,
-		userInput:      resolved.userInput,
-		controlTimeout: controlTimeout,
-		initTimeout:    initTimeout,
-		resultReady:    make(chan struct{}),
-		readyCh:        make(chan struct{}),
-		activity:       newActivityTracker(),
-		pumpClosed:     make(chan struct{}),
+		proc:              proc,
+		events:            make(chan Event, 64),
+		done:              make(chan struct{}),
+		ctx:               ctx,
+		cancel:            cancel,
+		canUseTool:        resolved.canUseTool,
+		userInput:         resolved.userInput,
+		controlTimeout:    controlTimeout,
+		initTimeout:       initTimeout,
+		stdinWriteTimeout: resolved.stdinWriteTimeout,
+		resultReady:       make(chan struct{}),
+		readyCh:           make(chan struct{}),
+		activity:          newActivityTracker(),
+		pumpClosed:        make(chan struct{}),
+		routedCh:          make(chan struct{}),
 	}
 
 	go session.readLoop()

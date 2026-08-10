@@ -92,10 +92,11 @@ type options struct {
 	promptSuggestions   bool
 
 	// session callbacks
-	canUseTool     ToolPermissionFunc
-	userInput      UserInputFunc
-	controlTimeout time.Duration // timeout for control request responses
-	initTimeout    time.Duration // timeout for initialize handshake (includes MCP startup)
+	canUseTool        ToolPermissionFunc
+	userInput         UserInputFunc
+	controlTimeout    time.Duration // timeout for control request responses
+	initTimeout       time.Duration // timeout for initialize handshake (includes MCP startup)
+	stdinWriteTimeout time.Duration // deadline for individual stdin writes (session)
 
 	// version check
 	skipVersionCheck bool
@@ -320,6 +321,16 @@ func WithControlTimeout(d time.Duration) Option {
 // Only effective with Connect() sessions.
 func WithInitTimeout(d time.Duration) Option {
 	return func(o *options) { o.initTimeout = d }
+}
+
+// WithStdinWriteTimeout sets the deadline for individual stdin writes to the
+// CLI process. A write that blocks longer than this means the CLI has stopped
+// reading stdin (hung child, full pipe): the write fails, stdin is closed and
+// the session must be recycled. Without a deadline a blocked write holds the
+// session's write lock forever and Close() deadlocks against it.
+// Defaults to 30s. Only effective with Connect() sessions.
+func WithStdinWriteTimeout(d time.Duration) Option {
+	return func(o *options) { o.stdinWriteTimeout = d }
 }
 
 // WithIncludePartialMessages enables partial message chunks as they arrive.

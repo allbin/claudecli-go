@@ -22,6 +22,7 @@ var errSessionEnded = errors.New("session ended")
 const defaultControlTimeout = 30 * time.Second
 const defaultInitTimeout = 60 * time.Second
 const defaultToolProgressInterval = 30 * time.Second
+const defaultStdinWriteTimeout = 30 * time.Second
 
 // Session represents a long-lived interactive Claude CLI session with
 // bidirectional control protocol support.
@@ -46,7 +47,7 @@ type Session struct {
 	initTimeout    time.Duration
 	controlWg      sync.WaitGroup // tracks in-flight handleControlRequest goroutines
 	pump           chan Event     // set by readLoop; sendEvent writes here for ordering
-	pumpClosed     chan struct{}  // closed by readLoop defer BEFORE close(pump) — sendEvent uses to avoid writing to a closed pump
+	pumpClosed     chan struct{}  // closed by readLoop defer — EOF-signal till pumpgoroutinen och stopp för sendEvent. Pump-kanalen close():as ALDRIG: en samtidig sendEvent (ticker, emitQueryActivity) får aldrig kunna panika på send-on-closed.
 
 	// callbacks
 	canUseTool ToolPermissionFunc
@@ -73,6 +74,26 @@ type Session struct {
 	// between Connect() and the first tool_use.
 	toolProgressStop       chan struct{}
 	toolProgressIntervalNs atomic.Int64
+
+	// Query↔svar-korrelation (se router.go). Varje event ankomststämplas
+	// (stamp) med tidpunkt + aktiv query-generation. activeGen är den
+	// generation som var aktiv när eventet uppstod (0 = ingen); nollställs
+	// när ett terminalt event (ResultEvent/fatal ErrorEvent/CLIExitEvent)
+	// stämplas — därmed kan ett buffrat äldre resultat aldrig attribueras
+	// till nästa query.
+	activeGen     atomic.Uint64
+	genCounter    atomic.Uint64 // löpnummer för query-generationer
+	lastEventAtNs atomic.Int64  // unix-nanos för senaste ankomststämpel (inkl. syntetiska events)
+
+	// Event-routing (opt-in via EnableRouting/QueryCtx). När aktiverad
+	// levererar pumpen till router-mailboxar i stället för s.events, och
+	// blockerar aldrig — se router.go.
+	routed     atomic.Bool
+	routedCh   chan struct{} // stängs när routing aktiveras; väcker en pump som är blockerad mot s.events
+	routerOnce sync.Once
+	router     *eventRouter
+
+	stdinWriteTimeout time.Duration // deadline för stdin-skrivningar (default 30s)
 }
 
 // ProcessInfo reports process-level state for watchdogs and health monitoring.
@@ -82,6 +103,10 @@ type ProcessInfo struct {
 	// LastStdoutAt is the time the CLI last wrote a line to stdout. Zero
 	// until the first line is received.
 	LastStdoutAt time.Time
+	// LastEventAt is the arrival stamp of the most recent event, including
+	// synthetic ones (ToolProgressEvent, CLIStateChangeEvent, StderrEvent).
+	// Zero until the first event. See Session.LastEventAt.
+	LastEventAt time.Time
 	// ActivityState is the derived activity state (idle, thinking, awaiting_tool_result).
 	ActivityState ActivityState
 	// Lifecycle is the session lifecycle state.
@@ -95,6 +120,7 @@ type ProcessInfo struct {
 // stalls without having to infer state from event pairings.
 func (s *Session) ProcessInfo() ProcessInfo {
 	nanos := s.lastStdoutAt.Load()
+	lastEvent := s.LastEventAt()
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	var last time.Time
@@ -103,10 +129,54 @@ func (s *Session) ProcessInfo() ProcessInfo {
 	}
 	return ProcessInfo{
 		LastStdoutAt:  last,
+		LastEventAt:   lastEvent,
 		ActivityState: s.activity.State(),
 		Lifecycle:     s.state,
 		SessionID:     s.sessionID,
 	}
+}
+
+// LastEventAt returns the arrival stamp of the most recent event — parsed
+// stdout events as well as synthetic ones (ToolProgressEvent,
+// CLIStateChangeEvent, StderrEvent). Zero until the first event. Watchdogs
+// can compare this against the wall clock to detect a fully stalled child:
+// unlike LastStdoutAt it also moves while a long tool execution is in
+// progress (the ToolProgressEvent ticker), so "no events at all" is a
+// stronger hang signal than "no stdout".
+func (s *Session) LastEventAt() time.Time {
+	nanos := s.lastEventAtNs.Load()
+	if nanos == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanos)
+}
+
+// stamp ankomststämplar ett event: tidpunkt + vilken query-generation som var
+// aktiv när eventet uppstod. MÅSTE anropas vid produktion (enqueue till
+// pumpen), inte vid konsumtion — annars kan ett buffrat äldre event stämplas
+// med en senare querys generation, vilket är exakt rotorsaken bakom att ett
+// gammalt ResultEvent kunde levereras som svar på nästa fråga.
+//
+// Terminala events (ResultEvent, fatal ErrorEvent, CLIExitEvent) nollställer
+// den aktiva generationen: events som anländer efteråt tillhör ingen query
+// och hamnar i orphan-mailboxen i routat läge.
+func (s *Session) stamp(ev Event) *stampedEvent {
+	now := time.Now()
+	if _, isBarrier := ev.(*routerBarrierEvent); !isBarrier {
+		s.lastEventAtNs.Store(now.UnixNano())
+	}
+	gen := s.activeGen.Load()
+	switch e := ev.(type) {
+	case *ResultEvent:
+		s.activeGen.Store(0)
+	case *ErrorEvent:
+		if e.Fatal {
+			s.activeGen.Store(0)
+		}
+	case *CLIExitEvent:
+		s.activeGen.Store(0)
+	}
+	return &stampedEvent{ev: ev, at: now, gen: gen}
 }
 
 // ActivityState returns the current activity state.
@@ -157,6 +227,22 @@ func (s *Session) prepareQuery() error {
 	s.resultReady = make(chan struct{})
 	s.resultCloseOnce = sync.Once{}
 	return nil
+}
+
+// failQuery marks the session failed after a query-submission error.
+// Används av QueryCtx när stdin-skrivningen misslyckas: stdin är då förbrukad
+// (timeout/stängd) och inga events kommer någonsin — utan detta fastnar
+// state-maskinen i StateRunning och alla efterföljande queries får
+// "query already in progress" i all evighet (rotorsak B, hängd-child-fallet).
+func (s *Session) failQuery(err error) {
+	s.activeGen.Store(0)
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	s.state = StateFailed
+	if s.err == nil {
+		s.err = err
+	}
+	s.resultCloseOnce.Do(func() { close(s.resultReady) })
 }
 
 // validateSendable checks that the session can accept a message.
@@ -326,7 +412,11 @@ func (s *Session) Ping(timeout time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("ping: marshal: %w", err)
 	}
-	if err := s.writeStdin(append(raw, '\n')); err != nil {
+	// Bounded write with the caller's timeout: a wedged stdin pipe (child
+	// stopped reading) previously blocked Ping forever inside writeStdin,
+	// making the watchdog itself hang. Now the ping fails within ~2x timeout
+	// worst case (write deadline + response deadline).
+	if err := s.writeStdinTimeout(append(raw, '\n'), timeout); err != nil {
 		return fmt.Errorf("ping: write: %w", err)
 	}
 
@@ -521,8 +611,31 @@ func (s *Session) Close() error {
 	return stdinErr
 }
 
-// writeStdin writes data to the CLI's stdin, protected by mutex.
+// writeStdin writes data to the CLI's stdin, protected by mutex, with the
+// session's default write deadline.
 func (s *Session) writeStdin(data []byte) error {
+	return s.writeStdinTimeout(data, 0)
+}
+
+// writeStdinTimeout writes data to the CLI's stdin with a deadline. En
+// blockerad skrivning (hängd child som slutat läsa stdin → full pipe) höll
+// tidigare s.mu för evigt, vilket deadlockade Close() som också tar s.mu.
+// Skrivningen görs därför i en egen goroutine och överges vid deadline.
+//
+// Vid timeout stängs stdin PERMANENT: den fastnade skrivningen får aldrig
+// släppas lös senare och interfoliera byte med nya meddelanden (JSONL-
+// korruption). Close() på pipen väcker den blockerade Write-goroutinen
+// (io.Pipe och OS-pipes avbryter blockerade skrivningar vid Close).
+// En timeout betyder alltså att sessionen är förbrukad och måste bytas ut.
+//
+// A zero timeout uses the session's configured stdin write timeout.
+func (s *Session) writeStdinTimeout(data []byte, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = s.stdinWriteTimeout
+	}
+	if timeout <= 0 {
+		timeout = defaultStdinWriteTimeout
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.stdinClosed {
@@ -531,11 +644,29 @@ func (s *Session) writeStdin(data []byte) error {
 	if s.proc.Stdin == nil {
 		return fmt.Errorf("stdin closed")
 	}
-	_, err := s.proc.Stdin.Write(data)
-	if err != nil {
+	w := s.proc.Stdin
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.Write(data)
+		done <- err // buffrad — goroutinen läcker inte om ingen läser
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			s.stdinClosed = true
+		}
+		return err
+	case <-timer.C:
 		s.stdinClosed = true
+		w.Close()
+		return fmt.Errorf("stdin write timeout after %s (CLI is not reading stdin)", timeout)
+	case <-s.ctx.Done():
+		s.stdinClosed = true
+		w.Close()
+		return fmt.Errorf("stdin write aborted: %w", s.ctx.Err())
 	}
-	return err
 }
 
 // sendControlRequest sends a control request and waits for the CLI's response.
@@ -648,10 +779,49 @@ func (s *Session) readLoop() {
 	pumpDone := make(chan struct{})
 	go func() {
 		defer close(pumpDone)
-		for ev := range pump {
+		// deliver stämplar (om inte redan gjort vid enqueue) och levererar.
+		// Events från readLoop/sendEvent är stämplade vid enqueue (korrekt
+		// generation garanterad); bara scanStderr-events anländer ostämplade
+		// och stämplas här — stderr-brus är inte attributions-kritiskt.
+		deliver := func(ev Event) {
+			sev, isStamped := ev.(*stampedEvent)
+			if !isStamped {
+				sev = s.stamp(ev)
+			}
+			if s.routed.Load() {
+				// Routat läge: leverera till query-mailbox/orphans.
+				// Blockerar aldrig (bounded + drop-oldest) — en långsam
+				// konsument kan inte proppa igen pumpen, readLoop eller i
+				// förlängningen childens stdout-pipe.
+				s.routeStamped(sev)
+				return
+			}
 			select {
-			case s.events <- ev:
+			case s.events <- sev.ev:
+			case <-s.routedCh:
+				// Routing aktiverades medan vi var blockerade mot en
+				// okonsumerad s.events — leverera via routern i stället.
+				s.routeStamped(sev)
 			case <-s.ctx.Done():
+			}
+		}
+		// Pump-kanalen stängs aldrig (samtidiga sendEvent får inte kunna
+		// panika på send-on-closed). EOF signaleras via pumpClosed; därefter
+		// dräneras kvarvarande buffrade events så inget som hann skickas
+		// före stoppet tappas (t.ex. den avslutande fatala ErrorEventen).
+		for {
+			select {
+			case ev := <-pump:
+				deliver(ev)
+			case <-s.pumpClosed:
+				for {
+					select {
+					case ev := <-pump:
+						deliver(ev)
+					default:
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -661,57 +831,75 @@ func (s *Session) readLoop() {
 	// ctx.Done early-out, so context-canceled exits still surface a reason.
 	var exitEv *CLIExitEvent
 	defer func() {
+		// pumpClosed är både stoppsignal till sendEvent och EOF till
+		// pumpgoroutinen (som dränerar bufferten innan den avslutar).
+		// pump-kanalen stängs medvetet aldrig — se fältkommentaren.
 		close(s.pumpClosed)
-		close(pump)
 		<-pumpDone
 		if exitEv != nil {
-			// Non-blocking first: succeeds immediately when the consumer
-			// is draining (the common case on a 64-buffer channel).
-			// Falls back to a short blocking wait so a momentarily-slow
-			// consumer still sees the event without a long Close() stall
-			// when one has truly abandoned the channel.
-			select {
-			case s.events <- exitEv:
-			default:
-				timer := time.NewTimer(250 * time.Millisecond)
+			sev := s.stamp(exitEv)
+			if s.routed.Load() {
+				// Routat läge: leverera exit-eventet till aktiv query
+				// (dess konsument ser varför sessionen dog) eller orphans.
+				// Pumpen är död här, så direktanropet kappkör inte med den.
+				s.routeStamped(sev)
+			} else {
+				// Non-blocking first: succeeds immediately when the consumer
+				// is draining (the common case on a 64-buffer channel).
+				// Falls back to a short blocking wait so a momentarily-slow
+				// consumer still sees the event without a long Close() stall
+				// when one has truly abandoned the channel.
 				select {
 				case s.events <- exitEv:
-				case <-timer.C:
+				default:
+					timer := time.NewTimer(250 * time.Millisecond)
+					select {
+					case s.events <- exitEv:
+					case <-timer.C:
+					}
+					timer.Stop()
 				}
-				timer.Stop()
 			}
 		}
+		// Stäng aktiv query-mailbox (om routing är på) så handtags-
+		// konsumenter terminerar. No-op annars.
+		s.shutdownRouter()
 		close(s.events)
 	}()
-	// Defer order (LIFO): stopToolProgressTicker runs before the pump is
-	// closed so the ticker goroutine exits before pump writes would drop.
+	// Defer order (LIFO): stopToolProgressTicker runs before pumpClosed is
+	// closed so the ticker goroutine is signaled to stop before event
+	// delivery shuts down (late ticker sendEvents are dropped harmlessly).
 	defer s.stopToolProgressTicker()
 
-	pumpSendRaw := func(ev Event) {
+	pumpSendRaw := func(sev *stampedEvent) {
 		select {
-		case pump <- ev:
+		case pump <- sev:
 		case <-s.ctx.Done():
 		}
 	}
-	// pumpSend emits a CLIStateChangeEvent BEFORE ev when the tracker
-	// detects a transition, so consumers see state changes ahead of the
-	// event that triggered them. Transitions into/out of
+	// pumpSendStamped emits a CLIStateChangeEvent BEFORE the event when the
+	// tracker detects a transition, so consumers see state changes ahead of
+	// the event that triggered them. Transitions into/out of
 	// ActivityAwaitingToolResult also start/stop the ToolProgressEvent
 	// ticker here so its lifetime mirrors the state machine exactly.
-	pumpSend := func(ev Event) {
+	// Transitionen får samma ankomststämpel (tid + generation) som det
+	// utlösande eventet, så den attribueras till samma query.
+	pumpSendStamped := func(sev *stampedEvent) {
 		s.stateMu.Lock()
-		transition := s.activity.observe(ev)
+		transition := s.activity.observe(sev.ev)
 		s.stateMu.Unlock()
 		if transition != nil {
-			pumpSendRaw(transition)
+			pumpSendRaw(&stampedEvent{ev: transition, at: sev.at, gen: sev.gen})
 			if transition.State == ActivityAwaitingToolResult {
 				s.startToolProgressTicker()
 			} else {
 				s.stopToolProgressTicker()
 			}
 		}
-		pumpSendRaw(ev)
+		pumpSendRaw(sev)
 	}
+	// pumpSend stämplar vid enqueue — ankomstpunkten för parsade events.
+	pumpSend := func(ev Event) { pumpSendStamped(s.stamp(ev)) }
 
 	stderrRing, stderrDone := scanStderr(s.ctx, s.proc, pump, nil)
 
@@ -800,6 +988,34 @@ func (s *Session) readLoop() {
 
 		case "assistant":
 			if raw.Message == nil {
+				continue
+			}
+			// Samma skydd som ParseEvents (parse.go): claude-cli syntetiserar
+			// ett assistant-message när Anthropic-strömmen dör mitt i en tur
+			// (model="<synthetic>", isApiErrorMessage=true, text="API Error:
+			// ..."). Utan detta skydd levereras transportfelet som svarstext
+			// (Neo discord-agent 2026-05-22 via ParseEvents; samma lucka
+			// fanns kvar här i Session-vägen). Emit fatal ErrorEvent +
+			// StateFailed; loopen fortsätter så processtädningen
+			// (stderr-drän, proc.Wait) sker normalt när sessionen stängs.
+			if raw.IsApiErrorMessage {
+				msg := ""
+				for _, block := range raw.Message.Content {
+					if block.Type == "text" {
+						msg += block.Text
+					}
+				}
+				if msg == "" {
+					msg = "synthetic CLI api-error message"
+				}
+				errEv := &ErrorEvent{
+					Err:   fmt.Errorf("%w: %s", ErrAPI, msg),
+					Fatal: true,
+				}
+				// Stämpla FÖRE trackState — se result-fallet.
+				sev := s.stamp(errEv)
+				s.trackState(errEv)
+				pumpSendStamped(sev)
 				continue
 			}
 			parentToolUseID := ""
@@ -901,8 +1117,13 @@ func (s *Session) readLoop() {
 			resultText = nil
 			snapshot = nil
 			lastModel = ""
+			// Ankomststämpla FÖRE trackState: trackState släpper state till
+			// Idle, vilket öppnar för nästa Query/QueryCtx att arma en ny
+			// generation. Stämpeln måste redan vara tagen då — annars kan
+			// resultatet attribueras till nästa query (rotorsak A).
+			sev := s.stamp(ev)
 			s.trackState(ev)
-			pumpSend(ev)
+			pumpSendStamped(sev)
 
 		case "rate_limit_event":
 			pumpSend(parseRateLimitEvent(&raw))
@@ -991,8 +1212,10 @@ func (s *Session) readLoop() {
 			Err:   cliErr,
 			Fatal: true,
 		}
+		// Stämpla FÖRE trackState — se result-fallet.
+		sev := s.stamp(ev)
 		s.trackState(ev)
-		pumpSend(ev)
+		pumpSendStamped(sev)
 		exitErrForEvent = cliErr
 	}
 
@@ -1125,8 +1348,12 @@ func (s *Session) sendEvent(ev Event) {
 		return
 	default:
 	}
+	// Ankomststämpla vid enqueue — gäller även syntetiska events
+	// (ToolProgressEvent-tickern, CLIStateChangeEvent från emitQueryActivity)
+	// så LastEventAt rör sig under långa tool-körningar.
+	sev := s.stamp(ev)
 	select {
-	case s.pump <- ev:
+	case s.pump <- sev:
 	case <-s.pumpClosed:
 	case <-s.ctx.Done():
 	}
