@@ -15,6 +15,8 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-11
+
 Catches the SDK up to Claude Code CLI 2.1.227. Verified end-to-end against a
 live CLI at that version, not just against fixtures.
 
@@ -86,6 +88,16 @@ live CLI at that version, not just against fixtures.
 - Model constants are documented as deliberately-unversioned aliases: the CLI
   resolves each to the latest release of its tier, so `ModelOpus` picked up
   Opus 5 with no SDK change. Pin a full ID only when you need reproducibility.
+
+### Upgrade notes
+
+- **Remove your `WithUser` calls.** It still compiles but now does nothing.
+  Before this release it made the CLI exit immediately, so no working code
+  depends on its behavior.
+- Everything else is additive — new options, fields, and events; existing type
+  switches keep compiling. Note that `InitEvent.PermissionMode` may report
+  `manual` (`PermissionManual`), which is what the CLI's own "default" maps to
+  as of 2.1.200.
 
 ## [0.1.2] - 2026-07-02
 
@@ -180,7 +192,8 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/allbin/claudecli-go/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/allbin/claudecli-go/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/allbin/claudecli-go/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/allbin/claudecli-go/releases/tag/v0.1.0
