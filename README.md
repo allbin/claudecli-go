@@ -311,6 +311,7 @@ Session methods:
 - `Ping(timeout)` — round-trip a no-op control request to prove the CLI's read loop is alive (not just that the process is running). Watchdog-friendly: any CLI response, including "unknown subtype", counts as success
 - `SetPermissionMode(mode)` — change permissions mid-session
 - `SetModel(model)` — change model mid-session
+- `RegisterRepoRoot(dir)` — grant tool access to another directory mid-session (runtime `/add-dir`), returning the directory the CLI registered. Unlike `WithAddDirs`, which is start-time only, this avoids tearing down the session to reach a newly discovered directory. A relative path resolves against the **CLI's** working directory — not the Go process's when `WithWorkDir` is set — so use the returned value rather than `filepath.Abs`. Not idempotent: the directory must exist and must not already be registered. Requires CLI 2.1.224+; fires the `DirectoryAdded` hook.
 - `GetServerInfo()` — raw JSON from the initialize handshake
 - `RewindFiles(userMessageID)` — rewind files to a checkpoint
 - `ReconnectMCPServer(name)` — reconnect a named MCP server (non-blocking)

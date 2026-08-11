@@ -154,6 +154,75 @@ func TestParseInitEventWithoutNewFields(t *testing.T) {
 	}
 }
 
+// The CLI resolves the directory against its own working directory and cleans
+// the result, so RegisterRepoRoot must return the CLI's value rather than
+// echoing back what the caller passed.
+func TestSessionRegisterRepoRoot(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		msg := sim.respondSuccessWithBody(t, `{"directory":"/repo/target"}`)
+		request := msg["request"].(map[string]any)
+		if request["subtype"] != "register_repo_root" {
+			t.Errorf("expected register_repo_root, got %v", request["subtype"])
+		}
+		// The CLI rejects every key except "directory".
+		if request["directory"] != "./target" {
+			t.Errorf("expected directory ./target, got %v", request["directory"])
+		}
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	dir, err := session.RegisterRepoRoot("./target")
+	if err != nil {
+		t.Fatalf("RegisterRepoRoot failed: %v", err)
+	}
+	if dir != "/repo/target" {
+		t.Errorf("expected resolved directory /repo/target, got %q", dir)
+	}
+
+	if _, err := session.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSessionRegisterRepoRootError(t *testing.T) {
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.respondError(t, "ENOENT: no such file or directory")
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	dir, err := session.RegisterRepoRoot("/missing")
+	if err == nil {
+		t.Fatal("expected error for a nonexistent directory")
+	}
+	if dir != "" {
+		t.Errorf("expected empty directory on error, got %q", dir)
+	}
+
+	if _, err := session.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestModelDisplayNameFable(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"claude-fable-5", "Fable 5"},

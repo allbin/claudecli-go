@@ -365,6 +365,42 @@ func (s *Session) SetModel(model Model) error {
 	return s.sendControlRequest("set_model", map[string]any{"model": string(model)})
 }
 
+// RegisterRepoRoot grants the session tool access to an additional directory,
+// the runtime equivalent of /add-dir. Unlike WithAddDirs, which only applies at
+// startup, this takes effect mid-session — so a directory discovered during a
+// run can be added without tearing the session down and losing its context.
+//
+// It returns the directory the CLI actually registered. A relative path is
+// resolved against the CLI process's working directory, which is not the Go
+// process's when WithWorkDir is set, and the result is cleaned — so the
+// returned value is the authoritative one, not something the caller can derive
+// with filepath.Abs.
+//
+// The directory must exist, and must not already be registered — the CLI
+// reports ENOENT for the first and "already a registered working directory"
+// for the second, which includes the working directory itself and any path
+// that normalizes onto an earlier registration. Registering is not idempotent;
+// treat a repeat call as a caller bug rather than retrying it.
+//
+// Requires CLI 2.1.224+. Older versions reject the control request with
+// "Unsupported control request subtype: register_repo_root". Registering fires
+// the CLI's DirectoryAdded hook.
+func (s *Session) RegisterRepoRoot(directory string) (string, error) {
+	resp, err := s.sendControlRequestRaw("register_repo_root", map[string]any{
+		"directory": directory,
+	})
+	if err != nil {
+		return "", err
+	}
+	var wrapper struct {
+		Directory string `json:"directory"`
+	}
+	if err := json.Unmarshal(resp, &wrapper); err != nil {
+		return "", fmt.Errorf("parse register_repo_root response: %w", err)
+	}
+	return wrapper.Directory, nil
+}
+
 // GetServerInfo returns the raw JSON from the initialize response.
 func (s *Session) GetServerInfo() json.RawMessage {
 	return s.serverInfo

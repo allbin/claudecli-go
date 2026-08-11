@@ -65,6 +65,15 @@ live CLI at that version, not just against fixtures.
   plugin installs.
 - **`PermissionManual`** — the `manual` permission mode. As of CLI 2.1.200 this
   is what the CLI's own "default" maps to.
+- **`Session.RegisterRepoRoot(dir) (string, error)`** — the runtime equivalent
+  of `/add-dir`, via the `register_repo_root` control request (CLI 2.1.224+).
+  `WithAddDirs` only applies at startup, so reaching a directory discovered
+  mid-run previously meant tearing the session down and losing its context.
+  Returns the directory the CLI actually registered: a relative path resolves
+  against the *CLI's* working directory, which differs from the Go process's
+  when `WithWorkDir` is set, so the returned value is authoritative and
+  `filepath.Abs` is not. Not idempotent — the directory must exist and must not
+  already be registered. Fires the CLI's `DirectoryAdded` hook.
 
 ### Changed
 
