@@ -724,14 +724,7 @@ func (s *Session) readLoop() {
 				resultText = nil
 				snapshot = nil
 				lastModel = ""
-				ev := &InitEvent{
-					SessionID:  raw.SessionID,
-					Model:      raw.Model,
-					Tools:      raw.Tools,
-					Agents:     raw.Agents,
-					Skills:     raw.Skills,
-					MCPServers: raw.MCPServers,
-				}
+				ev := parseInitEvent(&raw)
 				s.stateMu.Lock()
 				s.sessionID = raw.SessionID
 				s.stateMu.Unlock()
@@ -753,6 +746,13 @@ func (s *Session) readLoop() {
 				pumpSend(taskBackfill.apply(parseTaskEvent(&raw, line)))
 			case "hook_started", "hook_progress", "hook_response":
 				pumpSend(parseHookEvent(&raw, line))
+			case "thinking_tokens":
+				pumpSend(&ThinkingTokensEvent{
+					EstimatedTokens:      raw.EstimatedTokens,
+					EstimatedTokensDelta: raw.EstimatedTokensDelta,
+					SessionID:            raw.SessionID,
+					UUID:                 raw.UUID,
+				})
 			case "files_persisted":
 				pumpSend(parseFilesPersistedEvent(&raw))
 			default:
@@ -888,6 +888,15 @@ func (s *Session) readLoop() {
 
 		case "user":
 			pumpSend(parseUserEvent(&raw))
+
+		// Emitted after the turn's ResultEvent, so it is only reachable here:
+		// the one-shot ParseEvents loop stops at the terminal result.
+		case "prompt_suggestion":
+			pumpSend(&PromptSuggestionEvent{
+				Suggestion: raw.Suggestion,
+				SessionID:  raw.SessionID,
+				UUID:       raw.UUID,
+			})
 
 		case "tool_progress":
 			pumpSend(parseCLIToolProgressEvent(&raw))

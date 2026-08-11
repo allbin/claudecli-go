@@ -72,14 +72,7 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 		case "system":
 			switch raw.Subtype {
 			case "init", "":
-				emit(&InitEvent{
-					SessionID:  raw.SessionID,
-					Model:      raw.Model,
-					Tools:      raw.Tools,
-					Agents:     raw.Agents,
-					Skills:     raw.Skills,
-					MCPServers: raw.MCPServers,
-				})
+				emit(parseInitEvent(&raw))
 			case "status":
 				status := ""
 				if raw.Status != nil {
@@ -220,6 +213,13 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 
 		case "user":
 			emit(parseUserEvent(&raw))
+
+		case "prompt_suggestion":
+			emit(&PromptSuggestionEvent{
+				Suggestion: raw.Suggestion,
+				SessionID:  raw.SessionID,
+				UUID:       raw.UUID,
+			})
 
 		case "tool_progress":
 			emit(parseCLIToolProgressEvent(&raw))
@@ -415,12 +415,22 @@ type rawEvent struct {
 	Subtype string `json:"subtype,omitempty"`
 
 	// system event (init subtype)
-	SessionID  string            `json:"session_id,omitempty"`
-	Model      string            `json:"model,omitempty"`
-	Tools      []string          `json:"tools,omitempty"`
-	Agents     []string          `json:"agents,omitempty"`
-	Skills     []string          `json:"skills,omitempty"`
-	MCPServers []MCPServerStatus `json:"mcp_servers,omitempty"`
+	SessionID       string            `json:"session_id,omitempty"`
+	Model           string            `json:"model,omitempty"`
+	Tools           []string          `json:"tools,omitempty"`
+	Agents          []string          `json:"agents,omitempty"`
+	Skills          []string          `json:"skills,omitempty"`
+	MCPServers      []MCPServerStatus `json:"mcp_servers,omitempty"`
+	MCPServerErrors []MCPServerError  `json:"mcp_server_errors,omitempty"`
+	CLIVersion      string            `json:"claude_code_version,omitempty"`
+	CWD             string            `json:"cwd,omitempty"`
+	PermissionMode  string            `json:"permissionMode,omitempty"`
+	OutputStyle     string            `json:"output_style,omitempty"`
+	SlashCommands   []string          `json:"slash_commands,omitempty"`
+	Plugins         []PluginInfo      `json:"plugins,omitempty"`
+
+	// prompt_suggestion event
+	Suggestion string `json:"suggestion,omitempty"`
 
 	// system event (status subtype)
 	Status *string `json:"status"`
@@ -797,6 +807,26 @@ func parseAgentResult(data json.RawMessage) *AgentResult {
 		}
 	}
 	return ar
+}
+
+// parseInitEvent builds an InitEvent from a system/init line. Shared by
+// ParseEvents and the Session stdout pump so both surface the same fields.
+func parseInitEvent(raw *rawEvent) *InitEvent {
+	return &InitEvent{
+		SessionID:       raw.SessionID,
+		Model:           raw.Model,
+		Tools:           raw.Tools,
+		Agents:          raw.Agents,
+		Skills:          raw.Skills,
+		MCPServers:      raw.MCPServers,
+		MCPServerErrors: raw.MCPServerErrors,
+		CLIVersion:      raw.CLIVersion,
+		CWD:             raw.CWD,
+		PermissionMode:  PermissionMode(raw.PermissionMode),
+		OutputStyle:     raw.OutputStyle,
+		SlashCommands:   raw.SlashCommands,
+		Plugins:         raw.Plugins,
+	}
 }
 
 func parseHookEvent(raw *rawEvent, line []byte) *HookEvent {

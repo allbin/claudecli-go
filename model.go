@@ -23,6 +23,13 @@ const (
 // Model represents a Claude model identifier.
 type Model string
 
+// These constants are deliberately bare aliases rather than pinned model IDs.
+// The CLI resolves an alias to the latest release of that tier, so an alias
+// keeps tracking new versions without an SDK update — as of CLI 2.1.227,
+// "opus" resolves to claude-opus-5, "sonnet" to claude-sonnet-5, "fable" to
+// claude-fable-5, and "haiku" to claude-haiku-4-5-20251001. Pin a specific
+// version only when you need reproducibility, by passing the full ID as a
+// string: Model("claude-opus-5").
 const (
 	ModelHaiku  Model = "haiku"
 	ModelSonnet Model = "sonnet"
@@ -35,13 +42,13 @@ const (
 )
 
 // ModelDisplayName converts a model identifier into a human-readable name,
-// e.g. "claude-opus-4-8" -> "Opus 4.8", "claude-haiku-4-5-20251001" -> "Haiku 4.5".
+// e.g. "claude-opus-5" -> "Opus 5", "claude-haiku-4-5-20251001" -> "Haiku 4.5".
 //
 // The name is parsed from the ID's structure (tier + major.minor) rather than a
 // lookup table, so new model releases render correctly without code changes. A
 // trailing 8-digit date stamp and any bracketed suffix (e.g. "[1m]") are ignored.
-// Bare aliases work too: "opus" -> "Opus". If no opus/sonnet/haiku tier is found,
-// the input is returned unchanged (with any bracketed suffix stripped).
+// Bare aliases work too: "opus" -> "Opus". If no opus/sonnet/haiku/fable tier is
+// found, the input is returned unchanged (with any bracketed suffix stripped).
 func ModelDisplayName(id string) string {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -56,7 +63,7 @@ func ModelDisplayName(id string) string {
 	var nums []string
 	for _, tok := range strings.Split(strings.ToLower(id), "-") {
 		switch tok {
-		case "opus", "sonnet", "haiku":
+		case "opus", "sonnet", "haiku", "fable":
 			tier = tok
 		default:
 			if isAllDigits(tok) && len(tok) != 8 { // skip YYYYMMDD date stamps

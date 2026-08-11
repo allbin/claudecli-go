@@ -15,6 +15,69 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+Catches the SDK up to Claude Code CLI 2.1.227. Verified end-to-end against a
+live CLI at that version, not just against fixtures.
+
+### Fixed
+
+- **`WithUser` no longer emits `--user`.** The CLI removed the flag, so any run
+  configured with `WithUser` died immediately with
+  `error: unknown option '--user'`. The option is now a deprecated no-op, kept
+  only so existing callers still compile — remove your calls to it.
+- **`ModelDisplayName` now recognizes the Fable tier.** `"claude-fable-5"`
+  returned the raw ID instead of `"Fable 5"`, even though `ModelFable` has been
+  a supported constant.
+- **`Session` now populates the full `InitEvent`.** The session stdout pump
+  built its own `InitEvent` and had drifted from the one-shot parser, silently
+  dropping every field below. Both paths now share one constructor.
+- **`Session` now emits `*ThinkingTokensEvent`.** The `thinking_tokens` system
+  subtype surfaced as `*UnknownEvent` in sessions while parsing correctly in
+  one-shot runs.
+
+### Added
+
+- **`WithIncludeHookEvents()`** — emits `--include-hook-events`. Without it the
+  CLI reports no hook activity at all, which made the already-implemented
+  `*HookEvent` unreachable in practice.
+- **`WithForwardSubagentText()`** — emits `--forward-subagent-text` (CLI
+  2.1.208+). Forwards subagent text and thinking as `*TextEvent`/
+  `*ThinkingEvent` with `ParentToolUseID` set, including nested subagents at
+  depth 2+ (CLI 2.1.221+).
+- **`WithPromptSuggestions()`** and **`*PromptSuggestionEvent`** — a predicted
+  next user prompt after each turn. Sessions only: the CLI emits it *after* the
+  turn's result message, which a one-shot `Run` treats as the terminal event.
+- **`InitEvent` gained `MCPServerErrors`** (`[]MCPServerError`, CLI 2.1.219+),
+  listing `--mcp-config` entries skipped by validation. These never appear in
+  `MCPServers`, so an empty `MCPServers` with a populated `MCPServerErrors`
+  distinguishes a rejected config from servers that failed at runtime. Also
+  added: `CLIVersion`, `CWD`, `PermissionMode`, `OutputStyle`, `SlashCommands`,
+  and `Plugins` (`[]PluginInfo`).
+- **`WithSafeMode()`** — emits `--safe-mode`, disabling all customizations
+  (CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands and agents,
+  output styles, workflows) while leaving auth, model selection, built-in
+  tools, and permissions working.
+- **`WithAutoCompact(string)`** — emits `--autocompact`; `"auto"` or a token
+  count between 100k and 1M.
+- **`WithExcludeDynamicSystemPromptSections()`** — moves per-machine sections
+  (cwd, env info, memory paths, git status) into the first user message,
+  improving prompt-cache reuse across machines and users.
+- **`WithPluginURLs(...string)`** — emits `--plugin-url` for zip-over-HTTPS
+  plugin installs.
+- **`PermissionManual`** — the `manual` permission mode. As of CLI 2.1.200 this
+  is what the CLI's own "default" maps to.
+
+### Changed
+
+- `--include-hook-events`, `--forward-subagent-text`, and
+  `--prompt-suggestions` are emitted only on the stream-json paths (`Run`,
+  `Connect`). The CLI rejects all three under `--output-format json`, so
+  `RunBlocking` omits them rather than failing.
+- `--prompt-suggestions` is passed as `--prompt-suggestions true`. Its value is
+  optional, so a bare flag would swallow whatever followed it.
+- Model constants are documented as deliberately-unversioned aliases: the CLI
+  resolves each to the latest release of its tier, so `ModelOpus` picked up
+  Opus 5 with no SDK change. Pin a full ID only when you need reproducibility.
+
 ## [0.1.2] - 2026-07-02
 
 ### Changed

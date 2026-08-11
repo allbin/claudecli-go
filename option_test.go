@@ -383,11 +383,20 @@ func TestBuildArgsExtraArgs(t *testing.T) {
 	}
 }
 
-func TestBuildArgsUser(t *testing.T) {
-	args := resolveOptions(nil, []Option{WithUser("user-123")}).buildArgs()
-
-	if v, ok := argValue(args, "--user"); !ok || v != "user-123" {
-		t.Errorf("missing or wrong --user: %q", v)
+// The CLI removed --user; emitting it makes the CLI exit with "unknown
+// option '--user'", so WithUser must stay a no-op across every build path.
+func TestBuildArgsUserIsNoOp(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"stream", resolveOptions(nil, []Option{WithUser("user-123")}).buildArgs()},
+		{"blocking", resolveOptions(nil, []Option{WithUser("user-123")}).buildBlockingArgs()},
+		{"session", resolveOptions(nil, []Option{WithUser("user-123")}).buildSessionArgs()},
+	} {
+		if slices.Contains(tc.args, "--user") {
+			t.Errorf("%s: --user was emitted but the CLI no longer accepts it: %v", tc.name, tc.args)
+		}
 	}
 }
 

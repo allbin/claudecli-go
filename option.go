@@ -63,25 +63,33 @@ type options struct {
 
 	// plugins
 	pluginDirs []string
+	pluginURLs []string
 
 	// execution
-	timeout                 time.Duration
-	addDirs                 []string
-	workDir                 string
-	effort                  EffortLevel
-	thinking                ThinkingConfig
-	taskBudget              int
-	env                     map[string]string
-	includePartialMessages  bool
-	extraArgs               map[string]string
-	user                    string
-	stderrCallback          func(string)
-	enableFileCheckpointing bool
-	bare                    bool
-	replayUserMessages      bool
-	dangerouslySkipPerms    bool
-	disableSlashCommands    bool
-	debugFile               string
+	timeout                            time.Duration
+	addDirs                            []string
+	workDir                            string
+	effort                             EffortLevel
+	thinking                           ThinkingConfig
+	taskBudget                         int
+	env                                map[string]string
+	includePartialMessages             bool
+	extraArgs                          map[string]string
+	stderrCallback                     func(string)
+	enableFileCheckpointing            bool
+	bare                               bool
+	replayUserMessages                 bool
+	dangerouslySkipPerms               bool
+	disableSlashCommands               bool
+	debugFile                          string
+	safeMode                           bool
+	autoCompact                        string
+	excludeDynamicSystemPromptSections bool
+
+	// stream-json-only output toggles
+	includeHookEvents   bool
+	forwardSubagentText bool
+	promptSuggestions   bool
 
 	// session callbacks
 	canUseTool     ToolPermissionFunc
@@ -208,10 +216,70 @@ func WithReplayUserMessages() Option {
 func WithDangerouslySkipPermissions() Option {
 	return func(o *options) { o.dangerouslySkipPerms = true }
 }
-func WithSessionName(name string) Option        { return func(o *options) { o.sessionName = name } }
-func WithDebugFile(path string) Option          { return func(o *options) { o.debugFile = path } }
-func WithDisableSlashCommands() Option          { return func(o *options) { o.disableSlashCommands = true } }
-func WithUser(user string) Option               { return func(o *options) { o.user = user } }
+func WithSessionName(name string) Option { return func(o *options) { o.sessionName = name } }
+func WithDebugFile(path string) Option   { return func(o *options) { o.debugFile = path } }
+func WithDisableSlashCommands() Option   { return func(o *options) { o.disableSlashCommands = true } }
+
+// WithUser is a no-op.
+//
+// Deprecated: the CLI removed --user; passing it makes the CLI exit with
+// "unknown option '--user'". This option no longer emits any argument and is
+// kept only so existing callers still compile. It will be removed in a future
+// release.
+func WithUser(string) Option { return func(*options) {} }
+
+// WithSafeMode starts the CLI with all customizations disabled — CLAUDE.md,
+// skills, plugins, hooks, MCP servers, custom commands and agents, output
+// styles, and workflows. Admin-managed policy settings still apply, and auth,
+// model selection, built-in tools, and permissions work normally. Emits
+// --safe-mode. Useful for reproducing behavior without local configuration.
+func WithSafeMode() Option { return func(o *options) { o.safeMode = true } }
+
+// WithAutoCompact sets the auto-compact window size. Pass "auto" to let the
+// CLI choose, or a token count between 100k and 1M (e.g. "200000"). Emits
+// --autocompact.
+func WithAutoCompact(window string) Option { return func(o *options) { o.autoCompact = window } }
+
+// WithExcludeDynamicSystemPromptSections moves per-machine sections (cwd, env
+// info, memory paths, git status) out of the system prompt and into the first
+// user message, which improves prompt-cache reuse across machines and users.
+// Emits --exclude-dynamic-system-prompt-sections. The CLI ignores it when a
+// custom system prompt is set via WithSystemPrompt.
+func WithExcludeDynamicSystemPromptSections() Option {
+	return func(o *options) { o.excludeDynamicSystemPromptSections = true }
+}
+
+// WithPluginURLs fetches plugin .zip archives from URLs for this session only.
+// Emits one --plugin-url per URL.
+func WithPluginURLs(urls ...string) Option { return func(o *options) { o.pluginURLs = urls } }
+
+// WithIncludeHookEvents makes the CLI report hook lifecycle activity on the
+// event stream, surfacing *HookEvent values (hook_started, hook_progress,
+// hook_response). Without this option the CLI emits no hook events at all.
+//
+// Only valid for streaming runs (Run and Session). RunBlocking ignores it,
+// because the CLI rejects the flag when the output format is plain JSON.
+func WithIncludeHookEvents() Option { return func(o *options) { o.includeHookEvents = true } }
+
+// WithForwardSubagentText forwards text and thinking blocks produced by
+// subagents as *TextEvent and *ThinkingEvent values with ParentToolUseID set
+// to the spawning Agent tool_use ID. Without it, a subagent's interior output
+// is invisible and only its final result appears. Nested subagents (depth 2+)
+// are forwarded as well, each keyed by its own spawning tool_use ID.
+//
+// Only valid for streaming runs (Run and Session). RunBlocking ignores it,
+// because the CLI rejects the flag when the output format is plain JSON.
+func WithForwardSubagentText() Option { return func(o *options) { o.forwardSubagentText = true } }
+
+// WithPromptSuggestions asks the CLI to predict a plausible next user prompt,
+// emitted as a *PromptSuggestionEvent after each turn.
+//
+// Only Session delivers the event. The CLI emits prompt_suggestion after the
+// turn's result message, and a one-shot Run stops at that result — the
+// terminal event — so the suggestion never arrives there. RunBlocking omits
+// the flag entirely, because the CLI rejects it when the output format is
+// plain JSON.
+func WithPromptSuggestions() Option             { return func(o *options) { o.promptSuggestions = true } }
 func WithTimeout(d time.Duration) Option        { return func(o *options) { o.timeout = d } }
 func WithStderrCallback(fn func(string)) Option { return func(o *options) { o.stderrCallback = fn } }
 func WithFileCheckpointing() Option             { return func(o *options) { o.enableFileCheckpointing = true } }
@@ -282,6 +350,7 @@ func (o *options) buildCommonArgs() []string {
 func (o *options) buildArgs() []string {
 	args := []string{"--print", "--verbose", "--output-format", "stream-json"}
 	args = append(args, o.buildCommonArgs()...)
+	o.appendStreamOnlyArgs(&args)
 	o.appendSessionArgs(&args)
 	return args
 }
@@ -412,6 +481,27 @@ func (o *options) appendSettingsArgs(args *[]string) {
 	for _, d := range o.pluginDirs {
 		*args = append(*args, "--plugin-dir", d)
 	}
+	for _, u := range o.pluginURLs {
+		*args = append(*args, "--plugin-url", u)
+	}
+}
+
+// appendStreamOnlyArgs emits flags the CLI accepts only when the output format
+// is stream-json. They are omitted from buildBlockingArgs (--output-format
+// json), where the CLI rejects them outright.
+func (o *options) appendStreamOnlyArgs(args *[]string) {
+	if o.includeHookEvents {
+		*args = append(*args, "--include-hook-events")
+	}
+	if o.forwardSubagentText {
+		*args = append(*args, "--forward-subagent-text")
+	}
+	if o.promptSuggestions {
+		// The value is passed explicitly: --prompt-suggestions takes an
+		// optional value, so a bare flag would swallow a following
+		// positional argument.
+		*args = append(*args, "--prompt-suggestions", "true")
+	}
 }
 
 func (o *options) appendExecArgs(args *[]string) {
@@ -439,8 +529,14 @@ func (o *options) appendExecArgs(args *[]string) {
 	if o.disableSlashCommands {
 		*args = append(*args, "--disable-slash-commands")
 	}
-	if o.user != "" {
-		*args = append(*args, "--user", o.user)
+	if o.safeMode {
+		*args = append(*args, "--safe-mode")
+	}
+	if o.autoCompact != "" {
+		*args = append(*args, "--autocompact", o.autoCompact)
+	}
+	if o.excludeDynamicSystemPromptSections {
+		*args = append(*args, "--exclude-dynamic-system-prompt-sections")
 	}
 	keys := make([]string, 0, len(o.extraArgs))
 	for k := range o.extraArgs {
@@ -458,6 +554,7 @@ func (o *options) appendExecArgs(args *[]string) {
 func (o *options) buildSessionArgs() []string {
 	args := []string{"--verbose", "--output-format", "stream-json", "--input-format", "stream-json"}
 	args = append(args, o.buildCommonArgs()...)
+	o.appendStreamOnlyArgs(&args)
 
 	// Session mode: skip --no-session-persistence, keep session/continue flags
 	if o.sessionName != "" {

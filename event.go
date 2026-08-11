@@ -40,6 +40,47 @@ type InitEvent struct {
 	Agents     []string
 	Skills     []string
 	MCPServers []MCPServerStatus
+
+	// MCPServerErrors lists --mcp-config entries the CLI skipped because
+	// their configuration failed validation. These servers never start and
+	// never appear in MCPServers, so an empty MCPServers list plus a
+	// populated MCPServerErrors means the config was rejected rather than
+	// the servers having failed at runtime. Requires CLI 2.1.219+.
+	MCPServerErrors []MCPServerError
+
+	// CLIVersion is the Claude CLI version running this session.
+	CLIVersion string
+	// CWD is the working directory the CLI resolved for the session.
+	CWD string
+	// PermissionMode is the mode the session actually started in, which may
+	// differ from a requested mode the CLI declined to honor.
+	PermissionMode PermissionMode
+	// OutputStyle is the configured output style, e.g. "default".
+	OutputStyle string
+	// SlashCommands lists the skills and commands available in the session.
+	SlashCommands []string
+	// Plugins lists the plugins loaded for the session.
+	Plugins []PluginInfo
+}
+
+// PluginInfo identifies a plugin loaded into the session.
+type PluginInfo struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+func (p PluginInfo) String() string { return p.Name }
+
+// MCPServerError describes an MCP server the CLI refused to start because its
+// configuration was invalid.
+type MCPServerError struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+func (e MCPServerError) String() string {
+	return fmt.Sprintf("%s (%s): %s", e.Name, e.Type, e.Message)
 }
 
 func (*InitEvent) event() {}
@@ -51,6 +92,21 @@ func (e *InitEvent) String() string {
 // "Opus 4.8". It is shorthand for ModelDisplayName(e.Model).
 func (e *InitEvent) ModelDisplayName() string {
 	return ModelDisplayName(e.Model)
+}
+
+// PromptSuggestionEvent carries a predicted next user prompt, emitted after
+// each turn when the run enabled WithPromptSuggestions. It is advisory: the
+// suggestion is a guess at what the user might ask next, not an instruction
+// and not something the model committed to.
+type PromptSuggestionEvent struct {
+	Suggestion string
+	SessionID  string
+	UUID       string
+}
+
+func (*PromptSuggestionEvent) event() {}
+func (e *PromptSuggestionEvent) String() string {
+	return fmt.Sprintf("PromptSuggestionEvent{%q}", e.Suggestion)
 }
 
 // CompactStatusEvent is emitted when the CLI's compaction status changes.

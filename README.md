@@ -675,11 +675,11 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | Type               | Description                                                                                                                 |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `*StartEvent`      | Emitted before process launch. Contains resolved model, args, working dir.                                                  |
-| `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers. `ModelDisplayName()` renders the model ID as e.g. `"Opus 4.8"`. |
+| `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers. `ModelDisplayName()` renders the model ID as e.g. `"Opus 5"`. Also carries `CLIVersion`, `CWD`, `PermissionMode` (the mode actually in effect), `OutputStyle`, `SlashCommands`, `Plugins` (`[]PluginInfo`), and `MCPServerErrors` (`[]MCPServerError` — `--mcp-config` entries skipped by validation, which never appear in `MCPServers`; requires CLI 2.1.219+). |
 | `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
 | `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
 | `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_updated`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`, `EndTime`. `IsWorkflow()` is true for dynamic-workflow runs (`TaskType == "local_workflow"`), where `WorkflowName`, `WorkflowProgress` (per-phase/per-agent `[]WorkflowProgressEntry`), and `OutputFile` (on completion) are also set. See [Dynamic workflows](#dynamic-workflows). |
-| `*HookEvent`       | Hook lifecycle event (system subtypes `hook_started`, `hook_progress`, `hook_response`). Fields: `HookID`, `HookName`, `HookEvent` (e.g. `"SessionStart"`), and on `hook_response`: `Output`, `Stdout`, `Stderr`, `ExitCode`, `Outcome`. |
+| `*HookEvent`       | Hook lifecycle event (system subtypes `hook_started`, `hook_progress`, `hook_response`). Requires `WithIncludeHookEvents()` — the CLI emits nothing otherwise. Fields: `HookID`, `HookName`, `HookEvent` (e.g. `"SessionStart"`), and on `hook_response`: `Output`, `Stdout`, `Stderr`, `ExitCode`, `Outcome`. |
 | `*ThinkingEvent`   | Model thinking output. Includes `Signature` for verification. `Content` may be empty while `Signature` is set — treat `Content=="" && Signature!=""` as "thinking hidden", not "no thinking". `ParentToolUseID` set when from a subagent. |
 | `*TextEvent`       | Assistant text output. `ParentToolUseID` set when from a subagent.                                                           |
 | `*TurnEvent`       | New assistant turn started. `Turn` is a 1-based counter, `ToolName` is the first tool in the turn (empty for text-only turns). Only emitted for top-level turns (subagent messages excluded). |
@@ -697,6 +697,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*CLIToolProgressEvent` | Tool progress event from the CLI JSONL stream (top-level `tool_progress` type). Unlike the synthetic `ToolProgressEvent`, this comes directly from the CLI and carries `ElapsedSeconds` and optional `TaskID`. |
 | `*ToolUseSummaryEvent` | Emitted after tool execution with a human-readable summary. `PrecedingToolUseIDs` lists the tool_use IDs covered. |
 | `*AuthStatusEvent` | Authentication status change during a session (e.g. token refresh). `IsAuthenticating`, `Output`, `Error`. |
+| `*PromptSuggestionEvent` | Predicted next user prompt, emitted after each turn when `WithPromptSuggestions()` is set. Sessions only — the CLI emits it after the turn's result, which one-shot `Run` treats as terminal. Advisory: a guess at what the user might ask next, not an instruction. |
 | `*FilesPersistedEvent` | File persistence confirmation. `Files` lists successfully persisted files (`Filename`, `FileID`); `Failed` lists failures. |
 | `*ControlRequestEvent` | Control request from CLI (handled internally in sessions).                                                              |
 | `*StreamEvent`     | Partial message update (when `WithIncludePartialMessages` is on).                                                            |
@@ -708,7 +709,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | Option                               | Description                                                                                           |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
 | `WithBinaryPath(string)`             | Path to the `claude` binary. Only effective in `New()`. Default: `"claude"`.                          |
-| `WithModel(Model)`                   | Model to use (`ModelHaiku`, `ModelSonnet`, `ModelOpus`, `ModelFable`). Default: `ModelSonnet`. Also accepts any CLI alias or full name as a string, e.g. `Model("claude-fable-5")`. |
+| `WithModel(Model)`                   | Model to use (`ModelHaiku`, `ModelSonnet`, `ModelOpus`, `ModelFable`). Default: `ModelSonnet`. These constants are bare aliases, so the CLI resolves each to the latest release of that tier — as of CLI 2.1.227, `ModelOpus` → `claude-opus-5`, `ModelSonnet` → `claude-sonnet-5`, `ModelFable` → `claude-fable-5`, `ModelHaiku` → `claude-haiku-4-5-20251001`. Pin a version only for reproducibility, by passing the full ID as a string: `Model("claude-opus-5")`. |
 | `WithFallbackModel(Model)`           | Fallback model if primary is unavailable.                                                             |
 | `WithBetas(...string)`               | Beta features to enable.                                                                              |
 | `WithSystemPrompt(string)`           | System prompt.                                                                                        |
@@ -718,7 +719,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithTools(...string)`               | Allowed tools. Accepts individual names or comma-separated (`"A,B"` == `"A", "B"`). Deduplicates.     |
 | `WithDisallowedTools(...string)`     | Disallowed tools. Same comma/dedup behavior as `WithTools`.                                           |
 | `WithBuiltinTools(...string)`        | Restrict available built-in tools. `"default"` for all, `""` for none, or names like `"Bash"`, `"Edit"`. |
-| `WithPermissionMode(PermissionMode)` | Permission mode (`PermissionDefault`, `PermissionPlan`, `PermissionAcceptEdits`, `PermissionBypass`, `PermissionDontAsk`, `PermissionAuto`). |
+| `WithPermissionMode(PermissionMode)` | Permission mode (`PermissionDefault`, `PermissionPlan`, `PermissionAcceptEdits`, `PermissionBypass`, `PermissionDontAsk`, `PermissionAuto`, `PermissionManual`). |
 | `WithDangerouslySkipPermissions()`   | Bypass all permission checks. Emits both `--allow-dangerously-skip-permissions` and `--dangerously-skip-permissions`. Only for sandboxed environments. |
 | `WithBare()`                         | Minimal mode: skip hooks, LSP, plugin sync, attribution, auto-memory, background prefetches, keychain reads, CLAUDE.md auto-discovery. |
 | `WithJSONSchema(string)`             | JSON schema for structured output validation.                                                         |
@@ -749,7 +750,14 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithPermissionPromptToolName(string)` | Custom permission prompt tool name (default: `"stdio"`). Sessions only.                             |
 | `WithEnv(map[string]string)`         | Additional environment variables. Can override `CLAUDE_CODE_ENTRYPOINT` (default: `"sdk-go"`).        |
 | `WithExtraArgs(map[string]string)`   | Arbitrary `--key value` flags for forward compatibility. Empty value emits flag only.                  |
-| `WithUser(string)`                   | User identifier passed to the CLI.                                                                    |
+| `WithUser(string)`                   | **Deprecated, no-op.** The CLI removed `--user`; passing it made the CLI exit with `unknown option '--user'`. Kept only so existing callers compile. |
+| `WithSafeMode()`                     | Disable all customizations (CLAUDE.md, skills, plugins, hooks, MCP servers, custom commands/agents, output styles, workflows). Policy settings, auth, model selection, built-in tools, and permissions still work. |
+| `WithAutoCompact(string)`            | Auto-compact window size: `"auto"`, or a token count between 100k and 1M (e.g. `"200000"`).           |
+| `WithExcludeDynamicSystemPromptSections()` | Move per-machine sections (cwd, env info, memory paths, git status) out of the system prompt into the first user message, improving prompt-cache reuse across machines. Ignored when `WithSystemPrompt` is set. |
+| `WithPluginURLs(...string)`          | Fetch plugin `.zip` archives from URLs for this session only.                                          |
+| `WithIncludeHookEvents()`            | Surface hook lifecycle activity as `*HookEvent`. **Required** to receive any hook events — without it the CLI emits none. Streaming and sessions only. |
+| `WithForwardSubagentText()`          | Forward subagent text and thinking as `*TextEvent`/`*ThinkingEvent` with `ParentToolUseID` set. Includes nested subagents (depth 2+). Streaming and sessions only. |
+| `WithPromptSuggestions()`            | Emit a `*PromptSuggestionEvent` with a predicted next user prompt after each turn. **Sessions only** — the CLI emits it after the turn's result, which one-shot `Run` treats as terminal. |
 | `WithStderrCallback(func(string))`   | Called per stderr line in addition to `StderrEvent` emission.                                         |
 | `WithDebugFile(string)`              | Write CLI debug logs to a file path.                                                                  |
 | `WithDisableSlashCommands()`         | Disable all slash command / skill processing in prompts.                                              |
