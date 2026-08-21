@@ -1010,53 +1010,17 @@ func (s *Session) readLoop() {
 				}
 				pumpSend(&TurnEvent{Turn: turnCounter, ToolName: toolName})
 			}
-			for _, block := range raw.Message.Content {
-				switch block.Type {
-				case "thinking":
-					pumpSend(&ThinkingEvent{Content: block.Thinking, Signature: block.Signature, ParentToolUseID: parentToolUseID})
-				case "text":
-					resultText = append(resultText, block.Text)
-					pumpSend(&TextEvent{Content: block.Text, ParentToolUseID: parentToolUseID})
-				case "tool_use":
-					pumpSend(&ToolUseEvent{
-						ID:              block.ID,
-						Name:            block.Name,
-						Input:           block.Input,
-						ParentToolUseID: parentToolUseID,
-					})
-				case "server_tool_use":
-					pumpSend(&ToolUseEvent{
-						ID:              block.ID,
-						Name:            block.Name,
-						Input:           block.Input,
-						ParentToolUseID: parentToolUseID,
-						ServerSide:      true,
-					})
-				case "mcp_tool_use":
-					pumpSend(&ToolUseEvent{
-						ID:              block.ID,
-						Name:            block.Name,
-						Input:           block.Input,
-						ParentToolUseID: parentToolUseID,
-						MCP:             true,
-					})
-				case "tool_result":
-					pumpSend(&ToolResultEvent{
-						ToolUseID:       block.ToolUseID,
-						Content:         extractContent(block.Content),
-						ParentToolUseID: parentToolUseID,
-					})
-				default:
-					if block.Type != "" {
-						blockRaw, _ := json.Marshal(block)
-						ev := &UnknownEvent{
-							Type: "content/" + block.Type,
-							Raw:  blockRaw,
-						}
-						unknowns = append(unknowns, ev)
-						pumpSend(ev)
-					}
+			// Route through the shared block decoder, capturing unrecognized
+			// content blocks on the way out so an exit-code diagnostic can
+			// report them (ParseEvents has no such diagnostic and just emits).
+			emitBlock := func(ev Event) {
+				if u, ok := ev.(*UnknownEvent); ok && strings.HasPrefix(u.Type, "content/") {
+					unknowns = append(unknowns, u)
 				}
+				pumpSend(ev)
+			}
+			for _, block := range raw.Message.Content {
+				parseContentBlock(block, parentToolUseID, &resultText, emitBlock)
 			}
 			if len(raw.Message.ContextManagement) > 0 && string(raw.Message.ContextManagement) != "null" {
 				pumpSend(&ContextManagementEvent{Raw: raw.Message.ContextManagement})

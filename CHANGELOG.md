@@ -21,8 +21,9 @@ or pin a specific version (e.g. `@v0.1.0`).
   streams) and `Session.readLoop` (for `Connect()`) each carried their own copy
   of the same wire-format switch, so a case added to one and not the other
   worked in one mode and silently not the other. The stateless types now decode
-  once in `decodeStatelessEvent`. No behavior change — the same events are
-  emitted in the same order.
+  once in `decodeStatelessEvent`, and assistant content blocks decode once in
+  `parseContentBlock`. No behavior change — the same events are emitted in the
+  same order.
 
 ## [0.2.0] - 2026-08-11
 
