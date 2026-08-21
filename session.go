@@ -427,10 +427,16 @@ func (s *Session) InterruptWithQueued(cancelQueued bool) (*InterruptReceipt, err
 	return receipt, nil
 }
 
-// Ping sends a no-op control request and returns when the CLI responds.
-// Used by watchdogs to prove the CLI's read loop is alive during long
-// tool executions, not just that the process hasn't exited. Returns
+// Ping sends a side-effect-free control request and returns when the CLI
+// responds. Used by watchdogs to prove the CLI's read loop is alive during
+// long tool executions, not just that the process hasn't exited. Returns
 // error on timeout or transport failure.
+//
+// The probe is get_binary_version, a real request-response. It previously sent
+// a "ping" subtype, which the CLI has never implemented — the liveness proof
+// came from the resulting "Unsupported control request subtype" error. That
+// still works, so error responses are accepted as proof of life for CLIs that
+// predate get_binary_version; use QueryBinaryVersion when you want the value.
 //
 // Any response from the CLI — including an "unknown subtype" error —
 // proves the read loop parsed stdin and wrote stdout, so such responses
@@ -463,7 +469,7 @@ func (s *Session) Ping(timeout time.Duration) error {
 	payload := map[string]any{
 		"type":       "control_request",
 		"request_id": id,
-		"request":    map[string]any{"subtype": "ping"},
+		"request":    map[string]any{"subtype": "get_binary_version"},
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -486,8 +492,8 @@ func (s *Session) Ping(timeout time.Duration) error {
 		if result.Err != nil && errors.Is(result.Err, errSessionEnded) {
 			return fmt.Errorf("ping: %w", result.Err)
 		}
-		// Any other response (success or CLI-side error like "unknown
-		// subtype") proves the read loop is alive.
+		// Any other response (success, or a CLI-side error on a version
+		// that lacks the subtype) proves the read loop is alive.
 		return nil
 	case <-s.done:
 		// readLoop exited before or during the request — e.g. process

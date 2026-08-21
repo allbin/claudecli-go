@@ -3003,8 +3003,8 @@ func TestSessionPing(t *testing.T) {
 			sim.handleInitAndReady(t)
 			msg := sim.respondSuccess(t)
 			request := msg["request"].(map[string]any)
-			if request["subtype"] != "ping" {
-				t.Errorf("expected ping, got %v", request["subtype"])
+			if request["subtype"] != "get_binary_version" {
+				t.Errorf("expected get_binary_version, got %v", request["subtype"])
 			}
 			sim.sendResult()
 		}()
@@ -3030,10 +3030,10 @@ func TestSessionPing(t *testing.T) {
 
 		go func() {
 			sim.handleInitAndReady(t)
-			msg := sim.respondError(t, "Unknown control subtype: ping")
+			msg := sim.respondError(t, "Unsupported control request subtype: get_binary_version")
 			request := msg["request"].(map[string]any)
-			if request["subtype"] != "ping" {
-				t.Errorf("expected ping, got %v", request["subtype"])
+			if request["subtype"] != "get_binary_version" {
+				t.Errorf("expected get_binary_version, got %v", request["subtype"])
 			}
 			sim.sendResult()
 		}()
@@ -3061,7 +3061,7 @@ func TestSessionPing(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			sim.handleInitAndReady(t)
-			// Read the ping request but never respond, simulating a wedged readLoop.
+			// Read the probe request but never respond, simulating a wedged readLoop.
 			sim.readStdin(t)
 			<-done
 			sim.bidi.StdoutWriter.Close()

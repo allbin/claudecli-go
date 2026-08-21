@@ -150,6 +150,12 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Fixed
 
+- **`Session.Ping` no longer relies on an error response.** It sent a `"ping"`
+  subtype, which the CLI has never implemented — liveness was proven by the
+  resulting `Unsupported control request subtype` error. It now sends
+  `get_binary_version`, a real side-effect-free request-response. Error
+  responses are still accepted as proof of life, so CLIs predating that subtype
+  keep working. Behavior and signature are unchanged.
 - **`keep_alive` frames are no longer surfaced as `*UnknownEvent`.** The CLI
   emits this payload-less heartbeat periodically (for example while a long
   control request is in flight) and the protocol requires receivers to ignore
