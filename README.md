@@ -308,7 +308,8 @@ Session methods:
 - `Events()` — event channel
 - `Wait()` — block until result (idempotent)
 - `Interrupt()` — send interrupt signal
-- `Ping(timeout)` — round-trip a no-op control request to prove the CLI's read loop is alive (not just that the process is running). Watchdog-friendly: any CLI response, including "unknown subtype", counts as success
+- `InterruptWithQueued(cancelQueued)` — interrupt and get an `*InterruptReceipt` reporting which queued commands survived (`StillQueued`) or were dropped (`Cancelled`). Plain `Interrupt` leaves queued commands to run, so the CLI starts the next one immediately after the turn aborts; passing `cancelQueued` halts the session in one round-trip, which is what a UI stop button usually wants. Gated by the `interrupt_receipt_v1` / `interrupt_cancel_queued_v1` capabilities — see `InitEvent.HasCapability`
+- `Ping(timeout)` — round-trip a side-effect-free control request (`get_binary_version`) to prove the CLI's read loop is alive (not just that the process is running). Watchdog-friendly: any CLI response, including an error, counts as success
 - `SetPermissionMode(mode)` — change permissions mid-session
 - `SetModel(model)` — change model mid-session
 - `RegisterRepoRoot(dir)` — grant tool access to another directory mid-session (runtime `/add-dir`), returning the directory the CLI registered. Unlike `WithAddDirs`, which is start-time only, this avoids tearing down the session to reach a newly discovered directory. A relative path resolves against the **CLI's** working directory — not the Go process's when `WithWorkDir` is set — so use the returned value rather than `filepath.Abs`. Not idempotent: the directory must exist and must not already be registered. Requires CLI 2.1.224+; fires the `DirectoryAdded` hook.
@@ -318,6 +319,15 @@ Session methods:
 - `ReconnectMCPServerWait(name, timeout)` — reconnect and block until connected (polls `mcp_status`; 0 timeout = 10s default)
 - `ToggleMCPServer(name, enabled)` — enable/disable an MCP server
 - `StopTask(taskID)` — stop a running task
+- `BackgroundTask(toolUseID)` — background a running foreground task (Ctrl+B semantics) instead of killing it: the blocking tool call returns immediately and the work continues, emitting a `task_notification` when it settles. Empty id backgrounds every foreground task
+- `QueryContextUsage()` — live `*ContextUsage` breakdown of the context window. Prefer this over `ResultEvent.ContextSnapshot`/`ModelUsage` when the number must survive compaction: those describe the last API call and drift upward until the next turn
+- `QuerySettings()` — effective, per-source and runtime-resolved settings (`Applied` is where the session's real effort level is reported)
+- `ApplyFlagSettings(map[string]any)` — merge settings into the session-scoped flag layer. Accepts any settings key, including `effortLevel` and `ultracode` (which has no CLI flag)
+- `SetPermissionRules(PermissionRules)` — replace allow/deny/ask rules mid-session. `SetPermissionMode` only switches the *mode*; this changes the rules themselves
+- `SetMaxThinkingTokens(tokens, display)` — change the extended-thinking budget and display mode mid-session. A nil budget resets to the session default; cannot enable thinking on a session that has it disabled
+- `RenameSession(title)` — set the session's user-facing title
+- `QueryBinaryVersion()` — the CLI's version and build time
+- `ReloadSkills()` / `ReloadPlugins()` — reload from disk and return the refreshed slash-command, agent and MCP-server surface
 - `GetMCPStatus()` — query MCP server status (fire-and-forget)
 - `QueryMCPStatus()` — query MCP server status, returns `[]MCPServerStatus`
 - `LastEventAt()` — arrival stamp of the most recent event, including synthetic ones (`ToolProgressEvent`, `CLIStateChangeEvent`, `StderrEvent`). A stronger hang signal for watchdogs than `ProcessInfo().LastStdoutAt`, which does not move during long tool executions
@@ -355,6 +365,46 @@ Every event is stamped on arrival with the query generation that was active when
 - `QueryHandle.Gen()` / `Dropped()` — generation for orphan correlation; drop counter for this mailbox
 
 A `QueryCtx` whose stdin write fails marks the session `StateFailed` (stdin is poisoned — no events will ever arrive) so callers can recycle it instead of hanging in `StateRunning`.
+### Rich tool permissions
+
+`WithCanUseTool` receives only the tool name and input. `WithCanUseToolRequest`
+receives the whole request, which is what a host needs to attribute a prompt
+and to offer "always allow":
+
+```go
+session, err := client.Connect(ctx,
+    claudecli.WithCanUseToolRequest(func(req claudecli.ToolPermissionRequest) (*claudecli.PermissionResponse, error) {
+        // Attribute the prompt: which tool call, and which subagent raised it.
+        fmt.Printf("%s (%s) wants %s: %s\n",
+            req.ToolUseID, req.AgentID, req.ToolName, req.DecisionReason)
+
+        switch req.DecisionReasonType {
+        case "safetyCheck":
+            return &claudecli.PermissionResponse{
+                Allow:       false,
+                DenyMessage: "safety checks are never auto-approved",
+                Interrupt:   true, // stop the turn rather than telling the model to retry
+            }, nil
+        }
+
+        // "Always allow": echo the CLI's own suggestions back rather than
+        // deriving rules from the input — a suggestion can encode compound-bash
+        // logic or a directory grant that is easy to get wrong.
+        return &claudecli.PermissionResponse{
+            Allow:              true,
+            UpdatedPermissions: req.PermissionSuggestions,
+        }, nil
+    }),
+)
+```
+
+`Interrupt` on a denial stops the turn outright; leave it false when
+`DenyMessage` tells the model what to do instead. When the CLI withdraws a
+prompt (its turn was interrupted, or another client answered), the callback is
+cancelled and no reply is sent.
+
+Permission *rules* can also be changed independently of any prompt — see
+`SetPermissionRules` above.
 
 ### Mid-turn message injection
 
@@ -516,6 +566,48 @@ case *claudecli.ToolUseEvent:
         fmt.Printf("[tool: %s]\n", e.Name) // top-level
     }
 ```
+
+### Per-subagent model
+
+The model a subagent actually ran on is carried on the subagent's own assistant
+messages, and nowhere else. It arrives as the **resolved** API model id, which
+is more specific than the alias in the Agent tool's input — `AgentInput.Model`
+is one of `sonnet|opus|haiku|fable`, and is empty when the subagent inherits
+the parent's model.
+
+Correlate by matching `ParentToolUseID` against the `ToolUseID` the
+`task_started` `TaskEvent` carried:
+
+```go
+models := map[string]string{} // taskID -> resolved model
+toolUseToTask := map[string]string{}
+
+for ev := range stream.Events() {
+    switch e := ev.(type) {
+    case *claudecli.TaskEvent:
+        if e.Subtype == "task_started" {
+            toolUseToTask[e.ToolUseID] = e.TaskID
+            fmt.Printf("task %s: %s subagent\n", e.TaskID, e.SubagentType)
+        }
+    case *claudecli.TextEvent:
+        if e.ParentToolUseID == "" {
+            continue // parent conversation, not a subagent
+        }
+        if taskID, ok := toolUseToTask[e.ParentToolUseID]; ok && e.Model != "" {
+            models[taskID] = e.Model // e.g. "claude-haiku-4-5-20251001"
+        }
+    }
+}
+```
+
+**This requires `WithForwardSubagentText()`.** Without it the CLI emits no
+subagent assistant messages at all, so `Model`, `SubagentType` and
+`TaskDescription` are always empty — the task events still arrive, but none of
+them carry a model. That is the CLI's only path to this data: there is no way
+to learn a subagent's model without also receiving its forwarded transcript.
+
+Effort is **not** available per subagent — see
+[Known limitations](#known-limitations--todo).
 
 ## Dynamic workflows
 
@@ -713,12 +805,12 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers. `ModelDisplayName()` renders the model ID as e.g. `"Opus 5"`. Also carries `CLIVersion`, `CWD`, `PermissionMode` (the mode actually in effect), `OutputStyle`, `SlashCommands`, `Plugins` (`[]PluginInfo`), and `MCPServerErrors` (`[]MCPServerError` — `--mcp-config` entries skipped by validation, which never appear in `MCPServers`; requires CLI 2.1.219+). |
 | `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
 | `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
-| `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_updated`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`, `EndTime`. `IsWorkflow()` is true for dynamic-workflow runs (`TaskType == "local_workflow"`), where `WorkflowName`, `WorkflowProgress` (per-phase/per-agent `[]WorkflowProgressEntry`), and `OutputFile` (on completion) are also set. See [Dynamic workflows](#dynamic-workflows). |
+| `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_updated`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`, `EndTime`, `SubagentType`. `IsWorkflow()` is true for dynamic-workflow runs (`TaskType == "local_workflow"`), where `WorkflowName`, `WorkflowProgress` (per-phase/per-agent `[]WorkflowProgressEntry`), and `OutputFile` (on completion) are also set. See [Dynamic workflows](#dynamic-workflows). |
 | `*HookEvent`       | Hook lifecycle event (system subtypes `hook_started`, `hook_progress`, `hook_response`). Requires `WithIncludeHookEvents()` — the CLI emits nothing otherwise. Fields: `HookID`, `HookName`, `HookEvent` (e.g. `"SessionStart"`), and on `hook_response`: `Output`, `Stdout`, `Stderr`, `ExitCode`, `Outcome`. |
-| `*ThinkingEvent`   | Model thinking output. Includes `Signature` for verification. `Content` may be empty while `Signature` is set — treat `Content=="" && Signature!=""` as "thinking hidden", not "no thinking". `ParentToolUseID` set when from a subagent. |
-| `*TextEvent`       | Assistant text output. `ParentToolUseID` set when from a subagent.                                                           |
+| `*ThinkingEvent`   | Model thinking output. Includes `Signature` for verification. `Content` may be empty while `Signature` is set — treat `Content=="" && Signature!=""` as "thinking hidden", not "no thinking". `ParentToolUseID` set when from a subagent, plus `Model`/`SubagentType`/`TaskDescription` — see [Per-subagent model](#per-subagent-model). |
+| `*TextEvent`       | Assistant text output. `ParentToolUseID` set when from a subagent, plus `Model`/`SubagentType`/`TaskDescription` — see [Per-subagent model](#per-subagent-model). |
 | `*TurnEvent`       | New assistant turn started. `Turn` is a 1-based counter, `ToolName` is the first tool in the turn (empty for text-only turns). Only emitted for top-level turns (subagent messages excluded). |
-| `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent. `ServerSide` is true for server-side tools (web search, code execution). `MCP` is true for MCP tool calls. |
+| `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent, plus `Model`/`SubagentType`/`TaskDescription` — see [Per-subagent model](#per-subagent-model). `ServerSide` is true for server-side tools (web search, code execution). `MCP` is true for MCP tool calls. |
 | `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. `ParentToolUseID` set when from a subagent. |
 | `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil on subagent completion) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `WorkflowLaunch` (non-nil when a dynamic workflow is launched in the background) carries `RunID`, `WorkflowName`, `ScriptPath`, `TranscriptDir` and helpers for out-of-band monitoring — see [Dynamic workflows](#dynamic-workflows). `IsReplay` is true when echoed via `--replay-user-messages`. `Text()` returns concatenated text. |
 | `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string (or `"content/<type>"` for unknown content blocks), `Raw` is the full JSON. Forward-compat catch-all — also used for error fallback diagnostics on non-zero exit. |
@@ -734,6 +826,10 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*AuthStatusEvent` | Authentication status change during a session (e.g. token refresh). `IsAuthenticating`, `Output`, `Error`. |
 | `*PromptSuggestionEvent` | Predicted next user prompt, emitted after each turn when `WithPromptSuggestions()` is set. Sessions only — the CLI emits it after the turn's result, which one-shot `Run` treats as terminal. Advisory: a guess at what the user might ask next, not an instruction. |
 | `*FilesPersistedEvent` | File persistence confirmation. `Files` lists successfully persisted files (`Filename`, `FileID`); `Failed` lists failures. |
+| `*BackgroundTasksChangedEvent` | The complete set of live background tasks after any membership change (`Tasks []BackgroundTask`). **REPLACE semantics** — swap your set for the payload. A *level* signal, unlike the `task_started`/`task_notification` *edge* pair: a missed edge wedges a stale "running" indicator, so consumers that only need "is background work running" should read it here. Nothing is emitted at startup, so reset to empty when the CLI process restarts. |
+| `*SessionStateChangedEvent` | The CLI's own session state: `SessionStateIdle`, `SessionStateRunning`, or `SessionStateRequiresAction`. The only signal that distinguishes "waiting on the user" from "idle". |
+| `*ConversationResetEvent` | The conversation was reset by `/clear`, plan-mode exit, or a fresh-session flow. A transcript boundary, not a session restart: the session ID is unchanged but the model's context is gone. Mount a fresh transcript under `NewConversationID` and drop any cached title. |
+| `*PermissionDeniedEvent` | A tool call denied without an interactive prompt (auto-mode classifier, `dontAsk`, deny rules, headless auto-deny). Carries `ToolName`, `ToolUseID`, `AgentID`, `DecisionReasonType`, `DecisionReason`, `Message`. Advisory and best-effort. |
 | `*ControlRequestEvent` | Control request from CLI (handled internally in sessions).                                                              |
 | `*StreamEvent`     | Partial message update (when `WithIncludePartialMessages` is on).                                                            |
 | `*ErrorEvent`      | Error during streaming. `Fatal` field distinguishes process failures (which set `StateFailed`) from non-fatal errors (parse errors, API errors). API errors are classified via `errors.Is` with sentinel errors (see error handling below). |
@@ -778,7 +874,8 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithSettingSources(...string)`      | Setting sources (comma-joined).                                                                       |
 | `WithPluginDirs(...string)`          | Plugin directories.                                                                                   |
 | `WithResume(string)`                 | Resume a session by ID (mutually exclusive with `WithSessionID`/`WithContinue`).                      |
-| `WithCanUseTool(ToolPermissionFunc)` | Tool permission callback (sessions only).                                                             |
+| `WithCanUseTool(ToolPermissionFunc)` | Tool permission callback (sessions only). Receives only the tool name and input.                      |
+| `WithCanUseToolRequest(ToolPermissionRequestFunc)` | Tool permission callback receiving the full `ToolPermissionRequest` — `ToolUseID`, `AgentID`, `DecisionReason`/`DecisionReasonType`, `PermissionSuggestions`, and presentation fields. Needed to attribute a prompt to the call or subagent that raised it, and to support "always allow" via `PermissionResponse.UpdatedPermissions`. Takes precedence over `WithCanUseTool`. |
 | `WithUserInput(UserInputFunc)`       | Dedicated callback for `AskUserQuestion` tool requests (sessions only).                               |
 | `WithControlTimeout(time.Duration)` | Timeout for control protocol round-trips (default: 30s). Sessions only.                               |
 | `WithInitTimeout(time.Duration)`   | Timeout for the initialize handshake (default: 60s). Increase if MCP servers are slow to connect. Sessions only. |
@@ -902,5 +999,21 @@ claudecli-go/
 - **Fork-session needs a persisted parent** — `RunBlocking` by default emits `--no-session-persistence`, so the parent must be started with `WithSessionID`, `WithResume`/`WithContinue`, or via `Connect` for `WithForkSession` to find the parent on disk.
 - **`AuthStatus` fail-close** — When the CLI exits 0 with non-JSON output, `AuthStatus` returns `AuthStateUnknown` (not `AuthStateAuthenticated`). Callers should handle this explicitly.
 - **Thinking text may be hidden** — The CLI can emit `ThinkingEvent`s with empty `Content` but a set `Signature` (the model thought, but the text was withheld). No SDK option changes this. Distinguish "thinking hidden" from "no thinking" via `Content == "" && Signature != ""`.
+- **Per-subagent effort is not observable** — the CLI carries a subagent's
+  resolved model on its assistant messages (see
+  [Per-subagent model](#per-subagent-model)) but nothing in the stream carries
+  its effort level. The only available value is whatever the Agent tool input
+  specified, which is absent when the subagent inherits the parent's effort.
+  This is an upstream gap, not an SDK one.
+- **Per-subagent model costs a forwarded transcript** — obtaining it requires
+  `WithForwardSubagentText()`, which forwards every subagent text and thinking
+  block. There is no cheaper path to the model id.
+- **Hooks are not supported** — `WithIncludeHookEvents()` surfaces hook
+  *lifecycle* events, but the SDK cannot register hook callbacks
+  (`initialize.hooks` / the inbound `hook_callback` control request). Inbound
+  control requests other than `can_use_tool` are answered with an
+  "unsupported control request" error; this also covers SDK-hosted MCP servers
+  (`mcp_message`), MCP elicitations, and tool-driven dialogs
+  (`request_user_dialog`).
 - **Workflows emit two `ResultEvent`s** — A [dynamic workflow](#dynamic-workflows) run produces two result events: the first reports it launched in the background, the second carries the real answer once it completes. Consume the **last** `ResultEvent`. A workflow also does not survive its parent CLI process (the run settles at `status: "killed"`).
 - **Workflow on-disk state is an internal layout** — `WatchWorkflow`/`ReadWorkflowSnapshot` read CLI run-state files (`~/.claude/projects/.../workflows/<runId>.json`) whose paths and JSON shape are undocumented and may change across CLI versions. They parse defensively and preserve `Raw`, but treat this as best-effort. File GC/lifetime is unverified.
