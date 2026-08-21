@@ -1,6 +1,7 @@
 package claudecli
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 )
@@ -26,6 +27,16 @@ type controlResponseBody struct {
 }
 
 // ToolPermissionRequest is the data inside a "can_use_tool" control request.
+//
+// A request can be withdrawn before it is answered: the CLI sends
+// control_cancel_request when its turn was interrupted or another client
+// answered first. From that moment the answer is discarded — the SDK writes no
+// control_response for a withdrawn request id, and the CLI has stopped waiting
+// for one. A host that parks the request on a human (a permission dialog) must
+// therefore be able to observe the withdrawal, or its prompt goes stale on
+// screen with nothing behind it. Register the callback with
+// WithCanUseToolRequestContext to receive a context that is cancelled at that
+// moment, and drop the prompt when it fires.
 type ToolPermissionRequest struct {
 	ToolName string          `json:"tool_name"`
 	Input    json.RawMessage `json:"input"`
@@ -103,7 +114,22 @@ type ToolPermissionFunc func(toolName string, input json.RawMessage) (*Permissio
 
 // ToolPermissionRequestFunc is called when the CLI requests permission to use
 // a tool, and receives the full request rather than just name and input.
+//
+// It cannot observe a withdrawn request. Use ToolPermissionRequestContextFunc
+// when the callback parks on a human.
 type ToolPermissionRequestFunc func(req ToolPermissionRequest) (*PermissionResponse, error)
+
+// ToolPermissionRequestContextFunc is called when the CLI requests permission
+// to use a tool, and receives a per-request context alongside the full request.
+//
+// ctx is cancelled when the request is withdrawn (an inbound
+// control_cancel_request for this request id) and when the session ends. Either
+// way the return value is discarded and no control_response is written, so a
+// host holding a permission dialog open should drop it as soon as ctx.Done()
+// fires rather than keep waiting on a user whose answer can no longer be
+// delivered. Returning promptly on cancellation also releases the goroutine the
+// SDK runs the callback in.
+type ToolPermissionRequestContextFunc func(ctx context.Context, req ToolPermissionRequest) (*PermissionResponse, error)
 
 // Question represents a single question from an AskUserQuestion tool call.
 type Question struct {
@@ -121,7 +147,19 @@ type QuestionOption struct {
 
 // UserInputFunc receives parsed questions and returns a map of question text -> selected answer(s).
 // For multiSelect questions, multiple answers can be joined with newlines or returned as a JSON array.
+//
+// It cannot observe a withdrawn request. Use UserInputContextFunc when the
+// callback parks on a human — which an AskUserQuestion prompt always does.
 type UserInputFunc func(questions []Question) (answers map[string]string, err error)
+
+// UserInputContextFunc receives parsed questions alongside a per-request
+// context, and returns a map of question text -> selected answer(s).
+//
+// ctx is cancelled when the request is withdrawn (an inbound
+// control_cancel_request for this request id) and when the session ends. Either
+// way the answers are discarded and no control_response is written, so a host
+// showing the question should take it off screen as soon as ctx.Done() fires.
+type UserInputContextFunc func(ctx context.Context, questions []Question) (answers map[string]string, err error)
 
 // controlResult is used internally for tracking pending control request responses.
 type controlResult struct {

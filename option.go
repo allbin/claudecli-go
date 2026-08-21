@@ -94,7 +94,9 @@ type options struct {
 	// session callbacks
 	canUseTool        ToolPermissionFunc
 	canUseToolReq     ToolPermissionRequestFunc
+	canUseToolReqCtx  ToolPermissionRequestContextFunc
 	userInput         UserInputFunc
+	userInputCtx      UserInputContextFunc
 	controlTimeout    time.Duration // timeout for control request responses
 	initTimeout       time.Duration // timeout for initialize handshake (includes MCP startup)
 	stdinWriteTimeout time.Duration // deadline for individual stdin writes (session)
@@ -312,14 +314,57 @@ func WithCanUseToolRequest(fn ToolPermissionRequestFunc) Option {
 	return func(o *options) { o.canUseToolReq = fn }
 }
 
+// WithCanUseToolRequestContext registers a tool-permission callback that
+// receives a per-request context alongside the full ToolPermissionRequest.
+//
+// Use this over WithCanUseToolRequest when the callback parks the decision on a
+// human, which is the normal shape of an interactive permission dialog. The
+// context is the only way to learn that the request was withdrawn:
+//
+//   - ctx is cancelled when the CLI sends control_cancel_request for this
+//     request id — its turn was interrupted, or another client answered first —
+//     and when the session context ends.
+//   - Once cancelled, the callback's return value is discarded: the SDK writes
+//     no control_response for that request id, and the CLI has stopped waiting
+//     for one.
+//   - A host must therefore treat ctx.Done() as "drop the prompt": take the
+//     dialog off screen and release whatever is blocked on the user, instead of
+//     waiting for an answer that can no longer be delivered.
+//
+// Precedence follows the existing rule — the more informed callback wins. This
+// one beats WithCanUseToolRequest, which beats WithCanUseTool. Also adds
+// --permission-prompt-tool.
+func WithCanUseToolRequestContext(fn ToolPermissionRequestContextFunc) Option {
+	return func(o *options) { o.canUseToolReqCtx = fn }
+}
+
 // WithUserInput registers a callback for AskUserQuestion tool requests.
 // Only effective with Connect() sessions.
 //
 // When registered, AskUserQuestion requests route here instead of the
 // ToolPermissionFunc callback. Other tool permission requests are unaffected.
 // Also adds --permission-prompt-tool (same as WithCanUseTool).
+//
+// The callback cannot observe a withdrawn request. Use
+// WithUserInputContext when that matters — for a question put to a user, it
+// usually does.
 func WithUserInput(fn UserInputFunc) Option {
 	return func(o *options) { o.userInput = fn }
+}
+
+// WithUserInputContext registers an AskUserQuestion callback that receives a
+// per-request context alongside the questions.
+//
+// The cancellation contract is the same as WithCanUseToolRequestContext: ctx is
+// cancelled when the CLI withdraws the request (inbound control_cancel_request
+// for this request id) or when the session ends, and from that point the
+// answers are discarded and no control_response is written. Take the question
+// off screen when ctx.Done() fires rather than keep waiting on the user.
+//
+// Takes precedence over WithUserInput if both are set. Also adds
+// --permission-prompt-tool (same as WithCanUseTool).
+func WithUserInputContext(fn UserInputContextFunc) Option {
+	return func(o *options) { o.userInputCtx = fn }
 }
 
 // WithControlTimeout sets the timeout for control protocol request/response
@@ -603,7 +648,8 @@ func (o *options) buildSessionArgs() []string {
 		}
 	}
 
-	if o.canUseTool != nil || o.canUseToolReq != nil || o.userInput != nil {
+	if o.canUseTool != nil || o.canUseToolReq != nil || o.canUseToolReqCtx != nil ||
+		o.userInput != nil || o.userInputCtx != nil {
 		toolName := "stdio"
 		if o.permissionPromptToolName != "" {
 			toolName = o.permissionPromptToolName

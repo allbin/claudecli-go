@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Verbatim from a live can_use_tool control request (Claude CLI 2.1.235):
@@ -189,6 +190,288 @@ func TestControlCancelRequestAbortsPendingPrompt(t *testing.T) {
 			return &PermissionResponse{Allow: true}, nil
 		}))
 
+	runCancelledPrompt(t, sim, client, entered, func() { close(release) })
+}
+
+// The ctx handed to a WithCanUseToolRequestContext callback must fire when the
+// CLI withdraws the prompt. Without it a host that parks the request on a human
+// leaves a dead dialog on screen: the answer is discarded either way, but only
+// the ctx tells the host that.
+func TestCanUseToolRequestContextCancelledOnWithdrawal(t *testing.T) {
+	sim := newSessionSim()
+
+	entered := make(chan struct{})
+	ctxDone := make(chan struct{})
+	gotReq := make(chan ToolPermissionRequest, 1)
+
+	client := NewWithExecutor(sim.bidi, WithCanUseToolRequestContext(
+		func(ctx context.Context, req ToolPermissionRequest) (*PermissionResponse, error) {
+			gotReq <- req
+			close(entered)
+			// A host would drop its prompt here. Blocking on ctx.Done() is
+			// how the SDK expects a parked callback to unwind.
+			<-ctx.Done()
+			close(ctxDone)
+			return &PermissionResponse{Allow: true}, ctx.Err()
+		}))
+
+	runCancelledPrompt(t, sim, client, entered, func() {
+		select {
+		case <-ctxDone:
+		case <-time.After(5 * time.Second):
+			t.Error("callback ctx never cancelled after control_cancel_request")
+		}
+	})
+
+	// The full request must still reach the ctx-shaped callback — it is the
+	// strictly-more-informed variant, not a reduced one.
+	req := <-gotReq
+	if req.ToolUseID != "toolu_01NbjBgwHU6dbKU6ZXYiuwxS" || req.ToolName != "Write" {
+		t.Errorf("request not carried through: %+v", req)
+	}
+}
+
+// The other half of the contract: the ctx also ends with the session, so a
+// parked callback unwinds instead of holding a dialog open forever.
+func TestCanUseToolRequestContextCancelledOnSessionEnd(t *testing.T) {
+	sim := newSessionSim()
+
+	entered := make(chan struct{})
+	ctxDone := make(chan struct{})
+	client := NewWithExecutor(sim.bidi, WithCanUseToolRequestContext(
+		func(ctx context.Context, req ToolPermissionRequest) (*PermissionResponse, error) {
+			close(entered)
+			<-ctx.Done()
+			close(ctxDone)
+			return nil, ctx.Err()
+		}))
+
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.send(canUseToolRequest)
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session, err := client.Connect(ctx)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	go func() {
+		for range session.Events() {
+		}
+	}()
+
+	<-entered
+	cancel()
+
+	select {
+	case <-ctxDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("callback ctx never cancelled after session context ended")
+	}
+
+	// Let readLoop finish: it waits on in-flight control handlers, then on EOF.
+	sim.bidi.StdoutWriter.Close()
+	session.Close()
+}
+
+// The same contract for AskUserQuestion, which always parks on a human.
+func TestUserInputContextCancelledOnWithdrawal(t *testing.T) {
+	sim := newSessionSim()
+
+	entered := make(chan struct{})
+	ctxDone := make(chan struct{})
+	gotQuestions := make(chan []Question, 1)
+
+	client := NewWithExecutor(sim.bidi, WithUserInputContext(
+		func(ctx context.Context, questions []Question) (map[string]string, error) {
+			gotQuestions <- questions
+			close(entered)
+			<-ctx.Done()
+			close(ctxDone)
+			return nil, ctx.Err()
+		}))
+
+	runCancelledPromptWith(t, sim, client, askUserQuestionRequest, entered, func() {
+		select {
+		case <-ctxDone:
+		case <-time.After(5 * time.Second):
+			t.Error("callback ctx never cancelled after control_cancel_request")
+		}
+	})
+
+	if qs := <-gotQuestions; len(qs) != 1 || qs[0].Question != "Which database?" {
+		t.Errorf("questions not carried through: %+v", qs)
+	}
+}
+
+// Registering the ctx-shaped callback must not change what a non-ctx callback
+// sees or answers: this is purely additive.
+func TestNonContextCallbacksUnaffected(t *testing.T) {
+	t.Run("canUseTool still answers", func(t *testing.T) {
+		sim := newSessionSim()
+		client := NewWithExecutor(sim.bidi, WithCanUseTool(
+			func(name string, input json.RawMessage) (*PermissionResponse, error) {
+				if name != "Write" {
+					t.Errorf("toolName = %q", name)
+				}
+				return &PermissionResponse{Allow: true}, nil
+			}))
+		body := roundTripPermission(t, sim, client, canUseToolRequest)
+		if body["behavior"] != "allow" {
+			t.Errorf("behavior = %v", body["behavior"])
+		}
+	})
+
+	t.Run("userInput still answers", func(t *testing.T) {
+		sim := newSessionSim()
+		client := NewWithExecutor(sim.bidi, WithUserInput(
+			func(questions []Question) (map[string]string, error) {
+				return map[string]string{questions[0].Question: "Postgres"}, nil
+			}))
+		body := roundTripPermission(t, sim, client, askUserQuestionRequest)
+		updated, ok := body["updatedInput"].(map[string]any)
+		if !ok {
+			t.Fatalf("updatedInput missing: %#v", body)
+		}
+		answers, _ := updated["answers"].(map[string]any)
+		if answers["Which database?"] != "Postgres" {
+			t.Errorf("answers = %#v", answers)
+		}
+	})
+
+	// Precedence: the more informed callback wins, and the ctx-shaped one is
+	// the most informed. Registering all three must not resurrect the others.
+	t.Run("ctx variant outranks both", func(t *testing.T) {
+		sim := newSessionSim()
+		called := make(chan string, 3)
+		client := NewWithExecutor(sim.bidi,
+			WithCanUseTool(func(string, json.RawMessage) (*PermissionResponse, error) {
+				called <- "plain"
+				return &PermissionResponse{Allow: true}, nil
+			}),
+			WithCanUseToolRequest(func(ToolPermissionRequest) (*PermissionResponse, error) {
+				called <- "req"
+				return &PermissionResponse{Allow: true}, nil
+			}),
+			WithCanUseToolRequestContext(func(context.Context, ToolPermissionRequest) (*PermissionResponse, error) {
+				called <- "ctx"
+				return &PermissionResponse{Allow: true}, nil
+			}))
+		roundTripPermission(t, sim, client, canUseToolRequest)
+		if got := <-called; got != "ctx" {
+			t.Errorf("dispatched to %q, want ctx", got)
+		}
+		select {
+		case extra := <-called:
+			t.Errorf("also dispatched to %q", extra)
+		default:
+		}
+	})
+
+	t.Run("userInput ctx variant outranks plain", func(t *testing.T) {
+		sim := newSessionSim()
+		called := make(chan string, 2)
+		client := NewWithExecutor(sim.bidi,
+			WithUserInput(func([]Question) (map[string]string, error) {
+				called <- "plain"
+				return nil, nil
+			}),
+			WithUserInputContext(func(context.Context, []Question) (map[string]string, error) {
+				called <- "ctx"
+				return nil, nil
+			}))
+		roundTripPermission(t, sim, client, askUserQuestionRequest)
+		if got := <-called; got != "ctx" {
+			t.Errorf("dispatched to %q, want ctx", got)
+		}
+		select {
+		case extra := <-called:
+			t.Errorf("also dispatched to %q", extra)
+		default:
+		}
+	})
+}
+
+// Both ctx-shaped options must still request the permission prompt tool — a
+// callback the CLI never calls is worse than no callback.
+func TestContextCallbacksRequestPermissionPromptTool(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opt  Option
+	}{
+		{"canUseToolRequestContext", WithCanUseToolRequestContext(
+			func(context.Context, ToolPermissionRequest) (*PermissionResponse, error) { return nil, nil })},
+		{"userInputContext", WithUserInputContext(
+			func(context.Context, []Question) (map[string]string, error) { return nil, nil })},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := resolveOptions(nil, []Option{tc.opt}).buildSessionArgs()
+			found := false
+			for i, a := range args {
+				if a == "--permission-prompt-tool" && i+1 < len(args) && args[i+1] == "stdio" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("--permission-prompt-tool stdio missing from %v", args)
+			}
+		})
+	}
+}
+
+// Verbatim shape of an AskUserQuestion can_use_tool request (Claude CLI
+// 2.1.235), trimmed to the fields the SDK reads.
+const askUserQuestionRequest = `{"type":"control_request","request_id":"cli-1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions":[{"question":"Which database?","header":"Database","options":[{"label":"Postgres"},{"label":"SQLite"}]}]},"tool_use_id":"toolu_01AskUserQ"}}`
+
+// roundTripPermission drives one can_use_tool request to completion and returns
+// the decoded response body the SDK wrote back.
+func roundTripPermission(t *testing.T, sim *sessionSim, client *Client, request string) map[string]any {
+	t.Helper()
+	responded := make(chan map[string]any, 1)
+	go func() {
+		sim.handleInitAndReady(t)
+		sim.send(request)
+		responded <- sim.readStdin(t)
+		sim.sendResult()
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	msg := <-responded
+	resp, ok := msg["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("no control_response: %#v", msg)
+	}
+	if resp["subtype"] != "success" {
+		t.Fatalf("error response: %#v", resp)
+	}
+	body, ok := resp["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("response body missing: %#v", resp)
+	}
+	if _, err := session.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func runCancelledPrompt(t *testing.T, sim *sessionSim, client *Client, entered <-chan struct{}, afterCancel func()) {
+	t.Helper()
+	runCancelledPromptWith(t, sim, client, canUseToolRequest, entered, afterCancel)
+}
+
+// runCancelledPromptWith sends request, waits for the callback to be parked in
+// it, withdraws it, then asserts no control_response was written for the
+// withdrawn id. afterCancel runs once the cancel is known to have been applied.
+func runCancelledPromptWith(t *testing.T, sim *sessionSim, client *Client, request string, entered <-chan struct{}, afterCancel func()) {
+	t.Helper()
+
 	handshake := make(chan struct{})
 	cancelSeen := make(chan struct{})
 	lines := make(chan string, 8)
@@ -196,7 +479,7 @@ func TestControlCancelRequestAbortsPendingPrompt(t *testing.T) {
 	go func() {
 		sim.handleInitAndReady(t)
 		close(handshake)
-		sim.send(canUseToolRequest)
+		sim.send(request)
 		<-entered
 		sim.send(`{"type":"control_cancel_request","request_id":"cli-1"}`)
 		// readLoop processes lines in order, so observing this event proves
@@ -205,7 +488,7 @@ func TestControlCancelRequestAbortsPendingPrompt(t *testing.T) {
 		// be racing its own setup.
 		sim.send(`{"type":"system","subtype":"session_state_changed","session_id":"s1","state":"idle"}`)
 		<-cancelSeen
-		close(release)
+		afterCancel()
 		sim.sendResult()
 	}()
 

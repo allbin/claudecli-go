@@ -50,10 +50,14 @@ type Session struct {
 	pump           chan Event     // set by readLoop; sendEvent writes here for ordering
 	pumpClosed     chan struct{}  // closed by readLoop defer — EOF-signal till pumpgoroutinen och stopp för sendEvent. Pump-kanalen close():as ALDRIG: en samtidig sendEvent (ticker, emitQueryActivity) får aldrig kunna panika på send-on-closed.
 
-	// callbacks
-	canUseTool    ToolPermissionFunc
-	canUseToolReq ToolPermissionRequestFunc
-	userInput     UserInputFunc
+	// callbacks. The more informed variant wins when several are registered:
+	// canUseToolReqCtx > canUseToolReq > canUseTool, and userInputCtx >
+	// userInput.
+	canUseTool       ToolPermissionFunc
+	canUseToolReq    ToolPermissionRequestFunc
+	canUseToolReqCtx ToolPermissionRequestContextFunc
+	userInput        UserInputFunc
+	userInputCtx     UserInputContextFunc
 
 	// state tracking
 	sessionID       string
@@ -1461,12 +1465,12 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 		}
 
 		// Route AskUserQuestion to userInput callback when available.
-		if permReq.ToolName == "AskUserQuestion" && s.userInput != nil {
+		if permReq.ToolName == "AskUserQuestion" && (s.userInputCtx != nil || s.userInput != nil) {
 			s.handleUserInput(reqCtx, requestID, permReq)
 			return
 		}
 
-		if s.canUseTool == nil && s.canUseToolReq == nil {
+		if s.canUseTool == nil && s.canUseToolReq == nil && s.canUseToolReqCtx == nil {
 			s.sendControlResponse(requestID, nil, fmt.Errorf("no canUseTool callback registered"))
 			return
 		}
@@ -1488,15 +1492,20 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 					}
 				}
 			}()
-			// The request-shaped callback wins when both are registered:
-			// it is strictly more informed.
+			// The more informed callback wins when several are registered.
+			// The ctx-shaped one is the only one that can observe a
+			// withdrawal, so it outranks the plain request-shaped one, which
+			// in turn outranks name+input.
 			var (
 				resp *PermissionResponse
 				err  error
 			)
-			if s.canUseToolReq != nil {
+			switch {
+			case s.canUseToolReqCtx != nil:
+				resp, err = s.canUseToolReqCtx(reqCtx, permReq)
+			case s.canUseToolReq != nil:
 				resp, err = s.canUseToolReq(permReq)
-			} else {
+			default:
 				resp, err = s.canUseTool(permReq.ToolName, permReq.Input)
 			}
 			ch <- callbackResult{resp, err}
@@ -1557,6 +1566,8 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 }
 
 // handleUserInput routes AskUserQuestion requests to the userInput callback.
+// reqCtx is cancelled when the CLI withdraws this request, and is handed to the
+// callback when it was registered via WithUserInputContext.
 func (s *Session) handleUserInput(reqCtx context.Context, requestID string, permReq ToolPermissionRequest) {
 	var input struct {
 		Questions []Question `json:"questions"`
@@ -1581,7 +1592,17 @@ func (s *Session) handleUserInput(reqCtx context.Context, requestID string, perm
 				}
 			}
 		}()
-		answers, err := s.userInput(input.Questions)
+		// Same precedence rule as can_use_tool: the ctx-shaped callback wins,
+		// being the only one that can observe a withdrawal.
+		var (
+			answers map[string]string
+			err     error
+		)
+		if s.userInputCtx != nil {
+			answers, err = s.userInputCtx(reqCtx, input.Questions)
+		} else {
+			answers, err = s.userInput(input.Questions)
+		}
 		ch <- callbackResult{answers, err}
 	}()
 
