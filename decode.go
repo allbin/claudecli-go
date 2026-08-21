@@ -15,8 +15,9 @@ import "encoding/json"
 // worked in `-p` mode and not in Connect(), or vice versa.
 //
 // Returning (nil, false) means "not mine" — the caller falls through to its own
-// switch. Unknown system subtypes ARE handled here (as UnknownEvent) so that a
-// new CLI subtype surfaces identically in both loops.
+// switch. Returning (nil, true) means "handled, emit nothing" (keep_alive).
+// Unknown system subtypes ARE handled here (as UnknownEvent) so that a new CLI
+// subtype surfaces identically in both loops.
 func decodeStatelessEvent(raw *rawEvent, line []byte, backfill *taskTypeBackfiller) (Event, bool) {
 	switch raw.Type {
 	case "system":
@@ -52,6 +53,15 @@ func decodeStatelessEvent(raw *rawEvent, line []byte, backfill *taskTypeBackfill
 		case "files_persisted":
 			return parseFilesPersistedEvent(raw), true
 
+		case "background_tasks_changed":
+			return parseBackgroundTasksChangedEvent(raw), true
+
+		case "session_state_changed":
+			return parseSessionStateChangedEvent(raw), true
+
+		case "permission_denied":
+			return parsePermissionDeniedEvent(raw, line), true
+
 		default:
 			return &UnknownEvent{
 				Type: "system/" + raw.Subtype,
@@ -80,6 +90,16 @@ func decodeStatelessEvent(raw *rawEvent, line []byte, backfill *taskTypeBackfill
 
 	case "auth_status":
 		return parseAuthStatusEvent(raw), true
+
+	case "conversation_reset":
+		return parseConversationResetEvent(raw), true
+
+	case "keep_alive":
+		// Liveness heartbeat with no payload; the CLI emits it periodically,
+		// for example while a long control request is in flight. The protocol
+		// requires receivers to ignore it — surfacing it as an UnknownEvent
+		// would read as a parse failure. Handled, deliberately not emitted.
+		return nil, true
 	}
 
 	return nil, false

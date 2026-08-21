@@ -393,6 +393,106 @@ func (e *ToolUseEvent) String() string {
 	}
 }
 
+// ConversationResetEvent is emitted when the conversation is reset — by
+// /clear, by leaving plan mode, or by a fresh-session flow.
+//
+// This is a transcript boundary, not a session restart: the CLI process and
+// session id are unchanged, but everything before it is gone from the model's
+// context. Consumers holding a transcript must start a fresh one under
+// NewConversationID and drop any cached session title; continuing to append to
+// the old transcript silently diverges from what the model actually sees.
+type ConversationResetEvent struct {
+	NewConversationID string
+	SessionID         string
+	UUID              string
+}
+
+func (*ConversationResetEvent) event() {}
+func (e *ConversationResetEvent) String() string {
+	return fmt.Sprintf("ConversationResetEvent{NewConversationID: %s}", e.NewConversationID)
+}
+
+// BackgroundTask identifies one live background task.
+type BackgroundTask struct {
+	TaskID      string `json:"task_id"`
+	TaskType    string `json:"task_type"`
+	Description string `json:"description"`
+}
+
+// BackgroundTasksChangedEvent reports the complete set of live background
+// tasks after a membership change (start, completion, kill, or a foreground
+// agent being backgrounded).
+//
+// REPLACE semantics: swap your set for Tasks rather than applying a delta.
+// This is a *level* signal, unlike the task_started/task_notification edge
+// pair — a consumer that only needs "is background work running" should read
+// it here, because a missed edge otherwise wedges a stale running indicator
+// forever. The payload carries ids only; do not try to correlate it with the
+// edge stream, whose relative ordering is unspecified.
+//
+// The level is per-process: nothing is emitted at startup, so reset to the
+// empty set whenever the CLI process restarts and let the next change
+// repopulate it.
+type BackgroundTasksChangedEvent struct {
+	Tasks     []BackgroundTask
+	SessionID string
+	UUID      string
+}
+
+func (*BackgroundTasksChangedEvent) event() {}
+func (e *BackgroundTasksChangedEvent) String() string {
+	return fmt.Sprintf("BackgroundTasksChangedEvent{Tasks: %d}", len(e.Tasks))
+}
+
+// Session states reported by SessionStateChangedEvent.
+const (
+	SessionStateIdle           = "idle"
+	SessionStateRunning        = "running"
+	SessionStateRequiresAction = "requires_action"
+)
+
+// SessionStateChangedEvent reports the CLI's own view of session state, one of
+// SessionStateIdle, SessionStateRunning, or SessionStateRequiresAction.
+//
+// More reliable than inferring state from result/assistant traffic, and the
+// only signal that distinguishes "waiting on the user" from "idle".
+type SessionStateChangedEvent struct {
+	State     string
+	SessionID string
+	UUID      string
+}
+
+func (*SessionStateChangedEvent) event() {}
+func (e *SessionStateChangedEvent) String() string {
+	return fmt.Sprintf("SessionStateChangedEvent{State: %s}", e.State)
+}
+
+// PermissionDeniedEvent reports a tool call denied without an interactive
+// prompt — by the auto-mode classifier, dontAsk mode, a deny rule, or
+// headless auto-deny. With a permission callback registered, the "ask" path
+// arrives as a ToolPermissionRequest instead and this covers only the deny
+// short-circuit; without one, "ask" decisions are terminal and also land here.
+//
+// Advisory and best-effort: in rare races a denial can occur without an event.
+// ResultEvent's permission_denials is the authoritative record.
+//
+// AgentID is set when the denied call originated inside a subagent.
+type PermissionDeniedEvent struct {
+	ToolName           string
+	ToolUseID          string
+	AgentID            string
+	DecisionReasonType string
+	DecisionReason     string
+	Message            string
+	SessionID          string
+	UUID               string
+}
+
+func (*PermissionDeniedEvent) event() {}
+func (e *PermissionDeniedEvent) String() string {
+	return fmt.Sprintf("PermissionDeniedEvent{Tool: %s, Reason: %s}", e.ToolName, e.DecisionReasonType)
+}
+
 // AgentInput contains the parsed fields from an Agent tool invocation.
 type AgentInput struct {
 	Description     string `json:"description"`

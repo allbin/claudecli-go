@@ -932,7 +932,9 @@ func (s *Session) readLoop() {
 		}
 
 		if ev, ok := decodeStatelessEvent(&raw, line, taskBackfill); ok {
-			pumpSend(ev)
+			if ev != nil {
+				pumpSend(ev)
+			}
 			continue
 		}
 

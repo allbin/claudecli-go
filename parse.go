@@ -69,7 +69,9 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 		}
 
 		if ev, ok := decodeStatelessEvent(&raw, line, taskBackfill); ok {
-			emit(ev)
+			if ev != nil {
+				emit(ev)
+			}
 			continue
 		}
 
@@ -277,6 +279,55 @@ func parseContentBlock(block rawContent, meta assistantMeta, resultText *[]strin
 				Raw:  raw,
 			})
 		}
+	}
+}
+
+func parseConversationResetEvent(raw *rawEvent) *ConversationResetEvent {
+	return &ConversationResetEvent{
+		NewConversationID: raw.NewConversationID,
+		SessionID:         raw.SessionID,
+		UUID:              raw.UUID,
+	}
+}
+
+func parseBackgroundTasksChangedEvent(raw *rawEvent) *BackgroundTasksChangedEvent {
+	return &BackgroundTasksChangedEvent{
+		Tasks:     raw.Tasks,
+		SessionID: raw.SessionID,
+		UUID:      raw.UUID,
+	}
+}
+
+func parseSessionStateChangedEvent(raw *rawEvent) *SessionStateChangedEvent {
+	return &SessionStateChangedEvent{
+		State:     raw.State,
+		SessionID: raw.SessionID,
+		UUID:      raw.UUID,
+	}
+}
+
+// parsePermissionDeniedEvent decodes from the raw line rather than rawEvent:
+// permission_denied uses "message" for a plain string, which rawEvent folds
+// into a synthetic assistant content block.
+func parsePermissionDeniedEvent(raw *rawEvent, line []byte) *PermissionDeniedEvent {
+	var pd struct {
+		ToolName           string `json:"tool_name"`
+		ToolUseID          string `json:"tool_use_id"`
+		AgentID            string `json:"agent_id"`
+		DecisionReasonType string `json:"decision_reason_type"`
+		DecisionReason     string `json:"decision_reason"`
+		Message            string `json:"message"`
+	}
+	_ = json.Unmarshal(line, &pd)
+	return &PermissionDeniedEvent{
+		ToolName:           pd.ToolName,
+		ToolUseID:          pd.ToolUseID,
+		AgentID:            pd.AgentID,
+		DecisionReasonType: pd.DecisionReasonType,
+		DecisionReason:     pd.DecisionReason,
+		Message:            pd.Message,
+		SessionID:          raw.SessionID,
+		UUID:               raw.UUID,
 	}
 }
 
@@ -512,6 +563,15 @@ type rawEvent struct {
 
 	// auth_status (top-level)
 	IsAuthenticating bool `json:"isAuthenticating,omitempty"`
+
+	// system subtype session_state_changed
+	State string `json:"state,omitempty"`
+
+	// conversation_reset (top-level)
+	NewConversationID string `json:"new_conversation_id,omitempty"`
+
+	// system subtype background_tasks_changed
+	Tasks []BackgroundTask `json:"tasks,omitempty"`
 
 	// files_persisted (system subtype)
 	Files  json.RawMessage `json:"files,omitempty"`

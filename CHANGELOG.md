@@ -39,6 +39,28 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Added
 
+- **Four stream events that previously surfaced as `*UnknownEvent`:**
+  - **`*ConversationResetEvent`** (`conversation_reset`) — emitted by `/clear`,
+    plan-mode exit and fresh-session flows. A transcript boundary, not a
+    session restart: the session id is unchanged but the model's context is
+    gone. Consumers holding a transcript must start a fresh one under
+    `NewConversationID`; ignoring it silently diverges from what the model
+    sees.
+  - **`*BackgroundTasksChangedEvent`** (`background_tasks_changed`) — the
+    complete set of live background tasks after any membership change, with
+    REPLACE semantics. This is a *level* signal; the
+    `task_started`/`task_notification` pair is an *edge* signal, and a missed
+    edge wedges a stale "running" indicator forever. Consumers that only need
+    "is background work running" should read it here.
+  - **`*SessionStateChangedEvent`** (`session_state_changed`) — the CLI's own
+    `idle` / `running` / `requires_action`, with matching `SessionState*`
+    constants. The only signal that distinguishes "waiting on the user" from
+    "idle".
+  - **`*PermissionDeniedEvent`** (`permission_denied`) — tool calls denied
+    without an interactive prompt (auto-mode classifier, `dontAsk`, deny
+    rules, headless auto-deny). Carries `ToolUseID` and `AgentID` for
+    attribution. Advisory; `ResultEvent`'s permission denials remain
+    authoritative.
 - **`InitEvent.Capabilities` and `InitEvent.HasCapability(name)`.** The CLI
   advertises its optional protocol features on the init event (CLI 2.1.235
   sends `interrupt_receipt_v1`, `interrupt_cancel_queued_v1`,
@@ -48,6 +70,13 @@ or pin a specific version (e.g. `@v0.1.0`).
   provided for the tokens this package acts on. Older CLIs omit the field
   entirely, so an empty slice means "nothing advertised", not "nothing
   supported".
+
+### Fixed
+
+- **`keep_alive` frames are no longer surfaced as `*UnknownEvent`.** The CLI
+  emits this payload-less heartbeat periodically (for example while a long
+  control request is in flight) and the protocol requires receivers to ignore
+  it. It is now consumed silently instead of reading as a parse failure.
 
 ### Changed
 
