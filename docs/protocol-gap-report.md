@@ -162,7 +162,19 @@ Two useful extras also confirmed on the same messages: `subagent_type` and `task
 
 ### B.4 Where the library loses the data it already receives
 
-`parse.go` flattens each assistant message into per-block events (`TextEvent`, `ThinkingEvent`, `ToolUseEvent`). Those carry `ParentToolUseID` but **not** `Model`, `SubagentType`, or `TaskDescription` — the wrapper fields are discarded during flattening. So even with `WithForwardSubagentText()` on, a consumer cannot see which model a subagent ran on. This is the single highest-value fix in the report, and it needs no new control request.
+Two places, both fixable without any new protocol traffic.
+
+**Assistant wrapper fields.** `parse.go` flattens each assistant message into per-block events (`TextEvent`, `ThinkingEvent`, `ToolUseEvent`). Those carry `ParentToolUseID` but **not** `Model`, `SubagentType`, or `TaskDescription` — the wrapper fields are discarded during flattening. So even with `WithForwardSubagentText()` on, a consumer cannot see which model a subagent ran on. This is the single highest-value fix in the report.
+
+**`system/init` capabilities.** [live] The init frame carries a `capabilities` array — the protocol's own feature-negotiation mechanism:
+
+```json
+"capabilities": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]
+```
+
+`InitEvent` (`event.go`) does not parse it. The typedefs reference these tokens as the correct gate for optional behavior — `interrupt_receipt_v1` for the `still_queued` receipt, `interrupt_cancel_queued_v1` for `interrupt.cancel_queued` — yet the library currently feature-sniffs on `CLIVersion` strings instead. Parsing the array is a three-line change that replaces version comparison with the negotiation the CLI is already offering, and it is the right foundation for every optional feature in Tier 1/2.
+
+The full init frame also carries `terminal_slash_commands`, `memory_paths`, `messaging_socket_path`, `fast_mode_state`, `fast_mode_disabled_reason`, `analytics_disabled`, and `product_feedback_disabled`, none of which are parsed. Only `capabilities` is load-bearing; the rest are optional.
 
 ### B.5 Context usage — `get_context_usage` exists and is the right answer
 
@@ -309,7 +321,16 @@ type ConversationResetEvent struct { NewConversationID string }
 
 `background_tasks_changed` deserves a doc note that it is a *level* signal and must replace the consumer's set, not be paired with `task_started`/`task_notification` edges.
 
-**6. Replace the `ping` hack with `get_binary_version`.** Same liveness guarantee, a real success path, and it returns something useful.
+**6. Parse `capabilities` from `system/init`.** Three lines, and it is the prerequisite for doing every other optional feature correctly — gate on the token the CLI advertises rather than comparing version strings.
+
+```go
+// On InitEvent:
+Capabilities []string // e.g. ["interrupt_receipt_v1","interrupt_cancel_queued_v1","msg_lifecycle_v1"]
+
+func (e *InitEvent) HasCapability(name string) bool
+```
+
+**7. Replace the `ping` hack with `get_binary_version`.** Same liveness guarantee, a real success path, and it returns something useful.
 
 ```go
 func (s *Session) QueryBinaryVersion() (version, buildTime string, err error)
@@ -319,7 +340,7 @@ Keep `Ping` as a thin wrapper for compatibility; note in the changelog that it n
 
 ### Tier 2 — worth adding
 
-**7. `interrupt` with `cancel_queued`.** One round-trip to halt a session including its queued commands — the semantics a UI Stop button actually wants. Currently `Interrupt()` leaves queued messages to run.
+**8. `interrupt` with `cancel_queued`.** One round-trip to halt a session including its queued commands — the semantics a UI Stop button actually wants. Currently `Interrupt()` leaves queued messages to run.
 
 ```go
 func (s *Session) InterruptWithQueued(cancelQueued bool) (stillQueued, cancelled []string, err error)
@@ -327,19 +348,19 @@ func (s *Session) InterruptWithQueued(cancelQueued bool) (stillQueued, cancelled
 
 Gated by the `interrupt_cancel_queued_v1` capability on `system/init`; older CLIs ignore the field. `Interrupt()` also currently discards the `still_queued` receipt it already receives.
 
-**8. `background_tasks`.** Ctrl+B semantics — background a blocking subagent/Bash without killing it. Complements the existing `StopTask`, which is destructive.
+**9. `background_tasks`.** Ctrl+B semantics — background a blocking subagent/Bash without killing it. Complements the existing `StopTask`, which is destructive.
 
 ```go
 func (s *Session) BackgroundTasks(toolUseID string) (backgrounded bool, err error) // "" = all
 ```
 
-**9. `control_cancel_request` + `keep_alive`.** Correctness, not features. Send a cancel when a `can_use_tool` callback is abandoned (otherwise the CLI parks the request until its deadline); ignore inbound `keep_alive` instead of emitting `UnknownEvent`.
+**10. `control_cancel_request` + `keep_alive`.** Correctness, not features. Send a cancel when a `can_use_tool` callback is abandoned (otherwise the CLI parks the request until its deadline); ignore inbound `keep_alive` instead of emitting `UnknownEvent`.
 
 ```go
 func (s *Session) CancelControlRequest(requestID string) error
 ```
 
-**10. `set_max_thinking_tokens` / `rename_session` / `mcp_set_servers` / `reload_skills` / `reload_plugins`.** Cheap one-liners over machinery that already exists. `rename_session` is genuinely useful to Agentique (session titles in the UI); the others are situational.
+**11. `set_max_thinking_tokens` / `rename_session` / `mcp_set_servers` / `reload_skills` / `reload_plugins`.** Cheap one-liners over machinery that already exists. `rename_session` is genuinely useful to Agentique (session titles in the UI); the others are situational.
 
 ```go
 func (s *Session) SetMaxThinkingTokens(tokens *int, display string) error
@@ -349,13 +370,13 @@ func (s *Session) ReloadSkills() ([]SlashCommand, error)
 func (s *Session) ReloadPlugins() (*ReloadPluginsResult, error)
 ```
 
-**11. `get_usage`.** Rate-limit utilization with `resets_at` — real value for an orchestrator scheduling work against a Claude MAX plan (know when the 5-hour window resets rather than discovering it via failures). Marked *Experimental* upstream, so keep `Raw` alongside typed fields.
+**12. `get_usage`.** Rate-limit utilization with `resets_at` — real value for an orchestrator scheduling work against a Claude MAX plan (know when the 5-hour window resets rather than discovering it via failures). Marked *Experimental* upstream, so keep `Raw` alongside typed fields.
 
 ```go
 func (s *Session) QueryUsage() (*UsageReport, error)
 ```
 
-**12. Remaining stream events.** `api_retry`, `control_request_progress`, `commands_changed`, `worker_shutting_down`, `model_refusal_fallback`. Mostly display-layer; add opportunistically.
+**13. Remaining stream events.** `api_retry`, `control_request_progress`, `commands_changed`, `worker_shutting_down`, `model_refusal_fallback`. Mostly display-layer; add opportunistically.
 
 ### Tier 3 — not worth it now
 
