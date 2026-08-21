@@ -39,6 +39,23 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Added
 
+- **`Session.ApplyFlagSettings(map[string]any)`, `Session.SetPermissionRules(PermissionRules)`
+  and `Session.QuerySettings()`** — the `apply_flag_settings` and
+  `get_settings` control requests.
+
+  **Permission rules can now be changed mid-session.** `SetPermissionMode` only
+  switches the mode; `SetPermissionRules` replaces the allow/deny/ask rules
+  themselves. Verified against CLI 2.1.235: `permissions` absent from the
+  effective settings before the call, present after it. The flag layer is
+  session-scoped — nothing is written to disk.
+
+  `ApplyFlagSettings` accepts any key from the CLI's settings shape, which also
+  makes `effortLevel` changeable mid-session and is the only way to set
+  `ultracode` (session-scoped by design, with no CLI flag). `QuerySettings`
+  returns the merged `Effective` view, the per-source `Sources` breakdown, and
+  the runtime-resolved `Applied` view — the last being where the session's real
+  effort level is reported. All three are raw JSON, since the CLI's settings
+  shape is large and moves fast.
 - **`Session.QueryContextUsage()`** — the `get_context_usage` control request,
   returning a live `*ContextUsage` breakdown of the context window.
 
