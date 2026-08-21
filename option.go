@@ -93,6 +93,7 @@ type options struct {
 
 	// session callbacks
 	canUseTool        ToolPermissionFunc
+	canUseToolReq     ToolPermissionRequestFunc
 	userInput         UserInputFunc
 	controlTimeout    time.Duration // timeout for control request responses
 	initTimeout       time.Duration // timeout for initialize handshake (includes MCP startup)
@@ -295,6 +296,20 @@ func WithSkipVersionCheck() Option              { return func(o *options) { o.sk
 // leak its goroutine. Long-running callbacks should select on ctx.Done().
 func WithCanUseTool(fn ToolPermissionFunc) Option {
 	return func(o *options) { o.canUseTool = fn }
+}
+
+// WithCanUseToolRequest registers a tool-permission callback that receives the
+// full ToolPermissionRequest instead of just the tool name and input.
+//
+// Use this over WithCanUseTool when the host needs to attribute the prompt
+// (ToolUseID, AgentID), explain it (DecisionReason, DecisionReasonType), or
+// support "always allow" (PermissionSuggestions, echoed back via
+// PermissionResponse.UpdatedPermissions).
+//
+// Takes precedence over WithCanUseTool if both are set. Also adds
+// --permission-prompt-tool.
+func WithCanUseToolRequest(fn ToolPermissionRequestFunc) Option {
+	return func(o *options) { o.canUseToolReq = fn }
 }
 
 // WithUserInput registers a callback for AskUserQuestion tool requests.
@@ -588,7 +603,7 @@ func (o *options) buildSessionArgs() []string {
 		}
 	}
 
-	if o.canUseTool != nil || o.userInput != nil {
+	if o.canUseTool != nil || o.canUseToolReq != nil || o.userInput != nil {
 		toolName := "stdio"
 		if o.permissionPromptToolName != "" {
 			toolName = o.permissionPromptToolName

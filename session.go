@@ -50,8 +50,9 @@ type Session struct {
 	pumpClosed     chan struct{}  // closed by readLoop defer — EOF-signal till pumpgoroutinen och stopp för sendEvent. Pump-kanalen close():as ALDRIG: en samtidig sendEvent (ticker, emitQueryActivity) får aldrig kunna panika på send-on-closed.
 
 	// callbacks
-	canUseTool ToolPermissionFunc
-	userInput  UserInputFunc
+	canUseTool    ToolPermissionFunc
+	canUseToolReq ToolPermissionRequestFunc
+	userInput     UserInputFunc
 
 	// state tracking
 	sessionID       string
@@ -1367,7 +1368,7 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 			return
 		}
 
-		if s.canUseTool == nil {
+		if s.canUseTool == nil && s.canUseToolReq == nil {
 			s.sendControlResponse(requestID, nil, fmt.Errorf("no canUseTool callback registered"))
 			return
 		}
@@ -1389,7 +1390,17 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 					}
 				}
 			}()
-			resp, err := s.canUseTool(permReq.ToolName, permReq.Input)
+			// The request-shaped callback wins when both are registered:
+			// it is strictly more informed.
+			var (
+				resp *PermissionResponse
+				err  error
+			)
+			if s.canUseToolReq != nil {
+				resp, err = s.canUseToolReq(permReq)
+			} else {
+				resp, err = s.canUseTool(permReq.ToolName, permReq.Input)
+			}
 			ch <- callbackResult{resp, err}
 		}()
 
@@ -1414,12 +1425,21 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 			if resp.UpdatedInput == nil {
 				data["updatedInput"] = permReq.Input
 			}
+			if len(resp.UpdatedPermissions) > 0 {
+				data["updatedPermissions"] = resp.UpdatedPermissions
+			}
 			s.sendControlResponse(requestID, data, nil)
 		} else {
-			s.sendControlResponse(requestID, map[string]any{
+			data := map[string]any{
 				"behavior": "deny",
 				"message":  resp.DenyMessage,
-			}, nil)
+			}
+			// Omit rather than send false: the CLI treats absent as false,
+			// and an explicit false is noise on every ordinary denial.
+			if resp.Interrupt {
+				data["interrupt"] = true
+			}
+			s.sendControlResponse(requestID, data, nil)
 		}
 
 	default:

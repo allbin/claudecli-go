@@ -27,9 +27,52 @@ type controlResponseBody struct {
 
 // ToolPermissionRequest is the data inside a "can_use_tool" control request.
 type ToolPermissionRequest struct {
-	ToolName              string            `json:"tool_name"`
-	Input                 json.RawMessage   `json:"input"`
+	ToolName string          `json:"tool_name"`
+	Input    json.RawMessage `json:"input"`
+
+	// PermissionSuggestions are ready-made permission updates the CLI
+	// derived for this prompt — the "always allow" flow. Echo the ones the
+	// user accepted back via PermissionResponse.UpdatedPermissions rather
+	// than deriving rules from the tool input: a suggestion can encode
+	// compound-bash logic or a directory grant that is easy to get wrong.
+	// Each entry is an opaque PermissionUpdate object.
 	PermissionSuggestions []json.RawMessage `json:"permission_suggestions,omitempty"`
+
+	// ToolUseID identifies the tool_use block being gated. Needed to
+	// attribute a prompt to the call that raised it.
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// AgentID is set when the call originated inside a subagent, and is how
+	// a host routes the prompt to the right subagent in its UI.
+	AgentID string `json:"agent_id,omitempty"`
+
+	// DecisionReason explains why the prompt escalated, for the consent line
+	// of a dialog. May contain ANSI escapes — sanitize before rendering.
+	DecisionReason string `json:"decision_reason,omitempty"`
+	// DecisionReasonType is the structured discriminator behind
+	// DecisionReason: "rule", "mode", "subcommandResults",
+	// "permissionPromptTool", "hook", "asyncAgent", "sandboxOverride",
+	// "workingDir", "safetyCheck", "classifier", or "other". Make policy on
+	// this rather than parsing DecisionReason.
+	DecisionReasonType string `json:"decision_reason_type,omitempty"`
+	// ClassifierApprovable is set only when a safety check is involved.
+	// False means at least one check needs manual approval.
+	ClassifierApprovable *bool `json:"classifier_approvable,omitempty"`
+
+	// Title, DisplayName and Description are presentation fields for a
+	// permission dialog.
+	Title       string `json:"title,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
+
+	// BlockedPath is the filesystem path that triggered a path-based denial.
+	BlockedPath string `json:"blocked_path,omitempty"`
+	// SuppressAlwaysAllowRule is true when a dialog must not offer a
+	// persistent "don't ask again" option: accepting would write a rule
+	// broader than this prompt.
+	SuppressAlwaysAllowRule bool `json:"suppress_always_allow_rule,omitempty"`
+	// RequiresUserInteraction is true when one-tap approve/deny must not be
+	// offered because the tool's own card is the interaction surface.
+	RequiresUserInteraction bool `json:"requires_user_interaction,omitempty"`
 }
 
 // PermissionResponse is returned by the ToolPermissionFunc callback.
@@ -37,10 +80,30 @@ type PermissionResponse struct {
 	Allow        bool
 	UpdatedInput json.RawMessage
 	DenyMessage  string
+
+	// UpdatedPermissions are permission updates to apply along with an
+	// allow — the "always allow" flow. Pass through the entries from
+	// ToolPermissionRequest.PermissionSuggestions the user accepted.
+	// Ignored when Allow is false.
+	UpdatedPermissions []json.RawMessage
+
+	// Interrupt stops the turn outright instead of returning the denial to
+	// the model. Set it when the user declined with no further guidance;
+	// leave it false when DenyMessage tells the model what to do instead.
+	// Ignored when Allow is true.
+	Interrupt bool
 }
 
 // ToolPermissionFunc is called when the CLI requests permission to use a tool.
+//
+// It receives only the tool name and input. To see the rest of the request —
+// the tool_use id, the originating subagent, the escalation reason, and the
+// CLI's permission suggestions — use WithCanUseToolRequest instead.
 type ToolPermissionFunc func(toolName string, input json.RawMessage) (*PermissionResponse, error)
+
+// ToolPermissionRequestFunc is called when the CLI requests permission to use
+// a tool, and receives the full request rather than just name and input.
+type ToolPermissionRequestFunc func(req ToolPermissionRequest) (*PermissionResponse, error)
 
 // Question represents a single question from an AskUserQuestion tool call.
 type Question struct {

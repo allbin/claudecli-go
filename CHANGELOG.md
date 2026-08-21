@@ -39,6 +39,26 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Added
 
+- **`WithCanUseToolRequest(func(ToolPermissionRequest) (*PermissionResponse, error))`**
+  — a tool-permission callback that receives the whole request instead of just
+  the tool name and input. `ToolPermissionRequest` gained the fields the SDK
+  was discarding: `ToolUseID`, `AgentID`, `DecisionReason`,
+  `DecisionReasonType`, `ClassifierApprovable`, `Title`, `DisplayName`,
+  `Description`, `BlockedPath`, `SuppressAlwaysAllowRule` and
+  `RequiresUserInteraction`.
+
+  `ToolUseID` and `AgentID` matter most: without them a host cannot attribute a
+  permission prompt to the tool call or the subagent that raised it, which
+  makes prompts ambiguous in any session running subagents in parallel.
+  `WithCanUseTool` still works unchanged; the request-shaped callback takes
+  precedence when both are registered.
+- **`PermissionResponse.UpdatedPermissions` and `PermissionResponse.Interrupt`.**
+  `UpdatedPermissions` completes the "always allow" flow — echo back the
+  entries from `ToolPermissionRequest.PermissionSuggestions` the user accepted,
+  which is safer than deriving rules from the tool input since a suggestion can
+  encode compound-bash logic or a directory grant. `Interrupt` stops the turn
+  outright on a denial, rather than returning the denial to the model; it is
+  omitted from the wire unless set.
 - **`Session.ApplyFlagSettings(map[string]any)`, `Session.SetPermissionRules(PermissionRules)`
   and `Session.QuerySettings()`** — the `apply_flag_settings` and
   `get_settings` control requests.

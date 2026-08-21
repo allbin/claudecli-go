@@ -246,6 +246,7 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 		ctx:               ctx,
 		cancel:            cancel,
 		canUseTool:        resolved.canUseTool,
+		canUseToolReq:     resolved.canUseToolReq,
 		userInput:         resolved.userInput,
 		controlTimeout:    controlTimeout,
 		initTimeout:       initTimeout,
