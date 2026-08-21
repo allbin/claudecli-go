@@ -39,6 +39,21 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Added
 
+- **`Session.QueryContextUsage()`** — the `get_context_usage` control request,
+  returning a live `*ContextUsage` breakdown of the context window.
+
+  Prefer it over deriving context from a `ResultEvent` when the number must
+  stay correct across compaction: `ResultEvent.ContextSnapshot` and
+  `ModelUsage` describe the *last API call*, so neither shrinks when the CLI
+  compacts and both drift upward until the next turn. This is measured on
+  demand against the live transcript.
+
+  Typed fields cover what an orchestrator needs — `TotalTokens`, `MaxTokens`,
+  `RawMaxTokens` (the model's hard limit, which differs from `MaxTokens` when a
+  smaller compaction-policy window applies), `Percentage`,
+  `IsAutoCompactEnabled`, `AutoCompactThreshold`, `Categories`, and a
+  `Remaining()` helper. The much larger remainder (per-tool and per-skill
+  attribution, message breakdown, TUI grid data) stays available via `Raw`.
 - **Four stream events that previously surfaced as `*UnknownEvent`:**
   - **`*ConversationResetEvent`** (`conversation_reset`) — emitted by `/clear`,
     plan-mode exit and fresh-session flows. A transcript boundary, not a
