@@ -15,6 +15,45 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`WithCanUseToolRequestContext` and `WithUserInputContext`** — permission
+  callbacks that receive a per-request `context.Context`, so a host can learn
+  that its prompt was withdrawn.
+
+  v0.3.0 taught the SDK to handle inbound `control_cancel_request`: when the CLI
+  withdraws a pending `can_use_tool` — its turn was interrupted, or another
+  client answered — the handler is cancelled and no `control_response` is
+  written. The callback itself was never told. Both registered shapes took no
+  context, so a host that parks the decision on a human — the entire point of an
+  interactive permission dialog — had no way to know the answer would be
+  discarded. The prompt stayed on screen until the user answered something that
+  went nowhere. Not a leak (session close still drains it), but a stale prompt
+  with no way to detect staleness.
+
+  The new `ctx` is cancelled when `control_cancel_request` arrives for that
+  request id and when the session context ends. Both mean the same thing: the
+  answer is discarded. A host should treat `ctx.Done()` as "drop the prompt".
+  `WithUserInput` had the identical shape and the identical problem — a question
+  put to a user always parks on one — so it got the same treatment in this
+  release rather than being deferred.
+
+  Purely additive: existing callbacks keep compiling and behaving identically.
+  Precedence follows the existing rule that the more informed callback wins —
+  `canUseToolReqCtx` > `canUseToolReq` > `canUseTool`, and `userInputCtx` >
+  `userInput` — and is now documented on the options and on
+  `ToolPermissionRequest`.
+
+  Verified end-to-end against a live CLI 2.1.235, not just fixtures: a real
+  `can_use_tool` prompt raised in `manual` permission mode, interrupted mid-park
+  via `Session.Interrupt`, produced an inbound `control_cancel_request` carrying
+  that request id, which cancelled the callback's ctx; the discarded `Allow`
+  never reached the CLI (the target file was not written) and the session
+  survived — the interrupted turn ended normally, `Ping` round-tripped, and a
+  following query completed. See `TestIntegrationPermissionWithdrawalCancels`
+  `CallbackCtx` (`-tags=integration`). The unit tests around it drive the
+  cancel frame from a fixture.
+
 ## [0.3.0] - 2026-08-21
 
 Catches the SDK up to Claude Code CLI 2.1.235, from a full survey of the

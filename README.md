@@ -399,12 +399,59 @@ session, err := client.Connect(ctx,
 ```
 
 `Interrupt` on a denial stops the turn outright; leave it false when
-`DenyMessage` tells the model what to do instead. When the CLI withdraws a
-prompt (its turn was interrupted, or another client answered), the callback is
-cancelled and no reply is sent.
+`DenyMessage` tells the model what to do instead.
 
 Permission *rules* can also be changed independently of any prompt — see
 `SetPermissionRules` above.
+
+#### Withdrawn prompts
+
+The CLI can withdraw a prompt before it is answered — its turn was interrupted,
+or another client answered first. It sends `control_cancel_request`, the SDK
+cancels the handler, and **no reply is sent for that request id**.
+
+That matters most for the case the prompt exists for: a host that parks the
+decision on a human. Without a signal, the dialog stays on screen waiting for an
+answer that can no longer be delivered. `WithCanUseToolRequestContext` hands the
+callback a per-request context so it can see the withdrawal:
+
+```go
+session, err := client.Connect(ctx,
+    claudecli.WithCanUseToolRequestContext(func(ctx context.Context, req claudecli.ToolPermissionRequest) (*claudecli.PermissionResponse, error) {
+        answer := ui.ShowPermissionDialog(req) // <-chan *claudecli.PermissionResponse
+
+        select {
+        case resp := <-answer:
+            return resp, nil
+        case <-ctx.Done():
+            // Withdrawn, or the session ended. The answer would be discarded,
+            // so take the dialog down instead of waiting on the user.
+            ui.DismissPermissionDialog(req.ToolUseID)
+            return nil, ctx.Err()
+        }
+    }),
+)
+```
+
+The contract, in full:
+
+- `ctx` is cancelled on an inbound `control_cancel_request` for this request id,
+  and when the session context ends.
+- Once cancelled, the return value is discarded — the SDK writes no
+  `control_response`, and the CLI has stopped waiting for one. Returning an
+  error there is not an error condition; nothing is sent either way.
+- Treat `ctx.Done()` as *drop the prompt*. Returning promptly also releases the
+  goroutine the SDK runs the callback in.
+- A withdrawal is scoped to one request. The session stays live: the interrupted
+  turn ends normally and later prompts reach the same callback.
+
+Precedence follows the existing rule — the more informed callback wins:
+`WithCanUseToolRequestContext` > `WithCanUseToolRequest` > `WithCanUseTool`. The
+older shapes are unchanged; they simply cannot observe a withdrawal.
+
+`WithUserInput` has the same shape and the same problem — a question put to a
+user always parks on one — so `WithUserInputContext` carries the identical
+contract, and outranks `WithUserInput`.
 
 ### Reading thinking text
 
@@ -526,6 +573,24 @@ Routing rules:
 - Both registered: `AskUserQuestion` → `userInput`, other tools → `canUseTool`
 - Only `WithCanUseTool`: `AskUserQuestion` falls through to `canUseTool` (backward compatible)
 - Only `WithUserInput`: `AskUserQuestion` → `userInput`, other tools get error response
+
+Use `WithUserInputContext` instead when the question goes to a real user — it
+adds the per-request context that fires when the CLI withdraws the question, so
+you can take it off screen. Same contract as
+[Withdrawn prompts](#withdrawn-prompts) above; it takes precedence over
+`WithUserInput` when both are registered.
+
+```go
+claudecli.WithUserInputContext(func(ctx context.Context, questions []claudecli.Question) (map[string]string, error) {
+    select {
+    case answers := <-ui.Ask(questions):
+        return answers, nil
+    case <-ctx.Done():
+        ui.DismissQuestions(questions)
+        return nil, ctx.Err()
+    }
+})
+```
 
 ## Multi-session pool
 
@@ -920,7 +985,9 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithResume(string)`                 | Resume a session by ID (mutually exclusive with `WithSessionID`/`WithContinue`).                      |
 | `WithCanUseTool(ToolPermissionFunc)` | Tool permission callback (sessions only). Receives only the tool name and input.                      |
 | `WithCanUseToolRequest(ToolPermissionRequestFunc)` | Tool permission callback receiving the full `ToolPermissionRequest` — `ToolUseID`, `AgentID`, `DecisionReason`/`DecisionReasonType`, `PermissionSuggestions`, and presentation fields. Needed to attribute a prompt to the call or subagent that raised it, and to support "always allow" via `PermissionResponse.UpdatedPermissions`. Takes precedence over `WithCanUseTool`. |
+| `WithCanUseToolRequestContext(ToolPermissionRequestContextFunc)` | Same as `WithCanUseToolRequest`, plus a per-request `context.Context` that is cancelled when the CLI withdraws the prompt or the session ends — the only way a callback learns its answer will be discarded. Use it whenever the decision parks on a human. Takes precedence over both other variants. |
 | `WithUserInput(UserInputFunc)`       | Dedicated callback for `AskUserQuestion` tool requests (sessions only).                               |
+| `WithUserInputContext(UserInputContextFunc)` | Same as `WithUserInput`, plus the per-request `context.Context` described above. Takes precedence over `WithUserInput`. |
 | `WithControlTimeout(time.Duration)` | Timeout for control protocol round-trips (default: 30s). Sessions only.                               |
 | `WithInitTimeout(time.Duration)`   | Timeout for the initialize handshake (default: 60s). Increase if MCP servers are slow to connect. Sessions only. |
 | `WithStdinWriteTimeout(time.Duration)` | Deadline for individual stdin writes (default: 30s). A write that blocks past it means the CLI stopped reading stdin: the write fails, stdin is closed permanently and the session must be recycled. Keeps `Close()` from deadlocking against a blocked write. Sessions only. |
