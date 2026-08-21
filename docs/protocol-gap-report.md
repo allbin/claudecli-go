@@ -4,7 +4,10 @@
 **Library version under review:** `github.com/allbin/claudecli-go` @ `ba95af4` (v0.2.0)
 **CLI under review:** `claude` 2.1.235 (native ELF, `~/.local/share/claude/versions/2.1.235`)
 
-Research pass only — nothing in this report has been implemented.
+Research pass. **Update (2026-08-21): Tier 1 and most of Tier 2 have since been
+implemented** — see the `[Unreleased]` section of `CHANGELOG.md`. Section C
+below marks each recommendation's status. The inventories in sections A and B
+remain an accurate description of the protocol at CLI 2.1.235.
 
 ## Sources and how each claim was verified
 
@@ -249,9 +252,16 @@ Separately, `--include-hook-events` and `--forward-subagent-text` are already ex
 
 Ranked by value to a session orchestrator (Agentique). Signatures follow existing repo conventions: `Session` methods for control requests, `Option` for launch flags, typed events for stream additions.
 
+**Status legend:** ✅ implemented · ⬜ not implemented. Where the shipped
+signature differs from the one proposed here, the shipped one is noted.
+
+Shipped: all of Tier 1, plus Tier 2 items 8–11. Deliberately not shipped:
+`get_usage` (12) and the remaining display-layer stream events (13), both of
+which stayed low-value; and everything in Tier 3.
+
 ### Tier 1 — clear wins
 
-**1. Surface the assistant wrapper fields (per-subagent model).** No new protocol traffic; the data already arrives and is discarded. Highest value per unit of work in this report.
+**1. ✅ Surface the assistant wrapper fields (per-subagent model).** No new protocol traffic; the data already arrives and is discarded. Highest value per unit of work in this report.
 
 ```go
 // On TextEvent, ThinkingEvent, and ToolUseEvent — alongside the existing ParentToolUseID:
@@ -262,7 +272,7 @@ TaskDescription string // subagent task description
 
 Correlate to the parent via the existing `ParentToolUseID` == `TaskEvent.ToolUseID`. Requires `WithForwardSubagentText()`; document that dependency prominently, because without it these fields are silently always empty — the single most likely way a consumer gets this wrong. Consider having `task_backfill.go` also stamp the resolved model onto later `TaskEvent`s keyed by `task_id`, mirroring the existing `task_type` backfill.
 
-**2. `get_context_usage`.** Fixes the known post-compaction staleness. Model only the useful fields; skip `gridRows`.
+**2. ✅ `get_context_usage`.** Shipped as `QueryContextUsage() (*ContextUsage, error)`. Fixes the known post-compaction staleness. Model only the useful fields; skip `gridRows`.
 
 ```go
 func (s *Session) QueryContextUsage() (*ContextUsage, error)
@@ -281,7 +291,7 @@ type ContextUsage struct {
 }
 ```
 
-**3. `apply_flag_settings` + `get_settings`.** The mid-session permission-rule answer, plus session-scoped `ultracode`/`effortLevel`. Keep the settings payload opaque — `Settings` is a large, fast-moving struct and modelling it would be a maintenance sink.
+**3. ✅ `apply_flag_settings` + `get_settings`.** Shipped, plus a `SetPermissionRules` convenience wrapper. The mid-session permission-rule answer, plus session-scoped `ultracode`/`effortLevel`. Keep the settings payload opaque — `Settings` is a large, fast-moving struct and modelling it would be a maintenance sink.
 
 ```go
 func (s *Session) ApplyFlagSettings(settings map[string]any) error
@@ -294,7 +304,7 @@ type SettingsSnapshot struct {
 }
 ```
 
-**4. Complete the permission round-trip.** Additive to `PermissionResponse`; existing callers keep compiling.
+**4. ✅ Complete the permission round-trip.** Shipped; the widened request is delivered through a new `WithCanUseToolRequest` callback rather than by changing `ToolPermissionFunc`, keeping existing callers compiling. Additive to `PermissionResponse`; existing callers keep compiling.
 
 ```go
 type PermissionResponse struct {
@@ -308,7 +318,7 @@ type PermissionResponse struct {
 
 And widen `ToolPermissionRequest` with at minimum `ToolUseID`, `AgentID`, `DecisionReason`, `DecisionReasonType`, `Title`, `DisplayName`, `Description`. `ToolUseID` and `AgentID` are the ones that unblock attribution.
 
-**5. Four unhandled stream events.** Small, self-contained parser additions.
+**5. ✅ Four unhandled stream events.** Small, self-contained parser additions.
 
 ```go
 type BackgroundTasksChangedEvent struct { Tasks []BackgroundTask } // REPLACE semantics
@@ -321,7 +331,7 @@ type ConversationResetEvent struct { NewConversationID string }
 
 `background_tasks_changed` deserves a doc note that it is a *level* signal and must replace the consumer's set, not be paired with `task_started`/`task_notification` edges.
 
-**6. Parse `capabilities` from `system/init`.** Three lines, and it is the prerequisite for doing every other optional feature correctly — gate on the token the CLI advertises rather than comparing version strings.
+**6. ✅ Parse `capabilities` from `system/init`.** Three lines, and it is the prerequisite for doing every other optional feature correctly — gate on the token the CLI advertises rather than comparing version strings.
 
 ```go
 // On InitEvent:
@@ -330,7 +340,7 @@ Capabilities []string // e.g. ["interrupt_receipt_v1","interrupt_cancel_queued_v
 func (e *InitEvent) HasCapability(name string) bool
 ```
 
-**7. Replace the `ping` hack with `get_binary_version`.** Same liveness guarantee, a real success path, and it returns something useful.
+**7. ✅ Replace the `ping` hack with `get_binary_version`.** Same liveness guarantee, a real success path, and it returns something useful.
 
 ```go
 func (s *Session) QueryBinaryVersion() (version, buildTime string, err error)
@@ -340,7 +350,7 @@ Keep `Ping` as a thin wrapper for compatibility; note in the changelog that it n
 
 ### Tier 2 — worth adding
 
-**8. `interrupt` with `cancel_queued`.** One round-trip to halt a session including its queued commands — the semantics a UI Stop button actually wants. Currently `Interrupt()` leaves queued messages to run.
+**8. ✅ `interrupt` with `cancel_queued`.** Shipped as `InterruptWithQueued(bool) (*InterruptReceipt, error)`. One round-trip to halt a session including its queued commands — the semantics a UI Stop button actually wants. Currently `Interrupt()` leaves queued messages to run.
 
 ```go
 func (s *Session) InterruptWithQueued(cancelQueued bool) (stillQueued, cancelled []string, err error)
@@ -348,19 +358,19 @@ func (s *Session) InterruptWithQueued(cancelQueued bool) (stillQueued, cancelled
 
 Gated by the `interrupt_cancel_queued_v1` capability on `system/init`; older CLIs ignore the field. `Interrupt()` also currently discards the `still_queued` receipt it already receives.
 
-**9. `background_tasks`.** Ctrl+B semantics — background a blocking subagent/Bash without killing it. Complements the existing `StopTask`, which is destructive.
+**9. ✅ `background_tasks`.** Shipped as `BackgroundTask(toolUseID)`. Ctrl+B semantics — background a blocking subagent/Bash without killing it. Complements the existing `StopTask`, which is destructive.
 
 ```go
 func (s *Session) BackgroundTasks(toolUseID string) (backgrounded bool, err error) // "" = all
 ```
 
-**10. `control_cancel_request` + `keep_alive`.** Correctness, not features. Send a cancel when a `can_use_tool` callback is abandoned (otherwise the CLI parks the request until its deadline); ignore inbound `keep_alive` instead of emitting `UnknownEvent`.
+**10. ✅ `control_cancel_request` + `keep_alive`.** Shipped, but without a public `CancelControlRequest`: request ids are internal, so cancels are sent automatically on timeout and inbound cancels abort the handler. Correctness, not features. Send a cancel when a `can_use_tool` callback is abandoned (otherwise the CLI parks the request until its deadline); ignore inbound `keep_alive` instead of emitting `UnknownEvent`.
 
 ```go
 func (s *Session) CancelControlRequest(requestID string) error
 ```
 
-**11. `set_max_thinking_tokens` / `rename_session` / `mcp_set_servers` / `reload_skills` / `reload_plugins`.** Cheap one-liners over machinery that already exists. `rename_session` is genuinely useful to Agentique (session titles in the UI); the others are situational.
+**11. ✅ `set_max_thinking_tokens` / `rename_session` / `reload_skills` / `reload_plugins`.** Shipped. `mcp_set_servers` was dropped: it needs a modelled MCP server config to be worth more than raw JSON. Cheap one-liners over machinery that already exists. `rename_session` is genuinely useful to Agentique (session titles in the UI); the others are situational.
 
 ```go
 func (s *Session) SetMaxThinkingTokens(tokens *int, display string) error
@@ -370,13 +380,13 @@ func (s *Session) ReloadSkills() ([]SlashCommand, error)
 func (s *Session) ReloadPlugins() (*ReloadPluginsResult, error)
 ```
 
-**12. `get_usage`.** Rate-limit utilization with `resets_at` — real value for an orchestrator scheduling work against a Claude MAX plan (know when the 5-hour window resets rather than discovering it via failures). Marked *Experimental* upstream, so keep `Raw` alongside typed fields.
+**12. ⬜ `get_usage`.** Rate-limit utilization with `resets_at` — real value for an orchestrator scheduling work against a Claude MAX plan (know when the 5-hour window resets rather than discovering it via failures). Marked *Experimental* upstream, so keep `Raw` alongside typed fields.
 
 ```go
 func (s *Session) QueryUsage() (*UsageReport, error)
 ```
 
-**13. Remaining stream events.** `api_retry`, `control_request_progress`, `commands_changed`, `worker_shutting_down`, `model_refusal_fallback`. Mostly display-layer; add opportunistically.
+**13. ⬜ Remaining stream events.** `api_retry`, `control_request_progress`, `commands_changed`, `worker_shutting_down`, `model_refusal_fallback`. Mostly display-layer; add opportunistically.
 
 ### Tier 3 — not worth it now
 

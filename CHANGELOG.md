@@ -182,6 +182,29 @@ or pin a specific version (e.g. `@v0.1.0`).
   `parseContentBlock`. No behavior change — the same events are emitted in the
   same order.
 
+### Upgrade notes
+
+Everything in this release is additive — new fields, events, options and
+`Session` methods. Existing type switches and callbacks keep compiling. Two
+behavior changes worth knowing about:
+
+- **`keep_alive` no longer produces an `*UnknownEvent`.** If you were counting
+  or logging unknown events, that stream gets quieter.
+- **A withdrawn permission prompt is no longer answered.** When the CLI sends
+  `control_cancel_request` for a pending `can_use_tool`, the callback is
+  cancelled and no response is written. A callback that was relying on always
+  reaching its "answer sent" path should treat cancellation as a normal
+  outcome.
+
+To get per-subagent model information you must opt in with
+`WithForwardSubagentText()`. Without it the new `Model`, `SubagentType` and
+`TaskDescription` fields on `*TextEvent` / `*ThinkingEvent` / `*ToolUseEvent`
+are always empty — that is a CLI constraint, not an SDK one.
+
+The full protocol survey behind this release, including what was deliberately
+left out and what needs upstream changes, is in
+[`docs/protocol-gap-report.md`](docs/protocol-gap-report.md).
+
 ## [0.2.0] - 2026-08-11
 
 Catches the SDK up to Claude Code CLI 2.1.227. Verified end-to-end against a
