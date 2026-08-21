@@ -68,41 +68,15 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 			continue
 		}
 
+		if ev, ok := decodeStatelessEvent(&raw, line, taskBackfill); ok {
+			emit(ev)
+			continue
+		}
+
 		switch raw.Type {
 		case "system":
-			switch raw.Subtype {
-			case "init", "":
-				emit(parseInitEvent(&raw))
-			case "status":
-				status := ""
-				if raw.Status != nil {
-					status = *raw.Status
-				}
-				emit(&CompactStatusEvent{
-					SessionID: raw.SessionID,
-					Status:    status,
-				})
-			case "compact_boundary":
-				emit(parseCompactBoundaryEvent(&raw))
-			case "task_started", "task_progress", "task_updated", "task_notification":
-				emit(taskBackfill.apply(parseTaskEvent(&raw, line)))
-			case "hook_started", "hook_progress", "hook_response":
-				emit(parseHookEvent(&raw, line))
-			case "thinking_tokens":
-				emit(&ThinkingTokensEvent{
-					EstimatedTokens:      raw.EstimatedTokens,
-					EstimatedTokensDelta: raw.EstimatedTokensDelta,
-					SessionID:            raw.SessionID,
-					UUID:                 raw.UUID,
-				})
-			case "files_persisted":
-				emit(parseFilesPersistedEvent(&raw))
-			default:
-				emit(&UnknownEvent{
-					Type: "system/" + raw.Subtype,
-					Raw:  append(json.RawMessage(nil), line...),
-				})
-			}
+			// decodeStatelessEvent handles every subtype but init.
+			emit(parseInitEvent(&raw))
 
 		case "assistant":
 			if raw.Message == nil {
@@ -185,9 +159,6 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 			// blocking on scanner.Scan() if the CLI keeps stdout open (known bug).
 			return
 
-		case "rate_limit_event":
-			emit(parseRateLimitEvent(&raw))
-
 		case "control_request":
 			var body rawControlRequestBody
 			if err := json.Unmarshal(raw.Request, &body); err != nil {
@@ -210,25 +181,6 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 
 		case "error":
 			emit(parseErrorEvent(&raw))
-
-		case "user":
-			emit(parseUserEvent(&raw))
-
-		case "prompt_suggestion":
-			emit(&PromptSuggestionEvent{
-				Suggestion: raw.Suggestion,
-				SessionID:  raw.SessionID,
-				UUID:       raw.UUID,
-			})
-
-		case "tool_progress":
-			emit(parseCLIToolProgressEvent(&raw))
-
-		case "tool_use_summary":
-			emit(parseToolUseSummaryEvent(&raw))
-
-		case "auth_status":
-			emit(parseAuthStatusEvent(&raw))
 
 		default:
 			emit(&UnknownEvent{

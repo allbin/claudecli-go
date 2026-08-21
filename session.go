@@ -931,6 +931,11 @@ func (s *Session) readLoop() {
 			continue
 		}
 
+		if ev, ok := decodeStatelessEvent(&raw, line, taskBackfill); ok {
+			pumpSend(ev)
+			continue
+		}
+
 		switch raw.Type {
 		case "control_response":
 			s.handleControlResponse(line)
@@ -943,48 +948,17 @@ func (s *Session) readLoop() {
 			}()
 
 		case "system":
-			switch raw.Subtype {
-			case "init", "":
-				resultText = nil
-				snapshot = nil
-				lastModel = ""
-				ev := parseInitEvent(&raw)
-				s.stateMu.Lock()
-				s.sessionID = raw.SessionID
-				s.stateMu.Unlock()
-				s.trackState(ev)
-				s.readyOnce.Do(func() { close(s.readyCh) })
-				pumpSend(ev)
-			case "status":
-				status := ""
-				if raw.Status != nil {
-					status = *raw.Status
-				}
-				pumpSend(&CompactStatusEvent{
-					SessionID: raw.SessionID,
-					Status:    status,
-				})
-			case "compact_boundary":
-				pumpSend(parseCompactBoundaryEvent(&raw))
-			case "task_started", "task_progress", "task_updated", "task_notification":
-				pumpSend(taskBackfill.apply(parseTaskEvent(&raw, line)))
-			case "hook_started", "hook_progress", "hook_response":
-				pumpSend(parseHookEvent(&raw, line))
-			case "thinking_tokens":
-				pumpSend(&ThinkingTokensEvent{
-					EstimatedTokens:      raw.EstimatedTokens,
-					EstimatedTokensDelta: raw.EstimatedTokensDelta,
-					SessionID:            raw.SessionID,
-					UUID:                 raw.UUID,
-				})
-			case "files_persisted":
-				pumpSend(parseFilesPersistedEvent(&raw))
-			default:
-				pumpSend(&UnknownEvent{
-					Type: "system/" + raw.Subtype,
-					Raw:  append(json.RawMessage(nil), line...),
-				})
-			}
+			// decodeStatelessEvent handles every subtype but init.
+			resultText = nil
+			snapshot = nil
+			lastModel = ""
+			ev := parseInitEvent(&raw)
+			s.stateMu.Lock()
+			s.sessionID = raw.SessionID
+			s.stateMu.Unlock()
+			s.trackState(ev)
+			s.readyOnce.Do(func() { close(s.readyCh) })
+			pumpSend(ev)
 
 		case "assistant":
 			if raw.Message == nil {
@@ -1125,9 +1099,6 @@ func (s *Session) readLoop() {
 			s.trackState(ev)
 			pumpSendStamped(sev)
 
-		case "rate_limit_event":
-			pumpSend(parseRateLimitEvent(&raw))
-
 		case "stream_event":
 			pumpSend(&StreamEvent{
 				UUID:      raw.UUID,
@@ -1142,27 +1113,6 @@ func (s *Session) readLoop() {
 				lastStdoutErr = errEv.Err
 			}
 			pumpSend(errEv)
-
-		case "user":
-			pumpSend(parseUserEvent(&raw))
-
-		// Emitted after the turn's ResultEvent, so it is only reachable here:
-		// the one-shot ParseEvents loop stops at the terminal result.
-		case "prompt_suggestion":
-			pumpSend(&PromptSuggestionEvent{
-				Suggestion: raw.Suggestion,
-				SessionID:  raw.SessionID,
-				UUID:       raw.UUID,
-			})
-
-		case "tool_progress":
-			pumpSend(parseCLIToolProgressEvent(&raw))
-
-		case "tool_use_summary":
-			pumpSend(parseToolUseSummaryEvent(&raw))
-
-		case "auth_status":
-			pumpSend(parseAuthStatusEvent(&raw))
 
 		default:
 			ev := &UnknownEvent{
