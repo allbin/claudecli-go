@@ -37,6 +37,18 @@ or pin a specific version (e.g. `@v0.1.0`).
 - **`TaskEvent` now carries `SubagentType`** (e.g. `"Explore"`), sent by the CLI
   on `task_started` and `task_progress` and previously discarded.
 
+### Added
+
+- **`InitEvent.Capabilities` and `InitEvent.HasCapability(name)`.** The CLI
+  advertises its optional protocol features on the init event (CLI 2.1.235
+  sends `interrupt_receipt_v1`, `interrupt_cancel_queued_v1`,
+  `msg_lifecycle_v1`); the SDK discarded the field. Gate optional behavior on
+  `HasCapability` instead of comparing `CLIVersion` strings. Constants
+  `CapabilityInterruptReceipt` and `CapabilityInterruptCancelQueued` are
+  provided for the tokens this package acts on. Older CLIs omit the field
+  entirely, so an empty slice means "nothing advertised", not "nothing
+  supported".
+
 ### Changed
 
 - **Both decode loops now share one event decoder.** `ParseEvents` (for `-p`

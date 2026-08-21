@@ -94,3 +94,37 @@ func TestSubagentMetadataOnToolUseBlocks(t *testing.T) {
 		t.Errorf("ToolUseEvent metadata = {%q, %q, %q}", tu.Model, tu.SubagentType, tu.TaskDescription)
 	}
 }
+
+// capabilities is how the CLI advertises optional protocol features; gating on
+// it beats parsing CLIVersion. Wire shape from a live CLI 2.1.235 init frame.
+func TestInitCapabilities(t *testing.T) {
+	const line = `{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-4-6","capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1","msg_lifecycle_v1"]}`
+	var init *InitEvent
+	for _, ev := range parseLines(t, line) {
+		if e, ok := ev.(*InitEvent); ok {
+			init = e
+		}
+	}
+	if init == nil {
+		t.Fatal("no InitEvent emitted")
+	}
+	if !init.HasCapability(CapabilityInterruptCancelQueued) {
+		t.Errorf("HasCapability(%q) = false, want true", CapabilityInterruptCancelQueued)
+	}
+	if init.HasCapability("nonexistent_v9") {
+		t.Error("HasCapability reported an unadvertised capability")
+	}
+}
+
+// An older CLI omits the field entirely; that must read as "not advertised"
+// rather than panicking or reporting support.
+func TestInitCapabilitiesAbsent(t *testing.T) {
+	const line = `{"type":"system","subtype":"init","session_id":"s1","model":"claude-opus-4-6"}`
+	for _, ev := range parseLines(t, line) {
+		if e, ok := ev.(*InitEvent); ok {
+			if e.HasCapability(CapabilityInterruptReceipt) {
+				t.Error("absent capabilities reported as supported")
+			}
+		}
+	}
+}

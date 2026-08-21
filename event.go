@@ -3,6 +3,7 @@ package claudecli
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -61,7 +62,32 @@ type InitEvent struct {
 	SlashCommands []string
 	// Plugins lists the plugins loaded for the session.
 	Plugins []PluginInfo
+
+	// Capabilities lists the optional protocol features this CLI supports,
+	// e.g. "interrupt_receipt_v1", "interrupt_cancel_queued_v1",
+	// "msg_lifecycle_v1". This is the CLI's own feature-negotiation channel:
+	// gate optional behavior on HasCapability rather than comparing
+	// CLIVersion strings. Older CLIs omit it, so an empty slice means "no
+	// advertisement", not "no features".
+	Capabilities []string
 }
+
+// HasCapability reports whether the CLI advertised the named optional protocol
+// feature on its init event.
+func (e *InitEvent) HasCapability(name string) bool {
+	return slices.Contains(e.Capabilities, name)
+}
+
+// Capability tokens advertised on InitEvent.Capabilities. The CLI may advertise
+// others; these are the ones this package's behavior depends on.
+const (
+	// CapabilityInterruptReceipt means an interrupt response carries the
+	// still_queued receipt (see Session.InterruptWithQueued).
+	CapabilityInterruptReceipt = "interrupt_receipt_v1"
+	// CapabilityInterruptCancelQueued means an interrupt request honors the
+	// cancel_queued field. Older CLIs ignore it and behave as if false.
+	CapabilityInterruptCancelQueued = "interrupt_cancel_queued_v1"
+)
 
 // PluginInfo identifies a plugin loaded into the session.
 type PluginInfo struct {

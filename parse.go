@@ -418,6 +418,7 @@ type rawEvent struct {
 	OutputStyle     string            `json:"output_style,omitempty"`
 	SlashCommands   []string          `json:"slash_commands,omitempty"`
 	Plugins         []PluginInfo      `json:"plugins,omitempty"`
+	Capabilities    []string          `json:"capabilities,omitempty"`
 
 	// prompt_suggestion event
 	Suggestion string `json:"suggestion,omitempty"`
@@ -827,6 +828,7 @@ func parseInitEvent(raw *rawEvent) *InitEvent {
 		OutputStyle:     raw.OutputStyle,
 		SlashCommands:   raw.SlashCommands,
 		Plugins:         raw.Plugins,
+		Capabilities:    raw.Capabilities,
 	}
 }
 
