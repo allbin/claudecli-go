@@ -48,6 +48,15 @@ or pin a specific version (e.g. `@v0.1.0`).
   changes the extended-thinking budget and display mode mid-session. A nil
   budget resets to the session default. Cannot enable thinking on a session
   that has it disabled.
+
+  **This is the only way to read the model's thinking text.** By default the
+  CLI withholds it: `ThinkingEvent` arrives with a long `Signature` and empty
+  `Content`, and `thinking_delta` stream events carry `thinking: ""` with only
+  an `estimated_tokens` ping. Passing `ThinkingDisplaySummarized` turns on
+  summarized reasoning. Verified against CLI 2.1.235; see
+  [Reading thinking text](README.md#reading-thinking-text) for the two
+  conditions (the display mode, and a model that emits thinking at all —
+  Opus 5 does, Sonnet 5 did not).
 - **`Session.QueryBinaryVersion()`** — the CLI's own version and build time.
 - **`Session.ReloadSkills()` and `Session.ReloadPlugins()`** — reload from disk
   and return the refreshed slash-command, agent and MCP-server surface.

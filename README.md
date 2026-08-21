@@ -406,6 +406,49 @@ cancelled and no reply is sent.
 Permission *rules* can also be changed independently of any prompt — see
 `SetPermissionRules` above.
 
+### Reading thinking text
+
+By default the model's reasoning is withheld: `ThinkingEvent` arrives with a
+long `Signature` and an empty `Content`, and the `thinking_delta` stream events
+carry `thinking: ""` with only an `estimated_tokens` ping. That is the
+redacted-thinking path — enough to drive a progress spinner (see
+`*ThinkingTokensEvent`), not to read.
+
+To get the text, ask for the summarized display mode:
+
+```go
+session, err := client.Connect(ctx,
+    claudecli.WithModel(claudecli.ModelOpus), // must be a model that emits thinking
+)
+...
+// The lever. A nil budget is fine — the budget is not what unlocks the text.
+if err := session.SetMaxThinkingTokens(nil, claudecli.ThinkingDisplaySummarized); err != nil { ... }
+
+session.Query("...")
+for event := range session.Events() {
+    if e, ok := event.(*claudecli.ThinkingEvent); ok && e.Content != "" {
+        fmt.Println("reasoning:", e.Content)
+    }
+}
+```
+
+Two conditions must both hold, verified against CLI 2.1.235:
+
+1. **`ThinkingDisplaySummarized` must be set** via `SetMaxThinkingTokens`. There
+   is no CLI flag for it and no `Option` — only the `set_max_thinking_tokens`
+   control request carries `thinking_display`, so it is reachable from
+   `Connect()` sessions only. Setting a token budget alone changes nothing.
+2. **The model must emit thinking.** Opus 5 does; Sonnet 5 produced no thinking
+   blocks at all in the same test. The library's default model is `sonnet`, so
+   an explicit `WithModel` is usually required.
+
+What you get is *summarized* reasoning — a condensed paraphrase, not a
+verbatim chain of thought. `ThinkingDisplayOmitted` suppresses it again.
+
+`WithIncludePartialMessages()` is not required: the text arrives on the
+assistant message's thinking block either way. Turn it on only if you want the
+incremental deltas.
+
 ### Mid-turn message injection
 
 `Query` rejects while a turn is running ("query already in progress") because it manages result tracking for `Wait()`. Use `SendMessage` to inject a message mid-turn — it writes directly to stdin without state gating:
@@ -999,7 +1042,13 @@ claudecli-go/
 - **Blocking stderr capped at 10 MB** — `RunBlocking` caps stderr collection at 10 MB. The streaming path uses a 1000-line ring buffer.
 - **Fork-session needs a persisted parent** — `RunBlocking` by default emits `--no-session-persistence`, so the parent must be started with `WithSessionID`, `WithResume`/`WithContinue`, or via `Connect` for `WithForkSession` to find the parent on disk.
 - **`AuthStatus` fail-close** — When the CLI exits 0 with non-JSON output, `AuthStatus` returns `AuthStateUnknown` (not `AuthStateAuthenticated`). Callers should handle this explicitly.
-- **Thinking text may be hidden** — The CLI can emit `ThinkingEvent`s with empty `Content` but a set `Signature` (the model thought, but the text was withheld). No SDK option changes this. Distinguish "thinking hidden" from "no thinking" via `Content == "" && Signature != ""`.
+- **Thinking text is withheld by default** — By default the CLI emits
+  `ThinkingEvent`s with empty `Content` but a set `Signature`: the model
+  thought, the reasoning is cryptographically attested, but the text is
+  withheld. Distinguish "thinking hidden" from "no thinking" via
+  `Content == "" && Signature != ""`. See
+  [Reading thinking text](#reading-thinking-text) for how to opt in — and the
+  two conditions that have to hold.
 - **Per-subagent effort is not observable** — the CLI carries a subagent's
   resolved model on its assistant messages (see
   [Per-subagent model](#per-subagent-model)) but nothing in the stream carries
