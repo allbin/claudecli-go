@@ -39,6 +39,18 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Added
 
+- **`Session.BackgroundTask(toolUseID)`** — the `background_tasks` control
+  request, i.e. Ctrl+B. Backgrounds a blocking subagent or Bash call so the
+  turn continues while the work finishes, unlike the destructive `StopTask`.
+  Pass an empty id to background every foreground task.
+- **`Session.RenameSession(title)`** — sets the session's user-facing title.
+- **`Session.SetMaxThinkingTokens(tokens *int, display ThinkingDisplay)`** —
+  changes the extended-thinking budget and display mode mid-session. A nil
+  budget resets to the session default. Cannot enable thinking on a session
+  that has it disabled.
+- **`Session.QueryBinaryVersion()`** — the CLI's own version and build time.
+- **`Session.ReloadSkills()` and `Session.ReloadPlugins()`** — reload from disk
+  and return the refreshed slash-command, agent and MCP-server surface.
 - **`Session.InterruptWithQueued(cancelQueued bool) (*InterruptReceipt, error)`**
   — interrupts the running turn and returns what happened to queued work.
 
