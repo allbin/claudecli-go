@@ -1019,8 +1019,14 @@ func (s *Session) readLoop() {
 				}
 				pumpSend(ev)
 			}
+			meta := assistantMeta{
+				ParentToolUseID: parentToolUseID,
+				Model:           raw.Message.Model,
+				SubagentType:    raw.SubagentType,
+				TaskDescription: raw.TaskDescription,
+			}
 			for _, block := range raw.Message.Content {
-				parseContentBlock(block, parentToolUseID, &resultText, emitBlock)
+				parseContentBlock(block, meta, &resultText, emitBlock)
 			}
 			if len(raw.Message.ContextManagement) > 0 && string(raw.Message.ContextManagement) != "null" {
 				pumpSend(&ContextManagementEvent{Raw: raw.Message.ContextManagement})

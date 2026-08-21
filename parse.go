@@ -122,8 +122,14 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 				}
 				emit(&TurnEvent{Turn: turnCounter, ToolName: toolName})
 			}
+			meta := assistantMeta{
+				ParentToolUseID: parentToolUseID,
+				Model:           raw.Message.Model,
+				SubagentType:    raw.SubagentType,
+				TaskDescription: raw.TaskDescription,
+			}
 			for _, block := range raw.Message.Content {
-				parseContentBlock(block, parentToolUseID, &resultText, emit)
+				parseContentBlock(block, meta, &resultText, emit)
 			}
 			if len(raw.Message.ContextManagement) > 0 && string(raw.Message.ContextManagement) != "null" {
 				emit(&ContextManagementEvent{Raw: raw.Message.ContextManagement})
@@ -195,26 +201,55 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 	}
 }
 
-func parseContentBlock(block rawContent, parentToolUseID string, resultText *[]string, emit func(Event)) {
+// assistantMeta carries the wrapper-level fields of an assistant message down
+// to the per-block events it decodes into. The CLI reports the model, subagent
+// type and task description once on the message, not on each content block.
+type assistantMeta struct {
+	ParentToolUseID string
+	Model           string
+	SubagentType    string
+	TaskDescription string
+}
+
+func parseContentBlock(block rawContent, meta assistantMeta, resultText *[]string, emit func(Event)) {
 	switch block.Type {
 	case "thinking":
-		emit(&ThinkingEvent{Content: block.Thinking, Signature: block.Signature, ParentToolUseID: parentToolUseID})
+		emit(&ThinkingEvent{
+			Content:         block.Thinking,
+			Signature:       block.Signature,
+			ParentToolUseID: meta.ParentToolUseID,
+			Model:           meta.Model,
+			SubagentType:    meta.SubagentType,
+			TaskDescription: meta.TaskDescription,
+		})
 	case "text":
 		*resultText = append(*resultText, block.Text)
-		emit(&TextEvent{Content: block.Text, ParentToolUseID: parentToolUseID})
+		emit(&TextEvent{
+			Content:         block.Text,
+			ParentToolUseID: meta.ParentToolUseID,
+			Model:           meta.Model,
+			SubagentType:    meta.SubagentType,
+			TaskDescription: meta.TaskDescription,
+		})
 	case "tool_use":
 		emit(&ToolUseEvent{
 			ID:              block.ID,
 			Name:            block.Name,
 			Input:           block.Input,
-			ParentToolUseID: parentToolUseID,
+			ParentToolUseID: meta.ParentToolUseID,
+			Model:           meta.Model,
+			SubagentType:    meta.SubagentType,
+			TaskDescription: meta.TaskDescription,
 		})
 	case "server_tool_use":
 		emit(&ToolUseEvent{
 			ID:              block.ID,
 			Name:            block.Name,
 			Input:           block.Input,
-			ParentToolUseID: parentToolUseID,
+			ParentToolUseID: meta.ParentToolUseID,
+			Model:           meta.Model,
+			SubagentType:    meta.SubagentType,
+			TaskDescription: meta.TaskDescription,
 			ServerSide:      true,
 		})
 	case "mcp_tool_use":
@@ -222,14 +257,17 @@ func parseContentBlock(block rawContent, parentToolUseID string, resultText *[]s
 			ID:              block.ID,
 			Name:            block.Name,
 			Input:           block.Input,
-			ParentToolUseID: parentToolUseID,
+			ParentToolUseID: meta.ParentToolUseID,
+			Model:           meta.Model,
+			SubagentType:    meta.SubagentType,
+			TaskDescription: meta.TaskDescription,
 			MCP:             true,
 		})
 	case "tool_result":
 		emit(&ToolResultEvent{
 			ToolUseID:       block.ToolUseID,
 			Content:         extractContent(block.Content),
-			ParentToolUseID: parentToolUseID,
+			ParentToolUseID: meta.ParentToolUseID,
 		})
 	default:
 		if block.Type != "" {
@@ -418,7 +456,13 @@ type rawEvent struct {
 	Outcome   string `json:"outcome,omitempty"`
 
 	// assistant + user events
-	Message         *rawMessage     `json:"message,omitempty"`
+	Message *rawMessage `json:"message,omitempty"`
+	// SubagentType is set on assistant messages produced by a subagent, and
+	// on the task_* system subtypes.
+	SubagentType string `json:"subagent_type,omitempty"`
+	// TaskDescription describes the subagent task that produced an assistant
+	// message. Distinct from the task events' "description" field.
+	TaskDescription string          `json:"task_description,omitempty"`
 	ParentToolUseID *string         `json:"parent_tool_use_id,omitempty"`
 	Timestamp       string          `json:"timestamp,omitempty"`
 	ToolUseResult   json.RawMessage `json:"tool_use_result,omitempty"`
@@ -476,6 +520,11 @@ type rawEvent struct {
 type rawMessage struct {
 	Content           rawFlexContent  `json:"content"`
 	ContextManagement json.RawMessage `json:"context_management,omitempty"`
+	// Model is the API model that produced this message. On subagent
+	// messages (ParentToolUseID set) this is the resolved id the subagent
+	// actually ran on, which is strictly better than the alias in the
+	// spawning Agent tool's input — and is the only place it appears.
+	Model string `json:"model,omitempty"`
 }
 
 // UnmarshalJSON accepts both the canonical object form
@@ -824,6 +873,7 @@ func parseTaskEvent(raw *rawEvent, line []byte) *TaskEvent {
 		ToolUseID:        raw.ToolUseID,
 		SessionID:        raw.SessionID,
 		Description:      raw.Description,
+		SubagentType:     raw.SubagentType,
 		TaskType:         raw.TaskType,
 		Prompt:           raw.Prompt,
 		WorkflowName:     raw.WorkflowName,

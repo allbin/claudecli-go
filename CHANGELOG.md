@@ -15,6 +15,28 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Assistant events now carry the model, subagent type and task description.**
+  The CLI reports these once per assistant message; the SDK flattened the
+  message into per-block events and dropped them. `*TextEvent`, `*ThinkingEvent`
+  and `*ToolUseEvent` gained `Model`, `SubagentType` and `TaskDescription`.
+
+  This makes a subagent's model reachable for the first time. On a subagent
+  message `Model` is the *resolved* API model id (e.g.
+  `"claude-haiku-4-5-20251001"`), which is strictly better than the alias in the
+  spawning Agent tool's input — `AgentInput.Model` is one of
+  `sonnet|opus|haiku|fable` and is empty when the subagent inherits the parent's
+  model. Correlate to the owning task by matching `ParentToolUseID` against
+  `TaskEvent.ToolUseID` from `task_started`.
+
+  Requires `WithForwardSubagentText()`. Without it the CLI emits no subagent
+  assistant messages at all (verified against CLI 2.1.235: zero such messages
+  without the flag), so the fields stay empty. There is no way to obtain a
+  subagent's model without paying for the forwarded transcript.
+- **`TaskEvent` now carries `SubagentType`** (e.g. `"Explore"`), sent by the CLI
+  on `task_started` and `task_progress` and previously discarded.
+
 ### Changed
 
 - **Both decode loops now share one event decoder.** `ParseEvents` (for `-p`

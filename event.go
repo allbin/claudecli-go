@@ -165,6 +165,9 @@ type TaskEvent struct {
 
 	// task_started
 	Description string
+	// SubagentType is the agent type for Task-tool subagents, e.g. "Explore".
+	// Sent on task_started and task_progress; empty for workflow tasks.
+	SubagentType string
 	// TaskType classifies the task, e.g. "local_agent" or "local_workflow".
 	// The CLI sends it only on task_started; the SDK backfills it onto the
 	// same task's later events (see IsWorkflow).
@@ -262,10 +265,21 @@ func (e *HookEvent) String() string {
 //
 // ParentToolUseID is set when this event comes from a subagent (links to the
 // parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
+//
+// Model, SubagentType and TaskDescription describe the assistant message this
+// block came from. On subagent events Model is the resolved API model id the
+// subagent actually ran on (e.g. "claude-haiku-4-5-20251001") — the only place
+// it appears on the wire, and more specific than the alias in the spawning
+// Agent tool's input, which is absent entirely when the subagent inherits the
+// parent's model. All three require WithForwardSubagentText(): without it the
+// CLI emits no subagent assistant messages at all, so they stay empty.
 type ThinkingEvent struct {
 	Content         string
 	Signature       string
 	ParentToolUseID string
+	Model           string
+	SubagentType    string
+	TaskDescription string
 }
 
 func (*ThinkingEvent) event() {}
@@ -276,9 +290,20 @@ func (e *ThinkingEvent) String() string {
 // TextEvent contains assistant text output.
 // ParentToolUseID is set when this event comes from a subagent (links to the
 // parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
+//
+// Model, SubagentType and TaskDescription describe the assistant message this
+// block came from. On subagent events Model is the resolved API model id the
+// subagent actually ran on (e.g. "claude-haiku-4-5-20251001") — the only place
+// it appears on the wire, and more specific than the alias in the spawning
+// Agent tool's input, which is absent entirely when the subagent inherits the
+// parent's model. All three require WithForwardSubagentText(): without it the
+// CLI emits no subagent assistant messages at all, so they stay empty.
 type TextEvent struct {
 	Content         string
 	ParentToolUseID string
+	Model           string
+	SubagentType    string
+	TaskDescription string
 }
 
 func (*TextEvent) event() {}
@@ -310,11 +335,22 @@ func (e *TurnEvent) String() string {
 // ServerSide is true for server_tool_use blocks (web search, code execution)
 // and MCP is true for mcp_tool_use blocks. Both carry the same ID/Name/Input
 // shape as regular tool_use.
+//
+// Model, SubagentType and TaskDescription describe the assistant message this
+// block came from. On subagent events Model is the resolved API model id the
+// subagent actually ran on (e.g. "claude-haiku-4-5-20251001") — the only place
+// it appears on the wire, and more specific than the alias in the spawning
+// Agent tool's input, which is absent entirely when the subagent inherits the
+// parent's model. All three require WithForwardSubagentText(): without it the
+// CLI emits no subagent assistant messages at all, so they stay empty.
 type ToolUseEvent struct {
 	ID              string
 	Name            string
 	Input           json.RawMessage
 	ParentToolUseID string
+	Model           string
+	SubagentType    string
+	TaskDescription string
 	ServerSide      bool
 	MCP             bool
 }
