@@ -368,7 +368,63 @@ func (s *Session) Wait() (*ResultEvent, error) {
 
 // Interrupt sends an interrupt to the CLI.
 func (s *Session) Interrupt() error {
-	return s.sendControlRequest("interrupt", nil)
+	_, err := s.InterruptWithQueued(false)
+	return err
+}
+
+// InterruptReceipt reports what an interrupt did to queued work.
+//
+// Advertised by the CapabilityInterruptReceipt capability on InitEvent; a CLI
+// that predates it answers with an empty body, leaving both fields nil.
+type InterruptReceipt struct {
+	// StillQueued lists uuids of async user messages that survive the
+	// interrupt and WILL still run — commands left in the queue, plus any
+	// batch already dequeued for the imminent turn. Always empty when the
+	// request set cancelQueued.
+	//
+	// Coverage caveats: only uuid-stamped main-thread messages appear, so an
+	// empty list does not prove nothing will run; and the list can include
+	// uuids the caller never sent (cron triggers, auto-resume
+	// continuations), so ignore unknown ones rather than erroring.
+	StillQueued []string
+	// Cancelled lists uuids dropped by this interrupt. Populated only when
+	// cancelQueued was set.
+	Cancelled []string
+}
+
+// InterruptWithQueued interrupts the running turn and reports what happened to
+// queued work.
+//
+// With cancelQueued set, the interrupt also drops every uuid-stamped
+// main-thread command still queued for the imminent turn — one round-trip to
+// halt the session, which is what a UI stop button usually wants. Plain
+// Interrupt leaves those commands queued, so the CLI starts the next one
+// immediately after the turn aborts.
+//
+// cancelQueued requires the CapabilityInterruptCancelQueued capability; older
+// CLIs ignore the field and behave as if it were false.
+func (s *Session) InterruptWithQueued(cancelQueued bool) (*InterruptReceipt, error) {
+	var data map[string]any
+	if cancelQueued {
+		data = map[string]any{"cancel_queued": true}
+	}
+	raw, err := s.sendControlRequestRaw("interrupt", data)
+	if err != nil {
+		return nil, err
+	}
+	receipt := &InterruptReceipt{}
+	if len(raw) > 0 {
+		// An older CLI answers with an empty body; that is not an error.
+		var body struct {
+			StillQueued []string `json:"still_queued"`
+			Cancelled   []string `json:"cancelled"`
+		}
+		if err := json.Unmarshal(raw, &body); err == nil {
+			receipt.StillQueued = body.StillQueued
+			receipt.Cancelled = body.Cancelled
+		}
+	}
+	return receipt, nil
 }
 
 // Ping sends a no-op control request and returns when the CLI responds.

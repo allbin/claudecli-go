@@ -39,6 +39,19 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Added
 
+- **`Session.InterruptWithQueued(cancelQueued bool) (*InterruptReceipt, error)`**
+  — interrupts the running turn and returns what happened to queued work.
+
+  `Interrupt()` discarded the receipt the CLI already sends, so callers could
+  not tell that queued commands survived — and they do: the CLI starts the next
+  one immediately after the turn aborts. `InterruptReceipt.StillQueued` lists
+  the survivors; passing `cancelQueued` drops them instead and lists them under
+  `Cancelled`, which is the one-round-trip "stop everything" a UI stop button
+  wants. `Interrupt()` is unchanged and still omits `cancel_queued` entirely.
+
+  Gated by the `interrupt_receipt_v1` / `interrupt_cancel_queued_v1`
+  capabilities (see `InitEvent.HasCapability`); older CLIs answer with an empty
+  body, which is handled as an empty receipt rather than an error.
 - **`WithCanUseToolRequest(func(ToolPermissionRequest) (*PermissionResponse, error))`**
   — a tool-permission callback that receives the whole request instead of just
   the tool name and input. `ToolPermissionRequest` gained the fields the SDK
