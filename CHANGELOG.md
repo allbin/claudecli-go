@@ -15,6 +15,12 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-21
+
+Catches the SDK up to Claude Code CLI 2.1.235, from a full survey of the
+stream-json and control protocols at that version. Verified end-to-end against
+a live CLI, not just against fixtures.
+
 ### Fixed
 
 - **Assistant events now carry the model, subagent type and task description.**
@@ -36,6 +42,27 @@ or pin a specific version (e.g. `@v0.1.0`).
   subagent's model without paying for the forwarded transcript.
 - **`TaskEvent` now carries `SubagentType`** (e.g. `"Explore"`), sent by the CLI
   on `task_started` and `task_progress` and previously discarded.
+- **`control_cancel_request` is now handled in both directions.** The frame
+  withdraws an in-flight control request, and the SDK ignored it entirely.
+
+  Inbound: when the CLI withdraws a permission prompt — its turn was
+  interrupted, or another client answered — the in-flight callback is now
+  cancelled and no reply is sent. Previously the callback ran to completion and
+  wrote its answer to a dead `request_id`.
+
+  Outbound: a control request that times out now sends a cancel, so the CLI can
+  abort the work instead of holding it. A prompt the SDK stopped waiting on
+  otherwise stayed parked until its own deadline.
+- **`Session.Ping` no longer relies on an error response.** It sent a `"ping"`
+  subtype, which the CLI has never implemented — liveness was proven by the
+  resulting `Unsupported control request subtype` error. It now sends
+  `get_binary_version`, a real side-effect-free request-response. Error
+  responses are still accepted as proof of life, so CLIs predating that subtype
+  keep working. Behavior and signature are unchanged.
+- **`keep_alive` frames are no longer surfaced as `*UnknownEvent`.** The CLI
+  emits this payload-less heartbeat periodically (for example while a long
+  control request is in flight) and the protocol requires receivers to ignore
+  it. It is now consumed silently instead of reading as a parse failure.
 
 ### Added
 
@@ -159,30 +186,6 @@ or pin a specific version (e.g. `@v0.1.0`).
   provided for the tokens this package acts on. Older CLIs omit the field
   entirely, so an empty slice means "nothing advertised", not "nothing
   supported".
-
-### Fixed
-
-- **`control_cancel_request` is now handled in both directions.** The frame
-  withdraws an in-flight control request, and the SDK ignored it entirely.
-
-  Inbound: when the CLI withdraws a permission prompt — its turn was
-  interrupted, or another client answered — the in-flight callback is now
-  cancelled and no reply is sent. Previously the callback ran to completion and
-  wrote its answer to a dead `request_id`.
-
-  Outbound: a control request that times out now sends a cancel, so the CLI can
-  abort the work instead of holding it. A prompt the SDK stopped waiting on
-  otherwise stayed parked until its own deadline.
-- **`Session.Ping` no longer relies on an error response.** It sent a `"ping"`
-  subtype, which the CLI has never implemented — liveness was proven by the
-  resulting `Unsupported control request subtype` error. It now sends
-  `get_binary_version`, a real side-effect-free request-response. Error
-  responses are still accepted as proof of life, so CLIs predating that subtype
-  keep working. Behavior and signature are unchanged.
-- **`keep_alive` frames are no longer surfaced as `*UnknownEvent`.** The CLI
-  emits this payload-less heartbeat periodically (for example while a long
-  control request is in flight) and the protocol requires receivers to ignore
-  it. It is now consumed silently instead of reading as a parse failure.
 
 ### Changed
 
@@ -394,7 +397,8 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/allbin/claudecli-go/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/allbin/claudecli-go/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/allbin/claudecli-go/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/allbin/claudecli-go/compare/v0.1.0...v0.1.1

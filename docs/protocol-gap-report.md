@@ -5,7 +5,8 @@
 **CLI under review:** `claude` 2.1.235 (native ELF, `~/.local/share/claude/versions/2.1.235`)
 
 Research pass. **Update (2026-08-21): Tier 1 and most of Tier 2 have since been
-implemented** — see the `[Unreleased]` section of `CHANGELOG.md`. Section C
+implemented and shipped in v0.3.0** — see the `[0.3.0]` section of
+`CHANGELOG.md`. Section C
 below marks each recommendation's status. The inventories in sections A and B
 remain an accurate description of the protocol at CLI 2.1.235.
 
