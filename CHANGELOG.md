@@ -15,6 +15,8 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-21
+
 ### Added
 
 - **`WithCanUseToolRequestContext` and `WithUserInputContext`** — permission
@@ -436,7 +438,8 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/allbin/claudecli-go/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/allbin/claudecli-go/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/allbin/claudecli-go/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/allbin/claudecli-go/compare/v0.1.1...v0.1.2
