@@ -298,6 +298,14 @@ func parseBackgroundTasksChangedEvent(raw *rawEvent) *BackgroundTasksChangedEven
 	}
 }
 
+func parseCommandsChangedEvent(raw *rawEvent) *CommandsChangedEvent {
+	return &CommandsChangedEvent{
+		Commands:  raw.Commands,
+		SessionID: raw.SessionID,
+		UUID:      raw.UUID,
+	}
+}
+
 func parseSessionStateChangedEvent(raw *rawEvent) *SessionStateChangedEvent {
 	return &SessionStateChangedEvent{
 		State:     raw.State,
@@ -572,6 +580,9 @@ type rawEvent struct {
 
 	// system subtype background_tasks_changed
 	Tasks []BackgroundTask `json:"tasks,omitempty"`
+
+	// system subtype commands_changed
+	Commands []SlashCommand `json:"commands,omitempty"`
 
 	// files_persisted (system subtype)
 	Files  json.RawMessage `json:"files,omitempty"`

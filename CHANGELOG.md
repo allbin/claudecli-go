@@ -116,7 +116,7 @@ or pin a specific version (e.g. `@v0.1.0`).
   `IsAutoCompactEnabled`, `AutoCompactThreshold`, `Categories`, and a
   `Remaining()` helper. The much larger remainder (per-tool and per-skill
   attribution, message breakdown, TUI grid data) stays available via `Raw`.
-- **Four stream events that previously surfaced as `*UnknownEvent`:**
+- **Five stream events that previously surfaced as `*UnknownEvent`:**
   - **`*ConversationResetEvent`** (`conversation_reset`) — emitted by `/clear`,
     plan-mode exit and fresh-session flows. A transcript boundary, not a
     session restart: the session id is unchanged but the model's context is
@@ -133,6 +133,9 @@ or pin a specific version (e.g. `@v0.1.0`).
     `idle` / `running` / `requires_action`, with matching `SessionState*`
     constants. The only signal that distinguishes "waiting on the user" from
     "idle".
+  - **`*CommandsChangedEvent`** (`commands_changed`) — the full slash-command
+    list after a mid-session change, with REPLACE semantics. Observed live
+    whenever skills are discovered dynamically or `ReloadSkills` is called.
   - **`*PermissionDeniedEvent`** (`permission_denied`) — tool calls denied
     without an interactive prompt (auto-mode classifier, `dontAsk`, deny
     rules, headless auto-deny). Carries `ToolUseID` and `AgentID` for

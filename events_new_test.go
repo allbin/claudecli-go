@@ -117,3 +117,24 @@ func TestKeepAliveIsIgnored(t *testing.T) {
 		}
 	}
 }
+
+// Observed live: ReloadSkills triggers commands_changed, which previously
+// surfaced as *UnknownEvent.
+func TestCommandsChangedEvent(t *testing.T) {
+	const line = `{"type":"system","subtype":"commands_changed","session_id":"s1","commands":[{"name":"code-review","description":"Review changes","argumentHint":"since"},{"name":"tdd","description":"Test first"}]}`
+	var got *CommandsChangedEvent
+	for _, ev := range parseLines(t, line) {
+		if e, ok := ev.(*CommandsChangedEvent); ok {
+			got = e
+		}
+	}
+	if got == nil {
+		t.Fatal("commands_changed did not decode")
+	}
+	if len(got.Commands) != 2 || got.Commands[0].Name != "code-review" {
+		t.Errorf("Commands = %+v", got.Commands)
+	}
+	if got.Commands[0].ArgumentHint != "since" {
+		t.Errorf("ArgumentHint = %q", got.Commands[0].ArgumentHint)
+	}
+}

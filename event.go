@@ -493,6 +493,22 @@ func (e *PermissionDeniedEvent) String() string {
 	return fmt.Sprintf("PermissionDeniedEvent{Tool: %s, Reason: %s}", e.ToolName, e.DecisionReasonType)
 }
 
+// CommandsChangedEvent carries the full slash-command list after a mid-session
+// change — skills discovered as the agent works in a new subdirectory, or an
+// explicit Session.ReloadSkills/ReloadPlugins.
+//
+// REPLACE semantics: swap your cached command list for Commands.
+type CommandsChangedEvent struct {
+	Commands  []SlashCommand
+	SessionID string
+	UUID      string
+}
+
+func (*CommandsChangedEvent) event() {}
+func (e *CommandsChangedEvent) String() string {
+	return fmt.Sprintf("CommandsChangedEvent{Commands: %d}", len(e.Commands))
+}
+
 // AgentInput contains the parsed fields from an Agent tool invocation.
 type AgentInput struct {
 	Description     string `json:"description"`

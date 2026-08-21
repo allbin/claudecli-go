@@ -59,6 +59,9 @@ func decodeStatelessEvent(raw *rawEvent, line []byte, backfill *taskTypeBackfill
 		case "session_state_changed":
 			return parseSessionStateChangedEvent(raw), true
 
+		case "commands_changed":
+			return parseCommandsChangedEvent(raw), true
+
 		case "permission_denied":
 			return parsePermissionDeniedEvent(raw, line), true
 
