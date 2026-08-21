@@ -46,6 +46,7 @@ type Session struct {
 	controlTimeout time.Duration
 	initTimeout    time.Duration
 	controlWg      sync.WaitGroup // tracks in-flight handleControlRequest goroutines
+	inboundCancel  sync.Map       // map[string]context.CancelFunc for inbound control requests
 	pump           chan Event     // set by readLoop; sendEvent writes here for ordering
 	pumpClosed     chan struct{}  // closed by readLoop defer — EOF-signal till pumpgoroutinen och stopp för sendEvent. Pump-kanalen close():as ALDRIG: en samtidig sendEvent (ticker, emitQueryActivity) får aldrig kunna panika på send-on-closed.
 
@@ -776,8 +777,28 @@ func (s *Session) sendControlRequestRaw(subtype string, data map[string]any) (js
 		if s.ctx.Err() != nil {
 			return nil, s.ctx.Err()
 		}
+		// We have stopped waiting, but the CLI is still working on this
+		// request. Withdraw it so it can abort rather than holding the work
+		// (and, for a prompt, parking it until its own deadline).
+		s.cancelControlRequest(id)
 		return nil, fmt.Errorf("%s: timeout after %s", subtype, s.controlTimeout)
 	}
+}
+
+// cancelControlRequest tells the CLI the sender no longer needs the answer to
+// one of its own in-flight control requests. There is no reply to the cancel
+// itself, and a write failure here is not actionable — the session is already
+// failing — so the error is dropped.
+func (s *Session) cancelControlRequest(requestID string) {
+	payload := map[string]any{
+		"type":       "control_cancel_request",
+		"request_id": requestID,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_ = s.writeStdin(append(raw, '\n'))
 }
 
 // initialize sends the initialize control request and waits for response.
@@ -1011,6 +1032,14 @@ func (s *Session) readLoop() {
 				defer s.controlWg.Done()
 				s.handleControlRequest(raw.RequestID, raw.Request)
 			}()
+
+		case "control_cancel_request":
+			// The CLI no longer needs our answer — e.g. a permission prompt
+			// whose turn was interrupted, or one another client answered.
+			// Abort the handler; the protocol expects no reply.
+			if cancel, ok := s.inboundCancel.LoadAndDelete(raw.RequestID); ok {
+				cancel.(context.CancelFunc)()
+			}
 
 		case "system":
 			// decodeStatelessEvent handles every subtype but init.
@@ -1416,6 +1445,13 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 		return
 	}
 
+	// Per-request context so an inbound control_cancel_request can abort this
+	// handler without tearing down the session.
+	reqCtx, cancelReq := context.WithCancel(s.ctx)
+	defer cancelReq()
+	s.inboundCancel.Store(requestID, cancelReq)
+	defer s.inboundCancel.Delete(requestID)
+
 	switch req.Subtype {
 	case "can_use_tool":
 		var permReq ToolPermissionRequest
@@ -1426,7 +1462,7 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 
 		// Route AskUserQuestion to userInput callback when available.
 		if permReq.ToolName == "AskUserQuestion" && s.userInput != nil {
-			s.handleUserInput(requestID, permReq)
+			s.handleUserInput(reqCtx, requestID, permReq)
 			return
 		}
 
@@ -1469,13 +1505,24 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 		var resp *PermissionResponse
 		select {
 		case result := <-ch:
+			// The callback finishing and the cancel arriving can be ready at
+			// the same instant, and select picks arbitrarily between them.
+			// Re-check so a withdrawn request is never answered.
+			if reqCtx.Err() != nil && s.ctx.Err() == nil {
+				return
+			}
 			if result.err != nil {
 				s.sendControlResponse(requestID, nil, result.err)
 				return
 			}
 			resp = result.resp
-		case <-s.ctx.Done():
-			s.sendControlResponse(requestID, nil, s.ctx.Err())
+		case <-reqCtx.Done():
+			// A peer cancel withdraws the request: the CLI has stopped
+			// waiting, so answering would be noise. Only report back when
+			// the session itself is going down.
+			if s.ctx.Err() != nil {
+				s.sendControlResponse(requestID, nil, s.ctx.Err())
+			}
 			return
 		}
 
@@ -1510,7 +1557,7 @@ func (s *Session) handleControlRequest(requestID string, body json.RawMessage) {
 }
 
 // handleUserInput routes AskUserQuestion requests to the userInput callback.
-func (s *Session) handleUserInput(requestID string, permReq ToolPermissionRequest) {
+func (s *Session) handleUserInput(reqCtx context.Context, requestID string, permReq ToolPermissionRequest) {
 	var input struct {
 		Questions []Question `json:"questions"`
 	}
@@ -1540,6 +1587,10 @@ func (s *Session) handleUserInput(requestID string, permReq ToolPermissionReques
 
 	select {
 	case result := <-ch:
+		// See can_use_tool: a withdrawn request is never answered.
+		if reqCtx.Err() != nil && s.ctx.Err() == nil {
+			return
+		}
 		if result.err != nil {
 			s.sendControlResponse(requestID, nil, result.err)
 			return
@@ -1555,8 +1606,11 @@ func (s *Session) handleUserInput(requestID string, permReq ToolPermissionReques
 				"answers":   answers,
 			},
 		}, nil)
-	case <-s.ctx.Done():
-		s.sendControlResponse(requestID, nil, s.ctx.Err())
+	case <-reqCtx.Done():
+		// See can_use_tool: stay silent on a peer cancel, report on shutdown.
+		if s.ctx.Err() != nil {
+			s.sendControlResponse(requestID, nil, s.ctx.Err())
+		}
 	}
 }
 

@@ -150,6 +150,17 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Fixed
 
+- **`control_cancel_request` is now handled in both directions.** The frame
+  withdraws an in-flight control request, and the SDK ignored it entirely.
+
+  Inbound: when the CLI withdraws a permission prompt — its turn was
+  interrupted, or another client answered — the in-flight callback is now
+  cancelled and no reply is sent. Previously the callback ran to completion and
+  wrote its answer to a dead `request_id`.
+
+  Outbound: a control request that times out now sends a cancel, so the CLI can
+  abort the work instead of holding it. A prompt the SDK stopped waiting on
+  otherwise stayed parked until its own deadline.
 - **`Session.Ping` no longer relies on an error response.** It sent a `"ping"`
   subtype, which the CLI has never implemented — liveness was proven by the
   resulting `Unsupported control request subtype` error. It now sends

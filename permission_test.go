@@ -3,6 +3,7 @@ package claudecli
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 )
 
@@ -170,5 +171,100 @@ func TestPermissionDenyInterrupt(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A withdrawn prompt must not be answered: the CLI has stopped waiting, and
+// replying to a cancelled request_id is noise. Previously the callback ran to
+// completion and its answer was written to a dead request.
+func TestControlCancelRequestAbortsPendingPrompt(t *testing.T) {
+	sim := newSessionSim()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	client := NewWithExecutor(sim.bidi, WithCanUseTool(
+		func(string, json.RawMessage) (*PermissionResponse, error) {
+			close(entered)
+			<-release // still deciding when the cancel arrives
+			return &PermissionResponse{Allow: true}, nil
+		}))
+
+	handshake := make(chan struct{})
+	cancelSeen := make(chan struct{})
+	lines := make(chan string, 8)
+
+	go func() {
+		sim.handleInitAndReady(t)
+		close(handshake)
+		sim.send(canUseToolRequest)
+		<-entered
+		sim.send(`{"type":"control_cancel_request","request_id":"cli-1"}`)
+		// readLoop processes lines in order, so observing this event proves
+		// the cancel ahead of it has already been applied. Without that the
+		// callback could return before the cancel lands and the test would
+		// be racing its own setup.
+		sim.send(`{"type":"system","subtype":"session_state_changed","session_id":"s1","state":"idle"}`)
+		<-cancelSeen
+		close(release)
+		sim.sendResult()
+	}()
+
+	// Detached: the pipe stays open until Close, so this must not gate the
+	// test. Starts only after the handshake has consumed the initialize
+	// request from the shared reader.
+	go func() {
+		<-handshake
+		for {
+			line, err := sim.reader.ReadBytes('\n')
+			if len(line) > 0 {
+				lines <- string(line)
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var once sync.Once
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for ev := range session.Events() {
+			if _, ok := ev.(*SessionStateChangedEvent); ok {
+				once.Do(func() { close(cancelSeen) })
+			}
+		}
+	}()
+
+	if _, err := session.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	<-drained
+
+	for {
+		select {
+		case line := <-lines:
+			var msg map[string]any
+			if json.Unmarshal([]byte(line), &msg) != nil {
+				continue
+			}
+			if msg["type"] != "control_response" {
+				continue
+			}
+			resp, _ := msg["response"].(map[string]any)
+			if resp["request_id"] == "cli-1" {
+				t.Fatalf("answered a cancelled request: %#v", resp)
+			}
+		default:
+			return
+		}
 	}
 }
