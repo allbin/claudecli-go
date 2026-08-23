@@ -15,6 +15,61 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`DetectInstall`** — read-only detection of how the `claude` CLI on PATH was
+  installed, plus the command that updates *that* install.
+
+  A host that wants to tell a user "you're on 2.1.87, 2.2.0 is published" also
+  has to tell them how to update, and getting that wrong does not fail cleanly:
+  `npm install -g` against a native install writes a second, complete copy into
+  an npm prefix, and whichever copy PATH reaches first from then on is the one
+  that answers `claude --version`. The version probe stops describing the binary
+  that actually runs, and the copy the user reaches is still stale. Detecting
+  this needs more than `exec.LookPath` plus a version parse — an npm global and
+  an fnm shim look identical until the symlinks are resolved.
+
+  ```go
+  info, err := claudecli.DetectInstall(ctx)
+  if errors.Is(err, claudecli.ErrCLINotFound) {
+      return // normal state, not a failure
+  }
+  fmt.Println(info.Version, info.Method) // "2.1.87" "npm-global"
+  if info.UpdateCmd != "" {
+      fmt.Println("Update with:", info.UpdateCmd)
+  }
+  ```
+
+  `InstallInfo` carries `Path`, `RealPath` (symlinks resolved), `Version`,
+  `Method`, `UpdateCmd`, `VersionManager`, `PackageManager`, `PackageName`,
+  `ConfigMethod`, `ConfigMismatch` and `Source`. `Method` is one of
+  `InstallNPMGlobal`, `InstallNPMLocal`, `InstallVersionManager`,
+  `InstallPackageManager`, `InstallNative`, `InstallUnknown`.
+
+  `InstallUnknown` with an empty `UpdateCmd` is a legitimate answer and is
+  always preferred to a guess — the caller shows "update manually" instead of a
+  command that breaks the install.
+
+  Precedence is package metadata → path layout → the CLI's config file. The
+  `installMethod` recorded in the config says how the CLI was last *installed*,
+  which need not describe the binary now first on PATH, so it only breaks ties;
+  when it disagrees with conclusive path evidence the path wins and
+  `ConfigMismatch` is set, flagging a shadowing second copy.
+
+  Detection starts no session, writes nothing, and makes no network calls. It
+  deliberately does not shell out to `claude doctor`, which reports the same
+  facts but rewrites `.claude.json` and probes the network to do it. Fetching
+  the *published* version stays the caller's business.
+
+- **`ErrCLINotFound` / `CLINotFoundError`** — a missing CLI is a normal state
+  for a consumer probing the environment, so `DetectInstall` reports it as a
+  typed error the caller can tell apart from a real failure via
+  `errors.Is(err, claudecli.ErrCLINotFound)`.
+
+- **`CLIPackageName`** — the npm package that publishes the CLI
+  (`@anthropic-ai/claude-code`), exported for consumers that query the
+  published version themselves.
+
 ## [0.4.0] - 2026-08-21
 
 ### Added

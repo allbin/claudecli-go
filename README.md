@@ -189,6 +189,67 @@ Use `NewClient([]ClientOption{WithLogger(logger)})` for debug logging.
 | `Wait() error`            | Block until login completes.         |
 | `Cancel() error`          | Terminate the login process.         |
 
+## Install method detection
+
+`DetectInstall` reports how the `claude` binary on PATH was installed and which
+command updates it — so a host that surfaces "you're on 2.1.87, 2.2.0 is
+published" can show the *right* update command next to it.
+
+```go
+info, err := claudecli.DetectInstall(ctx)
+if errors.Is(err, claudecli.ErrCLINotFound) {
+    // Normal state, not a failure: no CLI installed.
+    return
+}
+
+fmt.Println(info.Version, info.Method) // "2.1.87" "npm-global"
+if info.UpdateCmd != "" {
+    fmt.Println("Update with:", info.UpdateCmd)
+} else {
+    fmt.Println("Update manually — see https://code.claude.com/docs")
+}
+```
+
+**Detect, never assume.** Suggesting the wrong update command does not fail
+cleanly: `npm install -g` against a native install writes a second, complete
+copy into an npm prefix, and whichever copy PATH reaches first from then on is
+the one that answers `claude --version`. The user is told a version that does
+not describe the binary their next session runs, and the copy they actually use
+is still stale. Because that failure is silent, `InstallUnknown` with an empty
+`UpdateCmd` is the correct answer whenever evidence is inconclusive.
+
+Detection is read-only: it resolves the binary with `exec.LookPath` +
+`filepath.EvalSymlinks`, reads package metadata and file headers next to the
+resolved path, reads the CLI's config file, and runs `claude -v`. It starts no
+session, writes nothing, and makes **no network calls**. Fetching the
+*published* version (`npm view`, the releases API) is the caller's business.
+
+> It deliberately does not shell out to `claude doctor`, which reports the same
+> facts but rewrites `.claude.json` and probes the network to do it.
+
+| `InstallInfo` field | Description |
+| ------------------- | ----------- |
+| `Path`              | Binary as found on PATH, before symlink resolution. |
+| `RealPath`          | `Path` with all symlinks resolved — classification is driven by this. |
+| `Version`           | What the CLI reports for itself, or `""` if the probe failed (not fatal). |
+| `Method`            | `npm-global`, `npm-local`, `version-manager`, `package-manager`, `native`, `unknown`. |
+| `UpdateCmd`         | Command to show the user; `""` when none is known to be correct. |
+| `VersionManager`    | `fnm`/`nvm`/`volta`/`asdf`/`mise` when the binary sits under one, else `""`. Set even for `npm-global` — such an install only updates for the active node version. |
+| `PackageManager`    | `homebrew`/`winget`/`mise`/`asdf` when `Method` is `package-manager`. |
+| `PackageName`       | Homebrew cask name / winget package id. |
+| `ConfigMethod`      | Raw `installMethod` from the CLI's config, verbatim (`native`/`global`/`local`). |
+| `ConfigMismatch`    | Config disagrees with detected `Method` — usually a shadowing second copy. |
+| `Source`            | `package-metadata`, `path-layout`, `config`, or `none`. |
+
+**Precedence:** package metadata beats path layout, which beats the config file.
+`installMethod` in the CLI's config records how the CLI was last *installed*,
+which need not describe the binary now first on PATH, so it only breaks ties
+(`Source` is then `config`). When it disagrees with conclusive path evidence,
+the path wins and `ConfigMismatch` is set.
+
+`client.DetectInstall(ctx)` uses that client's configured binary; the
+package-level shortcut uses the default client.
+
 ## Stream state
 
 Poll the stream's lifecycle state at any time:
@@ -1087,6 +1148,7 @@ claudecli-go/
   auth.go        AuthStatus (defensive three-state parsing), AuthLogin (BROWSER capture + localhost callback), AuthLogout, LoginProcess
   pool.go        Pool multi-session registry, FormatAgentMessage, SendAgentMessage
   version.go     sdkVersion (module version reported to CLI, build-info sourced), SDKVersion dev fallback, MinCLIVersion, CLI version checking with semver parsing
+  install.go     DetectInstall — read-only install-method detection (npm/native/package-manager/version-manager) and the matching update command
   internal.go    Stderr ring buffer, processExitError with heuristic inference, code fence stripping
   error.go       Sentinel errors (ErrInvalidRequest, ErrAuth, ErrBilling, ErrPermission, ErrNotFound, ErrRequestTooLarge, ErrRateLimit, ErrAPI, ErrOverloaded, ErrMaxTurns, ErrContextWindowExceeded), RateLimitError, MaxTurnsError, Error, UnmarshalError
 ```
@@ -1109,6 +1171,14 @@ claudecli-go/
 - **Blocking stderr capped at 10 MB** — `RunBlocking` caps stderr collection at 10 MB. The streaming path uses a 1000-line ring buffer.
 - **Fork-session needs a persisted parent** — `RunBlocking` by default emits `--no-session-persistence`, so the parent must be started with `WithSessionID`, `WithResume`/`WithContinue`, or via `Connect` for `WithForkSession` to find the parent on disk.
 - **`AuthStatus` fail-close** — When the CLI exits 0 with non-JSON output, `AuthStatus` returns `AuthStateUnknown` (not `AuthStateAuthenticated`). Callers should handle this explicitly.
+- **`DetectInstall` on Windows is unverified** — the layouts are implemented
+  from npm/winget conventions but have not been exercised on real Windows
+  hardware. `.exe` binaries and npm's `node_modules` layout are handled; a
+  `.cmd`/`.bat`/`.ps1` shim is not a symlink and cannot be resolved further, so
+  unless a sibling npm layout confirms the install it reports `InstallUnknown`
+  rather than guessing. `DetectInstall` also has no command for `asdf`, `deb`,
+  `rpm`, `pacman` or `apk` installs — it reports `package-manager` with an empty
+  `UpdateCmd`, matching the CLI, which does not know one either.
 - **Thinking text is withheld by default** — By default the CLI emits
   `ThinkingEvent`s with empty `Content` but a set `Signature`: the model
   thought, the reasoning is cryptographically attested, but the text is
