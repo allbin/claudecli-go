@@ -23,6 +23,16 @@ Output: `tmp/raw-stdout.jsonl` (raw JSONL), `tmp/raw-stderr.log` (stderr). The t
 
 Flags: `-prompt` (default triggers Agent tool), `-out` (output dir, default `tmp`), `-timeout` (default 2m), `-analyze` (replay mode).
 
+## Reading the CLI's own behavior out of the binary
+
+For behavior that never reaches the event stream — install layouts, config keys, update endpoints — the native binary is a bundled JS payload and greps cleanly. Do not `grep` the 300 MB file directly (it is slow and hits regex complexity limits); dump strings once and search that:
+
+```bash
+strings -n 6 ~/.local/share/claude/versions/<v> > /tmp/native-strings.txt
+```
+
+It contains the settings zod schema (key names, enums, defaults), env-var names, URL constants, and the CLI's own bundled docs — which state rules in prose, e.g. how the update check resolves a channel per install method. Treat it as the authority when the docs are silent, and verify the endpoints it names with `curl` before relying on them.
+
 # Gotchas
 
 - Verify CLI flags exist (`claude --help | grep`) before adding new options to `buildArgs()` — the CLI has no formal spec and flags change between versions.
