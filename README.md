@@ -239,8 +239,9 @@ calls**. The *published* version needs the network and lives in
 | `PackageManager`    | `homebrew`/`winget`/`mise`/`asdf` when `Method` is `package-manager`. |
 | `PackageName`       | Homebrew cask name / winget package id. |
 | `ConfigMethod`      | Raw `installMethod` from the CLI's config, verbatim (`native`/`global`/`local`). |
-| `ConfigMismatch`    | Config disagrees with detected `Method` — usually a shadowing second copy. |
+| `ConfigMismatch`    | Config disagrees with detected `Method`. A *weak* second-copy detector — see below. |
 | `Source`            | `package-metadata`, `path-layout`, `config`, or `none`. |
+| `PathEntries`       | Every copy found on PATH, in PATH order, winner marked — see below. |
 | `AutoUpdate`        | The CLI's own background-updater state (never nil) — see below. |
 
 **Precedence:** package metadata beats path layout, which beats the config file.
@@ -251,6 +252,43 @@ the path wins and `ConfigMismatch` is set.
 
 `client.DetectInstall(ctx)` uses that client's configured binary; the
 package-level shortcut uses the default client.
+
+### Every copy on PATH
+
+`info.PathEntries` lists every `claude` on PATH, in PATH order, with the one
+that runs marked `Active`.
+
+```go
+for _, e := range info.Shadowed() {
+    fmt.Printf("another copy is installed at %s (%s)\n", e.Path, e.Method)
+}
+```
+
+**`ConfigMismatch` is not a second-copy detector.** It needs the two copies to
+disagree about method *and* the config to record the loser. Measured on one
+ordinary machine:
+
+```
+/home/u/.local/bin/claude  -> ~/.local/share/claude/versions/2.1.241  native, wins
+/usr/local/bin/claude      -> npm-global, root-owned, 2.0.14
+```
+
+Config said `native`, detection said `native`, they agreed, `ConfigMismatch` was
+`false` — on a machine where one PATH change silently downgrades the running CLI
+by fifteen months while the reported version goes on describing the copy that no
+longer runs. `PathEntries` is what sees that.
+
+| `InstallPathEntry` field | Description |
+| ------------------------ | ----------- |
+| `Path`     | The binary as found on PATH, before symlink resolution. |
+| `RealPath` | Symlinks resolved. Distinct copies are told apart by this, so a duplicated PATH entry or two symlinked directories count once. |
+| `Method`   | How that copy was installed, classified like `Method`. No version probe — that would be a spawn per copy. |
+| `Active`   | The copy that actually runs. Exactly one entry has it. |
+
+Two copies is a **warning, never a refusal**: nothing in this package fails or
+changes behaviour because of it, and `Update` still updates the winning copy. The
+walk costs ~100µs on a two-copy machine, against the ~200ms `claude -v` probe
+detection already pays.
 
 ### Auto-update state
 
@@ -1314,6 +1352,7 @@ claudecli-go/
   pool.go        Pool multi-session registry, FormatAgentMessage, SendAgentMessage
   version.go     sdkVersion (module version reported to CLI, build-info sourced), SDKVersion dev fallback, MinCLIVersion, CLI version checking with semver parsing
   install.go     DetectInstall — read-only install-method detection (npm/native/package-manager/version-manager) and the matching update command
+  pathentries.go InstallPathEntry — every copy of the CLI on PATH, in PATH order, winner marked. Catches the shadowing install ConfigMismatch cannot see
   autoupdate.go  AutoUpdateState — the CLI's own background updater: enabled/disabled, release channel, last attempt. Offline, from files install.go already reads
   update.go      Update — runs `claude update` for self-managed installs only, with a writability preflight and a version re-read (the exit code is not evidence)
   published.go   LatestPublished — the published version for the channel this install tracks. The only install-related file that touches the network

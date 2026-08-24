@@ -133,7 +133,22 @@ type InstallInfo struct {
 	// a wrong update command destructive. Only set when both values are known
 	// and comparable; the config file cannot express package-manager or
 	// version-manager installs, so those never flag a mismatch.
+	//
+	// It is a weak detector of a second copy and must not be used as one: it
+	// needs the two copies to disagree about method *and* the config to record
+	// the loser. Two copies the config agrees with leave it false. Use
+	// PathEntries to see the copies themselves.
 	ConfigMismatch bool
+
+	// PathEntries is every copy of the CLI found on PATH, in PATH order, with
+	// the one that runs marked Active. See [InstallPathEntry] and
+	// [InstallInfo.Shadowed].
+	//
+	// More than one entry is a normal state that deserves a warning, never a
+	// refusal: nothing in this package fails or changes behaviour because of
+	// it. The shadowed copy does nothing at all until PATH changes — and then
+	// it does everything, which is the point.
+	PathEntries []InstallPathEntry
 
 	// Source records which evidence produced Method.
 	Source InstallSource
@@ -202,6 +217,19 @@ const defaultInstallTimeout = 5 * time.Second
 // network and lives in [LatestPublished], which is deliberately a separate call
 // so this one stays cheap enough for a launch path.
 //
+// # Two copies is a normal state
+//
+// PathEntries lists every copy on PATH, in PATH order, so a caller can warn
+// about a second one. That is a real state, not a hypothetical: a native
+// install in ~/.local/bin winning over a fifteen-month-old npm-global copy in
+// /usr/local/bin was measured on one ordinary machine. ConfigMismatch does not
+// see it — the config said native, detection said native, they agreed — while
+// one PATH change would silently downgrade the running CLI by fifteen months
+// and the reported version would go on describing the copy that no longer runs.
+//
+// It is a warning and never a refusal. Nothing here fails, and neither [Update]
+// nor [LatestPublished] changes behaviour, because of a second copy.
+//
 // # Precedence
 //
 // Package metadata beats path layout, and path layout beats the config file.
@@ -236,7 +264,8 @@ func (c *Client) DetectInstall(ctx context.Context) (*InstallInfo, error) {
 		"path", info.Path, "realPath", info.RealPath, "version", info.Version,
 		"method", info.Method, "source", info.Source, "updateCmd", info.UpdateCmd,
 		"versionManager", info.VersionManager, "packageManager", info.PackageManager,
-		"configMethod", info.ConfigMethod, "configMismatch", info.ConfigMismatch)
+		"configMethod", info.ConfigMethod, "configMismatch", info.ConfigMismatch,
+		"pathCopies", len(info.PathEntries), "shadowed", len(info.Shadowed()))
 	return info, nil
 }
 
@@ -248,6 +277,7 @@ type installEnv struct {
 	readFile    func(string) ([]byte, error) // small files: package.json, .claude.json
 	readHeader  func(string) ([]byte, error) // first bytes of a possibly huge binary
 	runVersion  func(ctx context.Context, binary string) (string, error)
+	pathDirs    func() []string     // PATH entries in order; nil skips the shadow walk
 	getenv      func(string) string // nil means os.Getenv; see installEnv.env
 	configDir   string              // $CLAUDE_CONFIG_DIR, else ~/.claude
 	configFile  string              // $CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json
@@ -262,6 +292,7 @@ func osInstallEnv() installEnv {
 		readFile:    readSmallFile,
 		readHeader:  readFileHeader,
 		runVersion:  runVersionProbe,
+		pathDirs:    osPathDirs,
 		getenv:      os.Getenv,
 		configDir:   dir,
 		configFile:  file,
@@ -403,6 +434,7 @@ func detectInstall(ctx context.Context, binary string, env installEnv) (*Install
 
 	info.UpdateCmd = updateCommand(info.Method, info.PackageManager, info.PackageName)
 	info.AutoUpdate = readAutoUpdateState(env, info, cfg)
+	info.PathEntries = findPathEntries(binary, found, real, env)
 	info.Version, _ = env.runVersion(ctx, found)
 	return info, nil
 }

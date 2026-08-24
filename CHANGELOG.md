@@ -95,6 +95,30 @@ or pin a specific version (e.g. `@v0.1.0`).
   This one makes a network call and lives in its own file. `DetectInstall` stays
   offline and never calls it.
 
+- **`InstallInfo.PathEntries`** — every copy of the CLI on PATH, in PATH order,
+  with the one that runs marked `Active`. `info.Shadowed()` returns the rest.
+
+  `ConfigMismatch` was the only second-copy signal, and it is a weak one: it
+  needs the two copies to disagree about method *and* the config to record the
+  loser. Measured on one ordinary machine, a native 2.1.241 in `~/.local/bin`
+  winning over an npm-global 2.0.14 in `/usr/local/bin` — config said `native`,
+  detection said `native`, they agreed, and `ConfigMismatch` stayed `false` while
+  one PATH change would silently downgrade the running CLI by fifteen months.
+
+  ```go
+  for _, e := range info.Shadowed() {
+      fmt.Printf("another copy is installed at %s (%s)\n", e.Path, e.Method)
+  }
+  ```
+
+  Two copies is a warning, never a refusal: nothing fails or changes behaviour
+  because of it, and `Update` still updates the winning copy. Each entry carries
+  `Path`, `RealPath` and `Method`; no version is probed, because that is a
+  process spawn per copy. Distinct copies are told apart by resolved path, so a
+  duplicated PATH entry or two symlinked directories count once. The walk is
+  `exec.LookPath`'s own work without the early exit — ~100µs on a two-copy
+  machine, against the ~200ms `claude -v` probe detection already pays.
+
 - **`InstallInfo.AutoUpdate`** — the CLI's own background-updater state, read
   from files `DetectInstall` already opens: whether auto-updates are on and what
   turned them off (`autoUpdates` in the config, `DISABLE_AUTOUPDATER`,
