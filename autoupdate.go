@@ -93,9 +93,16 @@ type AutoUpdateState struct {
 	// settings file names a channel that is not published.
 	ChannelSource string
 
-	// LastAttempt is the CLI's record of its most recent update attempt, or
-	// nil when it has never recorded one. It is written by the CLI itself, not
-	// by this package.
+	// LastAttempt is the CLI's record of its most recent *background* update
+	// attempt, or nil when it has never recorded one.
+	//
+	// Two things it is not. It is not a record of [Update]: an explicit
+	// `claude update` leaves the file untouched, verified against CLI 2.1.241
+	// by running one that moved 2.1.239 to 2.1.241 and re-reading the record
+	// afterwards, unchanged. And it is not scoped to this install — the file
+	// lives beside the config directory, so on a machine with two copies both
+	// report the same record. [UpdateAttempt.InstallPath] says which layout it
+	// actually describes.
 	LastAttempt *UpdateAttempt
 }
 

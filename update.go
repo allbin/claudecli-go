@@ -245,6 +245,9 @@ func WithUpdateTimeout(d time.Duration) UpdateOption {
 //
 // Afterwards the version is re-read, because the exit code cannot be trusted;
 // see [UpdateResult]. On failure the result is returned alongside the error.
+// The re-read is also the only record this call leaves: the CLI writes its
+// last-update-result file for background updates only, so an update driven from
+// here is invisible to a later [DetectInstall] except in the version itself.
 //
 // The caller's context deadline is honoured. Without one the run is bounded by
 // [WithUpdateTimeout], defaulting to ten minutes. A cancelled run is
