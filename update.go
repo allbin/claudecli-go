@@ -410,7 +410,12 @@ func updateTarget(info *InstallInfo, env installEnv) string {
 // install that actually runs — and the CLI's own <data>/claude/versions layout
 // is the fallback when the binary sits elsewhere.
 func nativeVersionsDir(realPath, dataDir string) string {
-	if dir := filepath.Dir(realPath); isNativeVersionsLayout(strings.Split(normalizeInstallPath(dir), "/")) {
+	// The directory has to *end* in claude/versions, not merely contain it:
+	// the binary is the version directory entry itself, so anything nested
+	// deeper is not the directory the updater writes into.
+	dir := filepath.Dir(realPath)
+	if segs := strings.Split(normalizeInstallPath(dir), "/"); len(segs) >= 2 &&
+		segs[len(segs)-2] == "claude" && segs[len(segs)-1] == "versions" {
 		return dir
 	}
 	if dataDir == "" {

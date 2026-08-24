@@ -546,3 +546,43 @@ func TestLineWriter(t *testing.T) {
 		})
 	}
 }
+
+// A path that merely contains claude/versions is not the versions directory —
+// only one that ends in it is.
+func TestNativeVersionsDirRequiresTheLayoutAtTheEnd(t *testing.T) {
+	tests := []struct {
+		name    string
+		real    string
+		dataDir string
+		want    string
+	}{
+		{
+			name: "the versioned binary itself",
+			real: "/home/u/.local/share/claude/versions/2.1.239",
+			want: "/home/u/.local/share/claude/versions",
+		},
+		{
+			name:    "nested deeper than the layout allows",
+			real:    "/opt/claude/versions/2.1.239/bin/claude",
+			dataDir: "/home/u/.local/share",
+			want:    "/home/u/.local/share/claude/versions",
+		},
+		{
+			name: "nowhere near the layout and no data directory to fall back on",
+			real: "/opt/claude/bin/claude",
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			want := tt.want
+			if want != "" {
+				want = filepath.FromSlash(want)
+			}
+			if got := nativeVersionsDir(filepath.FromSlash(tt.real), filepath.FromSlash(tt.dataDir)); got != want {
+				t.Errorf("nativeVersionsDir = %q, want %q", got, want)
+			}
+		})
+	}
+}

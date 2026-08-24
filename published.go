@@ -260,6 +260,15 @@ func latestPublished(ctx context.Context, binary string, env installEnv, opts []
 		client = http.DefaultClient
 	}
 
+	// The channel came from a settings file, and a settings-sourced string must
+	// not reach a URL or a tag lookup unvalidated.
+	if isChannelBased(info.Method) && !validChannel(channel) {
+		return nil, &PublishedUnknownError{
+			Method: info.Method,
+			Reason: "the configured auto-update channel is not one the CLI publishes",
+		}
+	}
+
 	switch info.Method {
 	case InstallNPMGlobal, InstallNPMLocal:
 		pub.Source = PublishedSourceNPMRegistry
@@ -267,12 +276,6 @@ func latestPublished(ctx context.Context, binary string, env installEnv, opts []
 		pub.Version, err = fetchNPMDistTag(ctx, client, pub.URL, channel)
 
 	case InstallNative:
-		if !validChannel(channel) {
-			return nil, &PublishedUnknownError{
-				Method: info.Method,
-				Reason: "the configured auto-update channel is not one the CLI publishes",
-			}
-		}
 		pub.Source = PublishedSourceReleaseChannel
 		pub.URL = nativeReleaseChannelURL + "/" + channel
 		pub.Version, err = fetchReleaseChannel(ctx, client, pub.URL)
@@ -302,6 +305,18 @@ func latestPublished(ctx context.Context, binary string, env installEnv, opts []
 
 	pub.UpdateAvailable = isBehind(pub.Installed, pub.Version)
 	return pub, nil
+}
+
+// isChannelBased reports whether this install's published version is looked up
+// by release channel. Homebrew is not: its cask decides, and the channel is
+// only reported alongside for context.
+func isChannelBased(m InstallMethod) bool {
+	switch m {
+	case InstallNPMGlobal, InstallNPMLocal, InstallNative:
+		return true
+	default:
+		return false
+	}
 }
 
 // npmDistTagsURL builds the registry's dist-tags endpoint for the CLI package.

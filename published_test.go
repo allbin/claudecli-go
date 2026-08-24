@@ -402,3 +402,19 @@ func TestNPMDistTagsURLEscapesTheScopedPackage(t *testing.T) {
 		t.Errorf("npmDistTagsURL() = %q, want %q", got, want)
 	}
 }
+
+// An npm install on a channel the registry has no tag for must not silently
+// answer with another tag.
+func TestLatestPublishedRefusesAnUnpublishedChannelForNPM(t *testing.T) {
+	env := fakeInstallEnv(map[string]string{
+		"/home/u/.claude/settings.json": settingsWithChannel("nightly"),
+	})
+	env.lookPath = func(string) (string, error) { return "/home/u/.claude/local/claude", nil }
+
+	_, err := latestPublished(context.Background(), "claude", env, []PublishedOption{
+		WithPublishedHTTPClient(&http.Client{Transport: refusingTransport{t}}),
+	})
+	if !errors.Is(err, ErrPublishedUnknown) {
+		t.Fatalf("err = %v, want ErrPublishedUnknown before any request is made", err)
+	}
+}
