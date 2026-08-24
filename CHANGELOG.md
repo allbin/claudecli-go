@@ -15,6 +15,8 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-24
+
 ### Added
 
 - **`Update`** — runs the CLI's own updater, for the installs the CLI actually
@@ -584,7 +586,8 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/allbin/claudecli-go/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/allbin/claudecli-go/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/allbin/claudecli-go/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/allbin/claudecli-go/compare/v0.2.0...v0.3.0
