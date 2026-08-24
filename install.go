@@ -137,6 +137,13 @@ type InstallInfo struct {
 
 	// Source records which evidence produced Method.
 	Source InstallSource
+
+	// AutoUpdate describes the CLI's own background updater for this install:
+	// whether it is enabled, which release channel it tracks, and how its last
+	// attempt went. Never nil. See [AutoUpdateState] — knowing an install
+	// updates itself is what lets a consumer stay quiet about a version that
+	// is already being handled.
+	AutoUpdate *AutoUpdateState
 }
 
 // ErrCLINotFound matches the error returned by DetectInstall when no Claude
@@ -185,14 +192,15 @@ const defaultInstallTimeout = 5 * time.Second
 //
 // Detection is read-only: it resolves the binary with exec.LookPath and
 // filepath.EvalSymlinks, reads package metadata and file headers next to the
-// resolved path, reads the CLI's config file, and runs `claude -v`. It starts
-// no session, writes nothing, and makes no network calls. Notably it does not
-// shell out to `claude doctor`, which reports the same facts but rewrites the
-// config file and probes the network to do it.
+// resolved path, reads the CLI's config file, its settings file and its
+// last-update record, and runs `claude -v`. It starts no session, writes
+// nothing, and makes no network calls. Notably it does not shell out to
+// `claude doctor`, which reports the same facts but rewrites the config file
+// and probes the network to do it.
 //
-// Fetching the *published* version (via `npm view`, the GitHub releases API, or
-// anything else) is the caller's business — this reports only what is installed
-// locally.
+// This reports only what is installed locally. What is *published* needs the
+// network and lives in [LatestPublished], which is deliberately a separate call
+// so this one stays cheap enough for a launch path.
 //
 // # Precedence
 //
@@ -240,8 +248,10 @@ type installEnv struct {
 	readFile    func(string) ([]byte, error) // small files: package.json, .claude.json
 	readHeader  func(string) ([]byte, error) // first bytes of a possibly huge binary
 	runVersion  func(ctx context.Context, binary string) (string, error)
-	configDir   string // $CLAUDE_CONFIG_DIR, else ~/.claude
-	configFile  string // $CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json
+	getenv      func(string) string // nil means os.Getenv; see installEnv.env
+	configDir   string              // $CLAUDE_CONFIG_DIR, else ~/.claude
+	configFile  string              // $CLAUDE_CONFIG_DIR/.claude.json, else ~/.claude.json
+	dataDir     string              // $XDG_DATA_HOME, else ~/.local/share
 }
 
 func osInstallEnv() installEnv {
@@ -252,9 +262,34 @@ func osInstallEnv() installEnv {
 		readFile:    readSmallFile,
 		readHeader:  readFileHeader,
 		runVersion:  runVersionProbe,
+		getenv:      os.Getenv,
 		configDir:   dir,
 		configFile:  file,
+		dataDir:     xdgDataDir(),
 	}
+}
+
+// env reads an environment variable, tolerating a zero-valued installEnv so a
+// test fixture only has to populate the fields its case actually exercises.
+func (e installEnv) env(name string) string {
+	if e.getenv == nil {
+		return ""
+	}
+	return e.getenv(name)
+}
+
+// xdgDataDir reports the base directory the native installer keeps its
+// versioned binaries under — $XDG_DATA_HOME, else ~/.local/share, matching the
+// CLI's own resolution.
+func xdgDataDir() string {
+	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
+		return d
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share")
 }
 
 // claudeConfigPaths reports the CLI's config directory and config file.
@@ -342,6 +377,7 @@ func detectInstall(ctx context.Context, binary string, env installEnv) (*Install
 	}
 
 	cls := classifyInstall(real, env)
+	cfg := readClaudeConfig(env)
 	info := &InstallInfo{
 		Path:           found,
 		RealPath:       real,
@@ -350,7 +386,7 @@ func detectInstall(ctx context.Context, binary string, env installEnv) (*Install
 		PackageManager: cls.packageManager,
 		PackageName:    cls.packageName,
 		Source:         cls.source,
-		ConfigMethod:   readConfigInstallMethod(env),
+		ConfigMethod:   cfg.InstallMethod,
 	}
 
 	// The config file is the CLI's own record of how it was last installed. It
@@ -366,6 +402,7 @@ func detectInstall(ctx context.Context, binary string, env installEnv) (*Install
 	}
 
 	info.UpdateCmd = updateCommand(info.Method, info.PackageManager, info.PackageName)
+	info.AutoUpdate = readAutoUpdateState(env, info, cfg)
 	info.Version, _ = env.runVersion(ctx, found)
 	return info, nil
 }
@@ -577,24 +614,35 @@ func isNativeExecutable(p string, env installEnv) bool {
 	return false
 }
 
-// readConfigInstallMethod reads `installMethod` from the CLI's config file.
-// Any failure is reported as "" — the config is corroboration, never a
-// prerequisite.
-func readConfigInstallMethod(env installEnv) string {
+// claudeConfig is the slice of the CLI's config file this package reads. It is
+// deliberately read once per detection: the file also holds per-project history
+// and can run to tens of kilobytes.
+type claudeConfig struct {
+	// InstallMethod is the raw `installMethod` value ("native", "global",
+	// "local"), or "" when unset.
+	InstallMethod string `json:"installMethod"`
+
+	// AutoUpdates is the CLI's own background-updater preference. A pointer
+	// because the key is usually absent, and absent means enabled — the CLI
+	// only writes it when the user turns updates off.
+	AutoUpdates *bool `json:"autoUpdates"`
+}
+
+// readClaudeConfig reads the CLI's config file. Any failure is reported as a
+// zero config — it is corroboration, never a prerequisite.
+func readClaudeConfig(env installEnv) claudeConfig {
+	var cfg claudeConfig
 	if env.configFile == "" {
-		return ""
+		return cfg
 	}
 	b, err := env.readFile(env.configFile)
 	if err != nil {
-		return ""
-	}
-	var cfg struct {
-		InstallMethod string `json:"installMethod"`
+		return cfg
 	}
 	if json.Unmarshal(b, &cfg) != nil {
-		return ""
+		return claudeConfig{}
 	}
-	return cfg.InstallMethod
+	return cfg
 }
 
 // methodFromConfig maps the CLI's config vocabulary onto InstallMethod. The
