@@ -15,6 +15,75 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-24
+
+### Fixed
+
+- **`Published.UpdateAvailable` no longer reports a verdict across channels.**
+  v0.6.0 compared the installed version against whatever channel was asked
+  about, with nothing checking the two described the same release stream. An
+  install sitting exactly on its own channel's head read as *behind*:
+
+  ```go
+  // v0.6.0: install tracks stable, sitting on stable's head at 2.1.231
+  pub, _ := claudecli.LatestPublished(ctx, claudecli.WithPublishedChannel("latest"))
+  // pub.Version = 2.1.241, pub.UpdateAvailable = true  <- not true
+  ```
+
+  Ten patch versions of manufactured "behind", from the one call whose entire
+  job is to not do that. A new `Published.Comparable` gates the verdict: it is
+  true only when both versions parse *and* the channel consulted is the one the
+  install actually tracks. A cross-channel lookup now yields **no verdict**
+  rather than a wrong one — the number asked for is still reported, because
+  "what is on stable?" is a fair question; it just is not "am I behind?".
+
+  **Does this affect you on v0.6.0?** Only if you pass
+  `WithPublishedChannel`. Without it the lookup already used the install's own
+  channel, and the verdict was sound. With it, every `UpdateAvailable` you read
+  was a comparison across two streams and may be a false positive.
+
+  **Upgrade note:** `UpdateAvailable == false` is not a claim of being up to
+  date unless `Comparable` is true. Check it before rendering "up to date":
+
+  ```go
+  switch {
+  case !pub.Comparable:      // no verdict — say nothing, or show pub.Version alone
+  case pub.UpdateAvailable:  // genuinely behind
+  default:                   // genuinely current
+  }
+  ```
+
+  Also fixed in the same pass: a Homebrew install now reports the channel its
+  cask actually tracks in `Published.Channel`, instead of echoing back a
+  `WithPublishedChannel` value that was never applied — the cask decides, so
+  the override was already ignored, and only the reporting was wrong.
+
+### Added
+
+- **`InstallInfo.PathEntries`** — every copy of the CLI on PATH, in PATH order,
+  with the one that runs marked `Active`. `info.Shadowed()` returns the rest.
+
+  `ConfigMismatch` was the only second-copy signal, and it is a weak one: it
+  needs the two copies to disagree about method *and* the config to record the
+  loser. Measured on one ordinary machine, a native 2.1.241 in `~/.local/bin`
+  winning over an npm-global 2.0.14 in `/usr/local/bin` — config said `native`,
+  detection said `native`, they agreed, and `ConfigMismatch` stayed `false` while
+  one PATH change would silently downgrade the running CLI by fifteen months.
+
+  ```go
+  for _, e := range info.Shadowed() {
+      fmt.Printf("another copy is installed at %s (%s)\n", e.Path, e.Method)
+  }
+  ```
+
+  Two copies is a warning, never a refusal: nothing fails or changes behaviour
+  because of it, and `Update` still updates the winning copy. Each entry carries
+  `Path`, `RealPath` and `Method`; no version is probed, because that is a
+  process spawn per copy. Distinct copies are told apart by resolved path, so a
+  duplicated PATH entry or two symlinked directories count once. The walk is
+  `exec.LookPath`'s own work without the early exit — ~100µs on a two-copy
+  machine, against the ~200ms `claude -v` probe detection already pays.
+
 ## [0.6.0] - 2026-08-24
 
 ### Added
@@ -86,9 +155,7 @@ or pin a specific version (e.g. `@v0.1.0`).
   `ErrPublishedUnknown` means "no trustworthy source for *this* install", never
   "the lookup failed" — a failed request is an ordinary wrapped error, because
   that one is transient and worth retrying. Nothing degrades to a neighbouring
-  channel to avoid returning it. And `UpdateAvailable` is only a verdict when
-  `Comparable` is true: both versions parsed *and* the channel consulted is the
-  one the install tracks. A blank verdict is correct; a wrong one is not.
+  channel to avoid returning it.
 
   Sources resolve from the detected method: npm installs read the npm registry's
   dist-tags over plain HTTP (never `npm view` — a server has no npm on PATH),
@@ -101,30 +168,6 @@ or pin a specific version (e.g. `@v0.1.0`).
 
   This one makes a network call and lives in its own file. `DetectInstall` stays
   offline and never calls it.
-
-- **`InstallInfo.PathEntries`** — every copy of the CLI on PATH, in PATH order,
-  with the one that runs marked `Active`. `info.Shadowed()` returns the rest.
-
-  `ConfigMismatch` was the only second-copy signal, and it is a weak one: it
-  needs the two copies to disagree about method *and* the config to record the
-  loser. Measured on one ordinary machine, a native 2.1.241 in `~/.local/bin`
-  winning over an npm-global 2.0.14 in `/usr/local/bin` — config said `native`,
-  detection said `native`, they agreed, and `ConfigMismatch` stayed `false` while
-  one PATH change would silently downgrade the running CLI by fifteen months.
-
-  ```go
-  for _, e := range info.Shadowed() {
-      fmt.Printf("another copy is installed at %s (%s)\n", e.Path, e.Method)
-  }
-  ```
-
-  Two copies is a warning, never a refusal: nothing fails or changes behaviour
-  because of it, and `Update` still updates the winning copy. Each entry carries
-  `Path`, `RealPath` and `Method`; no version is probed, because that is a
-  process spawn per copy. Distinct copies are told apart by resolved path, so a
-  duplicated PATH entry or two symlinked directories count once. The walk is
-  `exec.LookPath`'s own work without the early exit — ~100µs on a two-copy
-  machine, against the ~200ms `claude -v` probe detection already pays.
 
 - **`InstallInfo.AutoUpdate`** — the CLI's own background-updater state, read
   from files `DetectInstall` already opens: whether auto-updates are on and what
@@ -617,7 +660,8 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/allbin/claudecli-go/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/allbin/claudecli-go/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/allbin/claudecli-go/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/allbin/claudecli-go/compare/v0.3.0...v0.4.0
