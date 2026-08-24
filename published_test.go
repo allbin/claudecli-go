@@ -418,3 +418,131 @@ func TestLatestPublishedRefusesAnUnpublishedChannelForNPM(t *testing.T) {
 		t.Fatalf("err = %v, want ErrPublishedUnknown before any request is made", err)
 	}
 }
+
+// The failure this whole call exists to prevent: an install tracking stable,
+// compared against latest, reading as "behind" when it is not. The two channels
+// were ten patch versions apart on one machine on one day.
+func TestLatestPublishedNeverManufacturesABehind(t *testing.T) {
+	// A native install tracking stable, sitting exactly on stable's head.
+	files := map[string]string{
+		"/home/u/.local/share/claude/versions/2.1.231": elfHeader,
+		"/home/u/.claude/settings.json":                settingsWithChannel(ChannelStable),
+	}
+	newEnv := func() installEnv {
+		env := fakeInstallEnv(files)
+		env.lookPath = func(string) (string, error) { return "/home/u/.local/share/claude/versions/2.1.231", nil }
+		env.runVersion = func(context.Context, string) (string, error) { return publishedStable, nil }
+		return env
+	}
+
+	t.Run("its own channel gives a verdict of up to date", func(t *testing.T) {
+		stub := &stubTransport{responses: publishedStubs()}
+		pub, err := latestPublished(context.Background(), "claude", newEnv(), []PublishedOption{
+			WithPublishedHTTPClient(&http.Client{Transport: stub}),
+		})
+		if err != nil {
+			t.Fatalf("latestPublished: %v", err)
+		}
+		if pub.Version != publishedStable {
+			t.Errorf("Version = %q, want stable's head %q", pub.Version, publishedStable)
+		}
+		if !pub.Comparable {
+			t.Error("Comparable = false; installed and published are both on stable")
+		}
+		if pub.UpdateAvailable {
+			t.Errorf("UpdateAvailable = true for an install sitting on its own channel's head (%s)", pub.Installed)
+		}
+	})
+
+	t.Run("another channel gives no verdict at all", func(t *testing.T) {
+		stub := &stubTransport{responses: publishedStubs()}
+		pub, err := latestPublished(context.Background(), "claude", newEnv(), []PublishedOption{
+			WithPublishedHTTPClient(&http.Client{Transport: stub}),
+			WithPublishedChannel(ChannelLatest),
+		})
+		if err != nil {
+			t.Fatalf("latestPublished: %v", err)
+		}
+		// The number asked for is real and is reported...
+		if pub.Version != publishedLatest {
+			t.Errorf("Version = %q, want %q", pub.Version, publishedLatest)
+		}
+		// ...but it does not describe this install's stream, so no verdict.
+		if pub.Comparable {
+			t.Error("Comparable = true across channels; the comparison is meaningless")
+		}
+		if pub.UpdateAvailable {
+			t.Errorf("UpdateAvailable = true: %s on stable read as behind %s on latest — the manufactured verdict this guards against", pub.Installed, pub.Version)
+		}
+	})
+}
+
+// A transient failure is an ordinary error, not ErrPublishedUnknown: the
+// consumer retries one and never retries the other.
+func TestPublishedUnknownIsNotALookupFailure(t *testing.T) {
+	env := fakeInstallEnv(nil)
+	env.lookPath = func(string) (string, error) { return "/home/u/.claude/local/claude", nil }
+
+	stub := &stubTransport{responses: map[string]stubResponse{
+		npmDistTagsURL(): {http.StatusBadGateway, "upstream down"},
+	}}
+	_, err := latestPublished(context.Background(), "claude", env, []PublishedOption{
+		WithPublishedHTTPClient(&http.Client{Transport: stub}),
+	})
+	if err == nil {
+		t.Fatal("err = nil, want the failure surfaced")
+	}
+	if errors.Is(err, ErrPublishedUnknown) {
+		t.Error("a failed request satisfies ErrPublishedUnknown; that sentinel means no source exists, not that the lookup broke")
+	}
+}
+
+// No source ever stands in for another.
+func TestLatestPublishedNeverSubstitutesASource(t *testing.T) {
+	tests := []struct {
+		name     string
+		realPath string
+		files    map[string]string
+	}{
+		{
+			name:     "an unrecognized cask does not fall back to npm or the release channel",
+			realPath: "/opt/homebrew/Caskroom/claude-code-beta/2.1.87/claude",
+		},
+		{
+			name:     "a version manager does not borrow npm's number",
+			realPath: "/home/u/.asdf/shims/claude",
+		},
+		{
+			name:     "an unpublished channel does not fall back to latest",
+			realPath: "/home/u/.local/share/claude/versions/2.1.239",
+			files: map[string]string{
+				"/home/u/.local/share/claude/versions/2.1.239": elfHeader,
+				"/home/u/.claude/settings.json":                settingsWithChannel("nightly"),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := fakeInstallEnv(tt.files)
+			env.lookPath = func(string) (string, error) { return tt.realPath, nil }
+
+			// Every real source answers happily. Nothing may reach them.
+			stub := &stubTransport{responses: publishedStubs()}
+			pub, err := latestPublished(context.Background(), "claude", env, []PublishedOption{
+				WithPublishedHTTPClient(&http.Client{Transport: stub}),
+			})
+			if pub != nil {
+				t.Fatalf("got a version %q from a source that does not describe this install", pub.Version)
+			}
+			if err == nil {
+				t.Fatal("err = nil")
+			}
+			for _, requested := range stub.requested {
+				if strings.Contains(requested, "registry.npmjs.org") || strings.Contains(requested, "/latest") {
+					t.Errorf("consulted %s, which does not describe this install", requested)
+				}
+			}
+		})
+	}
+}

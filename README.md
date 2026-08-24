@@ -430,6 +430,31 @@ The lookup is skipped, with `ErrPublishedUnknown`, when
 suppresses exactly these fetches in that mode, and a library that owns the
 `claude` command must not restore the egress behind the user's back.
 
+**`ErrPublishedUnknown` means "no source for *this* install", never "the lookup
+failed."** A failed request comes back as an ordinary wrapped error — that is
+transient and worth retrying next tick; `ErrPublishedUnknown` is a stable
+property of the install and is not. Nothing ever degrades to a neighbouring
+channel to avoid returning it: an unrecognized cask does not fall back to npm, a
+channel with no published artifact does not fall back to `latest`, and a missing
+dist-tag does not fall back to another tag.
+
+**A blank verdict is a correct answer; a wrong one is not.** `UpdateAvailable`
+is only a verdict when `Comparable` is true — both versions parsed *and* the
+channel consulted is the one the install tracks. A `stable` install compared
+against `latest` would read as ten patch versions behind when it is exactly
+current, so that comparison is refused rather than answered:
+
+```go
+switch {
+case !pub.Comparable:      // no verdict — say nothing
+case pub.UpdateAvailable:  // genuinely behind its own channel
+default:                   // genuinely up to date
+}
+```
+
+`WithPublishedChannel` is the only way to reach a non-comparable result, and it
+can produce no verdict, never a wrong one.
+
 Failures are never fatal — the error comes back and the caller keeps its last
 answer. A missed tick is not news.
 
@@ -437,8 +462,9 @@ answer. A missed tick is not news.
 | ----------------- | ----------- |
 | `Version`         | The published version. |
 | `Installed`       | What the CLI reports for itself, carried along so one call answers the whole question. |
-| `UpdateAvailable` | True only when both versions parsed and `Installed` is older. |
-| `Channel`         | The channel consulted. |
+| `Comparable`      | Whether `UpdateAvailable` is a verdict at all — see below. |
+| `UpdateAvailable` | True only when `Comparable` and `Installed` is older. |
+| `Channel`         | The channel actually consulted. For Homebrew, the one its cask tracks. |
 | `Source`          | `npm-registry`, `release-channel`, `homebrew-cask`, or `none`. |
 | `URL`             | The endpoint that was queried. |
 | `Method`          | The detected install method the source was chosen from. |

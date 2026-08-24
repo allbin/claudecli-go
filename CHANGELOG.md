@@ -83,6 +83,13 @@ or pin a specific version (e.g. `@v0.1.0`).
   fmt.Println(pub.Version, pub.Channel, pub.Source, pub.UpdateAvailable)
   ```
 
+  `ErrPublishedUnknown` means "no trustworthy source for *this* install", never
+  "the lookup failed" — a failed request is an ordinary wrapped error, because
+  that one is transient and worth retrying. Nothing degrades to a neighbouring
+  channel to avoid returning it. And `UpdateAvailable` is only a verdict when
+  `Comparable` is true: both versions parsed *and* the channel consulted is the
+  one the install tracks. A blank verdict is correct; a wrong one is not.
+
   Sources resolve from the detected method: npm installs read the npm registry's
   dist-tags over plain HTTP (never `npm view` — a server has no npm on PATH),
   native reads the CLI's own release-channel endpoint, and Homebrew reads its

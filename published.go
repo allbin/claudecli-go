@@ -71,13 +71,26 @@ type Published struct {
 	// one call answers the whole question. "" when the version probe failed.
 	Installed string
 
-	// UpdateAvailable is true only when both versions parsed and Installed is
-	// older than Version. A version that cannot be parsed, on either side,
-	// reports false rather than guessing.
+	// Comparable reports whether Version and Installed describe the same
+	// release stream and both parsed — that is, whether UpdateAvailable is a
+	// verdict at all.
+	//
+	// It is false when the installed version could not be read, when either
+	// version does not parse, or when [WithPublishedChannel] asked about a
+	// channel this install does not track. In every one of those cases
+	// UpdateAvailable is false and means nothing: a blank verdict is a correct
+	// answer, and a wrong one is not. Do not render "up to date" off a false
+	// UpdateAvailable without checking this first.
+	Comparable bool
+
+	// UpdateAvailable is true only when Comparable and Installed is older than
+	// Version. False is not a claim of being up to date unless Comparable.
 	UpdateAvailable bool
 
-	// Channel is the release channel consulted, or "" for a source that has no
-	// channel of its own.
+	// Channel is the release channel actually consulted, or "" for a source
+	// that has no channel of its own. For a Homebrew install this is the
+	// channel its cask tracks: the cask decides, so a [WithPublishedChannel]
+	// override never applies and is not reflected here.
 	Channel string
 
 	// Source records which service answered.
@@ -97,9 +110,21 @@ type Published struct {
 }
 
 // ErrPublishedUnknown matches the error returned by [LatestPublished] when no
-// trustworthy published-version source exists for the detected install. Use
-// errors.Is to distinguish it: an honest "cannot determine" is a correct
-// answer, and materially better than a number from the wrong channel.
+// trustworthy published-version source exists for *this* install. Use errors.Is
+// to distinguish it: an honest "cannot determine" is a correct answer, and
+// materially better than a number from the wrong channel.
+//
+// It means "no number is available for this install, and no substitute would be
+// correct" — never "the lookup failed". A failed request comes back as an
+// ordinary wrapped error, because that is transient and worth retrying on the
+// next tick; this one is a stable property of the install and is not.
+//
+// Nothing in this package ever degrades to a neighbouring channel's number to
+// avoid returning it. An unrecognized Homebrew cask does not fall back to npm,
+// a channel with no published artifact does not fall back to latest, and a
+// missing dist-tag does not fall back to another tag. Those two channels were
+// ten patch versions apart on one machine on one day; a wrong number there
+// manufactures a "behind" that is not true.
 var ErrPublishedUnknown = errors.New("claudecli: no trustworthy published-version source for this install")
 
 // PublishedUnknownError reports why a published-version lookup was not even
@@ -135,9 +160,12 @@ func WithPublishedHTTPClient(c *http.Client) PublishedOption {
 
 // WithPublishedChannel overrides the release channel the lookup asks about,
 // instead of the one the install actually tracks. Useful for answering "what is
-// on stable?" — but the answer is then no longer comparable to the installed
-// version, which is the whole reason the channel is normally detected rather
-// than chosen. Ignored by sources that have no channel of their own.
+// on stable?" — but that is a different question from "am I behind?", so the
+// result reports Comparable false and offers no verdict. Ignored by Homebrew,
+// whose cask decides its channel.
+//
+// Overriding is the one way to ask this call for a number from a channel the
+// install does not follow. It cannot produce a wrong verdict — only no verdict.
 //
 // The value must be a channel the CLI publishes ([ChannelLatest],
 // [ChannelStable], [ChannelRC]); anything else is refused rather than
@@ -291,6 +319,9 @@ func latestPublished(ctx context.Context, binary string, env installEnv, opts []
 		pub.Source = PublishedSourceHomebrewCask
 		pub.URL = homebrewCaskAPIURL + "/" + cask + ".json"
 		pub.Version, err = fetchHomebrewCask(ctx, client, pub.URL)
+		// The cask decides, so a channel override never applied here. Report
+		// the channel actually consulted, not the one that was asked for.
+		pub.Channel = info.AutoUpdate.Channel
 
 	default:
 		pub.Source = PublishedSourceNone
@@ -303,7 +334,13 @@ func latestPublished(ctx context.Context, binary string, env installEnv, opts []
 		return nil, err
 	}
 
-	pub.UpdateAvailable = isBehind(pub.Installed, pub.Version)
+	// A verdict is only offered when the two versions describe the same release
+	// stream. Comparing across channels is the exact failure this call exists
+	// to prevent, and a caller who overrode the channel asked a different
+	// question than "am I behind?".
+	pub.Comparable = pub.Channel == info.AutoUpdate.Channel &&
+		parsesAsVersion(pub.Installed) && parsesAsVersion(pub.Version)
+	pub.UpdateAvailable = pub.Comparable && compareSemver(pub.Installed, pub.Version) < 0
 	return pub, nil
 }
 
@@ -424,19 +461,13 @@ func fetchPublished(ctx context.Context, client *http.Client, endpoint string) (
 	return body, nil
 }
 
-// isBehind reports whether installed is older than published. Either version
-// failing to parse reports false: an unparseable version is not evidence of
-// being behind, and a false "update available" is the failure this whole call
-// exists to avoid.
-func isBehind(installed, published string) bool {
-	if installed == "" || published == "" {
+// parsesAsVersion reports whether s is a version this package can compare. An
+// unparseable or absent version is not evidence of anything, least of all of
+// being behind.
+func parsesAsVersion(s string) bool {
+	if s == "" {
 		return false
 	}
-	if _, _, _, ok := parseSemver(installed); !ok {
-		return false
-	}
-	if _, _, _, ok := parseSemver(published); !ok {
-		return false
-	}
-	return compareSemver(installed, published) < 0
+	_, _, _, ok := parseSemver(s)
+	return ok
 }
