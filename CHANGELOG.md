@@ -15,6 +15,95 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`Update`** — runs the CLI's own updater, for the installs the CLI actually
+  manages.
+
+  `DetectInstall` could say *how* to update; nothing could do it. This closes
+  that, and keeps the library's ownership of the `claude` command intact:
+  consumers never construct a `claude` invocation themselves.
+
+  ```go
+  result, err := claudecli.Update(ctx, claudecli.WithUpdateProgress(func(line string) {
+      fmt.Println(line) // "Checking for updates to latest version..."
+  }))
+
+  var manual *claudecli.ManualUpdateError
+  switch {
+  case errors.As(err, &manual):
+      // Normal outcome, not a failure — the answer for most installs.
+      fmt.Println("Update it yourself:", manual.Command)
+  case errors.Is(err, claudecli.ErrUpdateNotWritable):
+      // "Cannot" — never offer the button.
+  case err != nil:
+      // "Failed" — an error after the button was clicked.
+  default:
+      fmt.Println(result.VersionBefore, "->", result.VersionAfter, result.Changed)
+  }
+  ```
+
+  Three things it does that a `exec.Command("claude", "update")` would not:
+
+  - **Refuses installs the CLI does not manage.** Only `native` and `npm-local`
+    are updated by `claude update`; npm-global, Homebrew, winget and version
+    managers get an `ErrManualUpdate` carrying the command to display verbatim
+    (`""` when none is known to be correct).
+  - **Executes the detected PATH entry**, never the bare word `claude` (a second
+    lookup can reach a different copy — two installs on one machine is common)
+    and never the symlink-resolved binary (an `npm-local` entry is a `/bin/sh`
+    wrapper; resolving past it drops the wrapper).
+  - **Verifies by re-reading the version.** The exit code is not evidence: a
+    sibling SDK measured its CLI's updater exiting `0` and printing "Update ran
+    successfully" while the command it shells out to was not installed at all.
+    `UpdateResult.Changed` compares the version either side of the run.
+
+  A writability preflight on the directory the updater actually writes into
+  (`<data>/claude/versions` for native, `~/.claude/local` for npm-local — not
+  the directory holding the binary on PATH) returns the distinct
+  `ErrUpdateNotWritable` before anything runs.
+
+- **`LatestPublished`** — the published version for the channel *this* install
+  tracks.
+
+  `DetectInstall`'s doc used to say fetching this was the caller's business. It
+  is better placed here, because only this library knows which channel a given
+  install follows, and the channels disagree. Measured on one machine on one
+  day: npm `latest` 2.1.241, native `latest` 2.1.241, native `stable` 2.1.231,
+  Homebrew's `claude-code` cask 2.1.231. A consumer comparing against the wrong
+  one manufactures a "behind" that is not true.
+
+  ```go
+  pub, err := claudecli.LatestPublished(ctx)
+  if errors.Is(err, claudecli.ErrPublishedUnknown) {
+      return // honest "cannot determine" — better than a wrong number
+  }
+  fmt.Println(pub.Version, pub.Channel, pub.Source, pub.UpdateAvailable)
+  ```
+
+  Sources resolve from the detected method: npm installs read the npm registry's
+  dist-tags over plain HTTP (never `npm view` — a server has no npm on PATH),
+  native reads the CLI's own release-channel endpoint, and Homebrew reads its
+  cask (`claude-code` is stable, `claude-code@latest` is latest, whatever the
+  settings say). Version managers, other OS package managers and unclassified
+  installs return `ErrPublishedUnknown` rather than borrowing npm's number. The
+  lookup is skipped entirely when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is
+  set, matching the CLI's own updater.
+
+  This one makes a network call and lives in its own file. `DetectInstall` stays
+  offline and never calls it.
+
+- **`InstallInfo.AutoUpdate`** — the CLI's own background-updater state, read
+  from files `DetectInstall` already opens: whether auto-updates are on and what
+  turned them off (`autoUpdates` in the config, `DISABLE_AUTOUPDATER`,
+  `DISABLE_UPDATES`, or an OS package manager owning the install), which release
+  channel it tracks, and the CLI's record of its last background attempt. A
+  consumer that knows an install updates itself and last succeeded two days ago
+  can say so instead of nagging about a version already being handled.
+
+  No extra process and no network call — notably not `claude doctor`, which
+  reports the same three facts by rewriting the config file to answer.
+
 ## [0.5.0] - 2026-08-23
 
 ### Added

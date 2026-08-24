@@ -220,9 +220,10 @@ is still stale. Because that failure is silent, `InstallUnknown` with an empty
 
 Detection is read-only: it resolves the binary with `exec.LookPath` +
 `filepath.EvalSymlinks`, reads package metadata and file headers next to the
-resolved path, reads the CLI's config file, and runs `claude -v`. It starts no
-session, writes nothing, and makes **no network calls**. Fetching the
-*published* version (`npm view`, the releases API) is the caller's business.
+resolved path, reads the CLI's config, settings and last-update files, and runs
+`claude -v`. It starts no session, writes nothing, and makes **no network
+calls**. The *published* version needs the network and lives in
+[`LatestPublished`](#published-version), deliberately a separate call.
 
 > It deliberately does not shell out to `claude doctor`, which reports the same
 > facts but rewrites `.claude.json` and probes the network to do it.
@@ -240,6 +241,7 @@ session, writes nothing, and makes **no network calls**. Fetching the
 | `ConfigMethod`      | Raw `installMethod` from the CLI's config, verbatim (`native`/`global`/`local`). |
 | `ConfigMismatch`    | Config disagrees with detected `Method` — usually a shadowing second copy. |
 | `Source`            | `package-metadata`, `path-layout`, `config`, or `none`. |
+| `AutoUpdate`        | The CLI's own background-updater state (never nil) — see below. |
 
 **Precedence:** package metadata beats path layout, which beats the config file.
 `installMethod` in the CLI's config records how the CLI was last *installed*,
@@ -249,6 +251,169 @@ the path wins and `ConfigMismatch` is set.
 
 `client.DetectInstall(ctx)` uses that client's configured binary; the
 package-level shortcut uses the default client.
+
+### Auto-update state
+
+A native install keeps itself current. `info.AutoUpdate` says so, from files
+detection already opens — no extra process, no network call, and notably not
+`claude doctor`, which reports the same three facts by rewriting the config file
+to answer.
+
+```go
+au := info.AutoUpdate // never nil
+if !au.Enabled {
+    fmt.Println("background updates off:", au.DisabledBy) // "config", "DISABLE_UPDATES", …
+}
+if a := au.LastAttempt; a.Succeeded() {
+    fmt.Printf("updated itself %s->%s on %s\n", a.From, a.To, a.Time.Format(time.DateOnly))
+}
+```
+
+| `AutoUpdateState` field | Description |
+| ----------------------- | ----------- |
+| `Enabled`         | Whether the CLI updates itself in the background. Defaults to on. |
+| `DisabledBy`      | What turned it off: `config`, `DISABLE_AUTOUPDATER`, `DISABLE_UPDATES`, `package-manager`, or `""`. |
+| `Channel`         | `latest` (default), `stable`, or `rc`. `""` when settings name a channel the CLI does not publish. |
+| `ChannelSource`   | `settings`, `homebrew-cask`, `default`, or `unknown`. |
+| `LastAttempt`     | The CLI's own record of its last **background** attempt, or nil. |
+
+`LastAttempt` records background updates only — an explicit `Update` leaves the
+file untouched (verified against CLI 2.1.241) — and it lives beside the config
+directory, so on a machine with two copies both report the same record.
+`LastAttempt.InstallPath` says which layout it actually describes.
+
+## Running an update
+
+`Update` runs the CLI's own updater. Consumers never construct a `claude`
+invocation themselves — including this one.
+
+```go
+result, err := claudecli.Update(ctx, claudecli.WithUpdateProgress(func(line string) {
+    fmt.Println(line) // "Checking for updates to latest version..."
+}))
+
+var manual *claudecli.ManualUpdateError
+switch {
+case errors.As(err, &manual):
+    // Normal outcome, not a failure — the answer for most installs in the wild.
+    fmt.Println("Update it yourself:", manual.Command) // "" when none is correct
+case errors.Is(err, claudecli.ErrUpdateNotWritable):
+    // "Cannot" — never offer the button.
+case err != nil:
+    // "Failed" — an error after the button was clicked.
+default:
+    fmt.Println(result.VersionBefore, "->", result.VersionAfter, result.Changed)
+}
+```
+
+**Only installs the CLI manages itself.** Detection runs first and decides.
+`native` and `npm-local` are the two layouts `claude update` owns; every other
+install belongs to npm, Homebrew, winget or a version manager, and gets an
+`ErrManualUpdate` carrying the command to display verbatim. That refusal is a
+normal outcome, not a failure.
+
+**The detected PATH entry is what runs** — `info.Path`, absolute. Not the bare
+word `claude`, because a second lookup can reach a different copy (a native
+install in `~/.local/bin` and an npm-global one in `/usr/local/bin` coexist
+happily). Not `info.RealPath` either: an `npm-local` PATH entry is a `/bin/sh`
+wrapper that execs `<root>/node_modules/.bin/claude`, and resolving past it
+drops the wrapper.
+
+**The exit code is not the answer.** A sibling SDK measured its CLI's updater
+exiting `0` and printing "Update ran successfully" while the command it shells
+out to was not installed at all. `VersionBefore`/`VersionAfter` are read either
+side of the run and `Changed` compares them; that re-read is the only real
+signal. `VersionAfter == ""` always comes with a non-nil error.
+
+**The preflight checks the right directory** — the one the updater writes into,
+which is not the one holding the binary on PATH: `<data>/claude/versions` for a
+native install (its PATH entry is a symlink in `~/.local/bin`), `~/.claude/local`
+for npm-local. A failure there returns `ErrUpdateNotWritable` without running
+anything, because a consumer renders "cannot" and "failed" completely
+differently.
+
+| `UpdateResult` field | Description |
+| -------------------- | ----------- |
+| `Method`          | The install method that was updated. |
+| `Path`            | The binary that was executed. |
+| `VersionBefore` / `VersionAfter` | Read either side of the run; `""` when a probe failed. |
+| `Changed`         | True only when both versions are known and differ. |
+| `ExitCode`        | Kept for diagnostics. Do not derive success from it. |
+| `Output`          | Tail of the updater's combined stdout and stderr. |
+| `Duration`        | How long the updater ran. |
+
+| `Update` option | Description |
+| --------------- | ----------- |
+| `WithUpdateProgress(func(string))` | Called once per output line as it arrives. |
+| `WithUpdateOutput(io.Writer)`      | Streams combined stdout/stderr live. |
+| `WithUpdateTimeout(d)`             | Bounds the run when the context has no deadline (default 10m). |
+
+A context deadline always wins. A cancelled run is interrupted rather than
+killed outright, so the updater can unwind its staged download instead of
+leaving a partial file behind.
+
+## Published version
+
+`LatestPublished` reports what is published for the channel *this* install
+tracks. **It makes a network call** — put it on a slow background tick, and keep
+`DetectInstall` on the launch path.
+
+```go
+pub, err := claudecli.LatestPublished(ctx)
+if errors.Is(err, claudecli.ErrPublishedUnknown) {
+    return // honest "cannot determine" — better than a wrong number
+}
+fmt.Println(pub.Version, pub.Channel, pub.Source, pub.UpdateAvailable)
+```
+
+**The channels disagree.** This belongs in the library rather than in a consumer
+because only the library knows which channel a given install follows. Measured
+on one machine on one day:
+
+| Source | Version |
+| ------ | ------- |
+| npm registry `@anthropic-ai/claude-code` `latest` | 2.1.241 |
+| native release channel `latest` | 2.1.241 |
+| native release channel `stable` | 2.1.231 |
+| Homebrew cask `claude-code` | 2.1.231 |
+
+Comparing an installed version against the wrong one manufactures a "behind"
+that is not true. So the source is resolved from the detected method:
+
+| `Method` | Source | Endpoint |
+| -------- | ------ | -------- |
+| `npm-global`, `npm-local` | `npm-registry` | the registry's dist-tags, over plain HTTP — never `npm view`, which assumes an npm on PATH a server does not have. |
+| `native` | `release-channel` | the CLI's own release-channel endpoint, for the channel in `AutoUpdate.Channel`. |
+| `package-manager` (Homebrew) | `homebrew-cask` | the cask it was installed from: `claude-code` is stable, `claude-code@latest` is latest, whatever the settings say. |
+| everything else | — | `ErrPublishedUnknown`. Borrowing npm's number for a version manager or an unclassified install would be a wrong answer dressed as a right one. |
+
+The lookup is skipped, with `ErrPublishedUnknown`, when
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set: the CLI's own updater
+suppresses exactly these fetches in that mode, and a library that owns the
+`claude` command must not restore the egress behind the user's back.
+
+Failures are never fatal — the error comes back and the caller keeps its last
+answer. A missed tick is not news.
+
+| `Published` field | Description |
+| ----------------- | ----------- |
+| `Version`         | The published version. |
+| `Installed`       | What the CLI reports for itself, carried along so one call answers the whole question. |
+| `UpdateAvailable` | True only when both versions parsed and `Installed` is older. |
+| `Channel`         | The channel consulted. |
+| `Source`          | `npm-registry`, `release-channel`, `homebrew-cask`, or `none`. |
+| `URL`             | The endpoint that was queried. |
+| `Method`          | The detected install method the source was chosen from. |
+| `AutoUpdate`      | The install's background-updater state, carried from detection. |
+
+| `LatestPublished` option | Description |
+| ------------------------ | ----------- |
+| `WithPublishedHTTPClient(*http.Client)` | Route through a proxy, pin a transport, or stub the network. |
+| `WithPublishedChannel(channel)` | Ask about a different channel than the one detected. Must be `latest`, `stable` or `rc`. |
+| `WithPublishedTimeout(d)` | Bounds the lookup when the context has no deadline (default 10s). |
+
+Both have client methods (`client.Update`, `client.LatestPublished`) that use
+that client's configured binary.
 
 ## Stream state
 
@@ -1149,6 +1314,9 @@ claudecli-go/
   pool.go        Pool multi-session registry, FormatAgentMessage, SendAgentMessage
   version.go     sdkVersion (module version reported to CLI, build-info sourced), SDKVersion dev fallback, MinCLIVersion, CLI version checking with semver parsing
   install.go     DetectInstall — read-only install-method detection (npm/native/package-manager/version-manager) and the matching update command
+  autoupdate.go  AutoUpdateState — the CLI's own background updater: enabled/disabled, release channel, last attempt. Offline, from files install.go already reads
+  update.go      Update — runs `claude update` for self-managed installs only, with a writability preflight and a version re-read (the exit code is not evidence)
+  published.go   LatestPublished — the published version for the channel this install tracks. The only install-related file that touches the network
   internal.go    Stderr ring buffer, processExitError with heuristic inference, code fence stripping
   error.go       Sentinel errors (ErrInvalidRequest, ErrAuth, ErrBilling, ErrPermission, ErrNotFound, ErrRequestTooLarge, ErrRateLimit, ErrAPI, ErrOverloaded, ErrMaxTurns, ErrContextWindowExceeded), RateLimitError, MaxTurnsError, Error, UnmarshalError
 ```
@@ -1179,6 +1347,20 @@ claudecli-go/
   rather than guessing. `DetectInstall` also has no command for `asdf`, `deb`,
   `rpm`, `pacman` or `apk` installs — it reports `package-manager` with an empty
   `UpdateCmd`, matching the CLI, which does not know one either.
+- **`AutoUpdate.Channel` reads user settings only** — `autoUpdatesChannel` can
+  also be set in project, local and managed settings, but the CLI's own
+  `/channel` command writes the user scope, and reading the full cascade would
+  mean re-implementing a platform-specific merge order. A project or managed
+  override is therefore not reflected, and `LatestPublished` would consult that
+  install's user-scope channel instead.
+- **`rc` is settable but not published** — the CLI's settings schema accepts it
+  (its config UI labels it "slow"), but no artifact exists under that name:
+  every source 404s. `LatestPublished` reports the failure rather than falling
+  back to another channel's number.
+- **`Update` leaves no record the CLI can see** — `claude update` writes its
+  last-update-result file for *background* updates only, so an update driven
+  through `Update` is invisible to a later `DetectInstall` except in the version
+  itself. Verified against CLI 2.1.241.
 - **Thinking text is withheld by default** — By default the CLI emits
   `ThinkingEvent`s with empty `Content` but a set `Signature`: the model
   thought, the reasoning is cryptographically attested, but the text is
