@@ -953,6 +953,8 @@ case *claudecli.UserEvent:
             e.AgentResult.TotalTokens, e.AgentResult.TotalDurationMs,
             e.AgentResult.TotalToolUseCount)
     }
+    // `AgentResult` is nil for ordinary tool results (Bash, Read, Edit, …),
+    // even though the CLI attaches a tool_use_result payload to those too.
 case *claudecli.TaskEvent:
     // Real-time subagent lifecycle: task_started → task_progress → task_notification
     fmt.Printf("  [task %s] %s (tokens: %d, tools: %d, %dms)\n",
@@ -1210,7 +1212,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*TurnEvent`       | New assistant turn started. `Turn` is a 1-based counter, `ToolName` is the first tool in the turn (empty for text-only turns). Only emitted for top-level turns (subagent messages excluded). |
 | `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent, plus `Model`/`SubagentType`/`TaskDescription` — see [Per-subagent model](#per-subagent-model). `ServerSide` is true for server-side tools (web search, code execution). `MCP` is true for MCP tool calls. |
 | `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. `ParentToolUseID` set when from a subagent. |
-| `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil on subagent completion) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `WorkflowLaunch` (non-nil when a dynamic workflow is launched in the background) carries `RunID`, `WorkflowName`, `ScriptPath`, `TranscriptDir` and helpers for out-of-band monitoring — see [Dynamic workflows](#dynamic-workflows). `IsReplay` is true when echoed via `--replay-user-messages`. `Text()` returns concatenated text. |
+| `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil only when the event carries a subagent's result — a completion or an `"async_launched"` background launch, never an ordinary tool result) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `WorkflowLaunch` (non-nil when a dynamic workflow is launched in the background) carries `RunID`, `WorkflowName`, `ScriptPath`, `TranscriptDir` and helpers for out-of-band monitoring — see [Dynamic workflows](#dynamic-workflows). `IsReplay` is true when echoed via `--replay-user-messages`. `Text()` returns concatenated text. |
 | `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string (or `"content/<type>"` for unknown content blocks), `Raw` is the full JSON. Forward-compat catch-all — also used for error fallback diagnostics on non-zero exit. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |

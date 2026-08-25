@@ -1593,6 +1593,86 @@ func TestParseUserEventAgentCompletion(t *testing.T) {
 	}
 }
 
+// The CLI attaches a tool_use_result to the user event for every tool call,
+// not just Agent/Task ones. None of these ordinary payloads may surface as an
+// AgentResult. Shapes are taken from real CLI transcripts.
+func TestParseUserEventOrdinaryToolResultNotAgentResult(t *testing.T) {
+	tests := []struct {
+		name   string
+		result string
+	}{
+		{"bash", `{"stdout":"hi","stderr":"","interrupted":false,"isImage":false}`},
+		{"read", `{"type":"text","file":{"filePath":"/x/main.go","content":"package main","numLines":1,"startLine":1,"totalLines":1}}`},
+		{"edit", `{"filePath":"/x/main.go","oldString":"a","newString":"b","originalFile":"a","userModified":false,"structuredPatch":[{"oldStart":1,"oldLines":1}]}`},
+		{"write", `{"type":"create","filePath":"/x/main.go","content":"package main","structuredPatch":[]}`},
+		{"todowrite", `{"oldTodos":[],"newTodos":[{"content":"do it","status":"pending","activeForm":"Doing it"}]}`},
+		{"glob", `{"filenames":["/x/main.go"],"durationMs":3,"numFiles":1,"truncated":false}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := `{"type":"user","session_id":"test","uuid":"u1","tool_use_result":` + tt.result +
+				`,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]}}`
+			var ue *UserEvent
+			for _, e := range parseJSONL(t, line) {
+				if u, ok := e.(*UserEvent); ok {
+					ue = u
+				}
+			}
+			if ue == nil {
+				t.Fatal("no UserEvent emitted")
+			}
+			if ue.AgentResult != nil {
+				t.Errorf("AgentResult = %+v, want nil for a %s tool result", ue.AgentResult, tt.name)
+			}
+			if ue.WorkflowLaunch != nil {
+				t.Errorf("WorkflowLaunch = %+v, want nil for a %s tool result", ue.WorkflowLaunch, tt.name)
+			}
+			// The tool_result content block must still be parsed.
+			if len(ue.Content) != 1 || ue.Content[0].ToolUseID != "toolu_1" {
+				t.Errorf("Content blocks = %v", ue.Content)
+			}
+		})
+	}
+}
+
+// A background agent launch reports status "async_launched" with an agent id
+// and no content — it must survive the ordinary-tool-result guard.
+func TestParseUserEventAsyncAgentLaunch(t *testing.T) {
+	line := `{"type":"user","session_id":"test","uuid":"u1","tool_use_result":` +
+		`{"isAsync":true,"status":"async_launched","agentId":"a03ec7cf76d5f3b2b","description":"Survey sidebar code",` +
+		`"resolvedModel":"claude-opus-5[1m]","prompt":"Survey the repo","outputFile":"/x/out.md","canReadOutputFile":true},` +
+		`"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"launched"}]}}`
+
+	var ue *UserEvent
+	for _, e := range parseJSONL(t, line) {
+		if u, ok := e.(*UserEvent); ok {
+			ue = u
+		}
+	}
+	if ue == nil {
+		t.Fatal("no UserEvent emitted")
+	}
+	if ue.WorkflowLaunch != nil {
+		t.Errorf("WorkflowLaunch = %+v, want nil (agent launch, not a workflow)", ue.WorkflowLaunch)
+	}
+	if ue.AgentResult == nil {
+		t.Fatal("AgentResult is nil for an async agent launch")
+	}
+	ar := ue.AgentResult
+	if ar.Status != "async_launched" {
+		t.Errorf("Status = %q, want %q", ar.Status, "async_launched")
+	}
+	if ar.AgentID != "a03ec7cf76d5f3b2b" {
+		t.Errorf("AgentID = %q", ar.AgentID)
+	}
+	if ar.Prompt != "Survey the repo" {
+		t.Errorf("Prompt = %q", ar.Prompt)
+	}
+	if len(ar.Content) != 0 {
+		t.Errorf("Content = %v, want empty", ar.Content)
+	}
+}
+
 func TestParseTaskEvents(t *testing.T) {
 	input := `{"type":"system","session_id":"test","model":"sonnet"}
 {"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_agent1","name":"Agent","input":{"prompt":"read go.mod"}}]}}

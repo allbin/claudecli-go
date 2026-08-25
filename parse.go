@@ -860,9 +860,23 @@ type rawAgentResult struct {
 	TotalToolUseCount int          `json:"totalToolUseCount"`
 }
 
+// parseAgentResult returns an AgentResult when data is a subagent's
+// tool_use_result, or nil otherwise. The CLI attaches a tool_use_result to the
+// user event for *every* tool call — Bash, Read, Grep, TodoWrite — so its mere
+// presence is not evidence of a subagent. Only a payload carrying at least one
+// agent marker (status, agent id/type, content, or usage totals) counts;
+// anything else decodes to an all-zero struct and is rejected.
 func parseAgentResult(data json.RawMessage) *AgentResult {
 	var raw rawAgentResult
 	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil
+	}
+	// Prompt alone is deliberately not a marker: ordinary tool inputs echo one
+	// back, while every observed agent result carries a status
+	// ("completed" on finish, "async_launched" for a background launch).
+	if raw.Status == "" && raw.AgentID == "" && raw.AgentType == "" &&
+		len(raw.Content) == 0 && raw.TotalDurationMs == 0 &&
+		raw.TotalTokens == 0 && raw.TotalToolUseCount == 0 {
 		return nil
 	}
 	ar := &AgentResult{

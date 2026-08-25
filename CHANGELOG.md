@@ -15,6 +15,33 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`UserEvent.AgentResult` no longer fires on every tool result.** The CLI
+  attaches a `tool_use_result` payload to the `user` event for *every* tool
+  call — Bash, Read, Edit, Grep, TodoWrite — not just `Agent`/`Task` spawns.
+  `parseAgentResult` decoded any JSON object into an all-zero `AgentResult` and
+  returned it non-nil, so the field read as "a subagent finished here" once per
+  tool call. Only a payload whose `toolUseResult` was a JSON string or array
+  escaped, by failing the struct unmarshal.
+
+  ```go
+  // before: a Bash result {"stdout":"hi","stderr":"","interrupted":false}
+  e.AgentResult // &AgentResult{}  <- every field zero, and non-nil anyway
+  ```
+
+  Downstream that is one junk event per tool call: a consumer persisting them
+  accumulated 8,824 empty rows against 28 real ones in a single database.
+  `parseAgentResult` now returns nil unless the payload carries an agent marker
+  (`status`, `agentId`, `agentType`, `content`, or a usage total). Real results
+  always carry a status — `"completed"` on finish, `"async_launched"` for a
+  background agent launch — and both still parse with every field intact.
+
+  **Does this affect you?** Only if you branch on `e.AgentResult != nil`. The
+  branch now runs for actual subagent results instead of for every tool call;
+  no field semantics changed. Code reading `AgentResult` fields defensively
+  (checking `AgentID != ""` before use) can drop the guard.
+
 ## [0.7.0] - 2026-08-24
 
 ### Fixed
