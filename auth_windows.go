@@ -15,7 +15,10 @@ import (
 func writeBrowserCaptureScript(dir string) (scriptPath, urlFile string, err error) {
 	urlFile = filepath.Join(dir, "browser_url")
 	scriptPath = filepath.Join(dir, "browser.cmd")
-	content := fmt.Sprintf("@echo off\r\n<nul set /p=\"%%~1\" > %s\r\n", urlFile)
+	// The redirect target must be quoted: the temp path contains the
+	// username, and an unquoted space there truncates the target and
+	// silently drops the captured URL.
+	content := fmt.Sprintf("@echo off\r\n<nul set /p=\"%%~1\" > \"%s\"\r\n", urlFile)
 	if err := os.WriteFile(scriptPath, []byte(content), 0700); err != nil {
 		return "", "", fmt.Errorf("write browser capture script: %w", err)
 	}

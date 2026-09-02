@@ -15,6 +15,9 @@ import (
 // created by Setpgid needs no handle, so there is nothing to hold or release.
 type platformProc struct{}
 
+// hideConsole suppresses the child's console window on Windows. No-op on unix.
+func hideConsole(cmd *exec.Cmd) {}
+
 func setPlatformAttrs(cmd *exec.Cmd) *platformProc {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
@@ -22,6 +25,27 @@ func setPlatformAttrs(cmd *exec.Cmd) *platformProc {
 	}
 	cmd.WaitDelay = 5 * time.Second
 	return &platformProc{}
+}
+
+// setUpdateCancel configures cancellation for the `claude update` spawn:
+// SIGINT the whole process group so the updater — and any npm/node children
+// doing the actual work — can unwind a staged download. The caller's
+// WaitDelay provides the eventual kill.
+func setUpdateCancel(cmd *exec.Cmd) *platformProc {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT)
+	}
+	return &platformProc{}
+}
+
+// killTree forcibly terminates cmd's whole process tree (SIGKILL to the
+// group), falling back to killing the direct child if the group is gone.
+func (p *platformProc) killTree(cmd *exec.Cmd) error {
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err == nil {
+		return nil
+	}
+	return cmd.Process.Kill()
 }
 
 // afterStart finalizes process-tree confinement once the child is running.

@@ -105,6 +105,7 @@ type LoginProcess struct {
 	tmpDir       string // temp dir for browser capture script; cleaned up on Wait/Cancel
 	stdin        io.WriteCloser
 	cmd          *exec.Cmd
+	pp           *platformProc
 	done         chan error
 	logger       *slog.Logger // may be nil
 }
@@ -202,7 +203,7 @@ func (p *LoginProcess) Cancel() error {
 		p.stdin.Close()
 	}
 	if p.cmd.Process != nil {
-		return p.cmd.Process.Kill()
+		return p.pp.killTree(p.cmd)
 	}
 	return nil
 }
@@ -230,6 +231,7 @@ func (c *Client) AuthStatus(ctx context.Context) (*AuthStatusResult, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, binary, "auth", "status", "--json")
+	hideConsole(cmd)
 	out, err := cmd.CombinedOutput()
 	log.Debug("auth status: raw output", "stdout+stderr", string(out), "cmd_err", err)
 
@@ -277,6 +279,10 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 		"noBrowser", cfg.noBrowser, "method", cfg.method, "sso", cfg.sso)
 
 	cmd := exec.CommandContext(ctx, binary, args...)
+	// Confine the login CLI's process tree (job object on Windows, process
+	// group on unix) so cancellation cannot orphan children such as the
+	// BROWSER capture script.
+	pp := setPlatformAttrs(cmd)
 
 	var tmpDir, urlFile string
 	if cfg.noBrowser {
@@ -309,9 +315,11 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 	}
 
 	if err := cmd.Start(); err != nil {
+		pp.release()
 		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("auth login: start: %w", err)
 	}
+	pp.afterStart(cmd)
 	log.Debug("auth login: process started", "pid", cmd.Process.Pid)
 
 	// Scan output for the authorization URL and any localhost redirect URLs.
@@ -347,7 +355,9 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 	}()
 
 	go func() {
-		doneCh <- cmd.Wait()
+		err := cmd.Wait()
+		pp.release()
+		doneCh <- err
 	}()
 
 	// Wait for either the URL, process exit, or context cancellation.
@@ -407,6 +417,7 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 			tmpDir:       tmpDir,
 			stdin:        stdinPipe,
 			cmd:          cmd,
+			pp:           pp,
 			done:         doneCh,
 			logger:       c.logger,
 		}
@@ -424,7 +435,7 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 	case <-ctx.Done():
 		log.Debug("auth login: context cancelled, killing process")
 		os.RemoveAll(tmpDir)
-		_ = cmd.Process.Kill()
+		_ = pp.killTree(cmd)
 		<-doneCh // drain to ensure process exits and pipes close
 		stdinPipe.Close()
 		return nil, ctx.Err()
@@ -438,7 +449,9 @@ func (c *Client) AuthLogout(ctx context.Context) error {
 		return fmt.Errorf("claude binary not found: %w", err)
 	}
 
-	out, err := exec.CommandContext(ctx, binary, "auth", "logout").CombinedOutput()
+	cmd := exec.CommandContext(ctx, binary, "auth", "logout")
+	hideConsole(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("auth logout: %s: %w", strings.TrimSpace(string(out)), err)
 	}

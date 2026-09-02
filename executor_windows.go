@@ -32,30 +32,58 @@ type platformProc struct {
 	assigned bool           // child successfully placed in the job
 }
 
-func setPlatformAttrs(cmd *exec.Cmd) *platformProc {
+// hideConsole marks cmd to run without a console window. Every direct CLI
+// spawn needs this, not just the executor's: when the parent is windowless,
+// each bare spawn — an auth-status poll, a `-v` probe — flashes a console
+// on screen.
+func hideConsole(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	// OR the flag in so we don't clobber any other creation flags.
 	cmd.SysProcAttr.CreationFlags |= createNoWindow
+}
 
+func setPlatformAttrs(cmd *exec.Cmd) *platformProc {
+	hideConsole(cmd)
 	p := &platformProc{job: newKillOnCloseJob()}
 	// Cancel must be installed before Start (os/exec reads it from the
 	// context-watch goroutine). Kill the whole job; if the job isn't usable,
 	// fall back to killing just the CLI process — today's behavior.
-	cmd.Cancel = func() error {
-		p.mu.Lock()
-		job, assigned := p.job, p.assigned
-		p.mu.Unlock()
-		if job != 0 && assigned {
-			if err := windows.TerminateJobObject(job, 1); err == nil {
-				return nil
-			}
-		}
-		return cmd.Process.Kill()
-	}
+	cmd.Cancel = func() error { return p.killTree(cmd) }
 	cmd.WaitDelay = 5 * time.Second
 	return p
+}
+
+// setUpdateCancel configures cancellation for the `claude update` spawn.
+// Windows cannot deliver a console interrupt from a windowless parent
+// (GenerateConsoleCtrlEvent only reaches processes on the caller's own
+// console), so cancellation is an immediate tree kill via the job object:
+// no grace period for the updater to unwind its staged download, but no
+// orphaned npm/node children either.
+func setUpdateCancel(cmd *exec.Cmd) *platformProc {
+	hideConsole(cmd)
+	p := &platformProc{job: newKillOnCloseJob()}
+	cmd.Cancel = func() error { return p.killTree(cmd) }
+	return p
+}
+
+// killTree terminates cmd's whole process tree via the job object,
+// degrading to killing just the direct child when the job is unusable.
+// The Terminate call happens under the mutex: killTree can be invoked from
+// a goroutine release() does not synchronize with, and a handle used after
+// CloseHandle could have been recycled to name someone else's object.
+func (p *platformProc) killTree(cmd *exec.Cmd) error {
+	p.mu.Lock()
+	err := errors.New("no job object")
+	if p.job != 0 && p.assigned {
+		err = windows.TerminateJobObject(p.job, 1)
+	}
+	p.mu.Unlock()
+	if err == nil {
+		return nil
+	}
+	return cmd.Process.Kill()
 }
 
 // newKillOnCloseJob creates an anonymous job object whose members are all
@@ -99,31 +127,33 @@ func (p *platformProc) afterStart(cmd *exec.Cmd) {
 		p.release()
 		return
 	}
-	err = windows.AssignProcessToJobObject(p.job, proc)
-	windows.CloseHandle(proc)
-	if err != nil {
-		p.release()
-		return
-	}
 	p.mu.Lock()
-	p.assigned = true
+	if p.job != 0 {
+		if err := windows.AssignProcessToJobObject(p.job, proc); err == nil {
+			p.assigned = true
+		}
+	}
+	assigned := p.assigned
 	p.mu.Unlock()
+	windows.CloseHandle(proc)
+	if !assigned {
+		p.release()
+	}
 }
 
 // release closes the job handle. Called after Wait returns (kill-on-close
 // then terminates anything still in the job) or when job setup fails.
-// Idempotent. Safe against the Cancel closure: cmd.Wait does not return
-// until the context-watch goroutine — and thus any in-flight Cancel — has
-// finished.
+// Idempotent. CloseHandle happens under the mutex so a concurrent killTree
+// either terminates the still-open job or sees it already gone — never a
+// recycled handle value.
 func (p *platformProc) release() {
 	p.mu.Lock()
-	job := p.job
-	p.job = 0
-	p.assigned = false
-	p.mu.Unlock()
-	if job != 0 {
-		windows.CloseHandle(job)
+	defer p.mu.Unlock()
+	if p.job != 0 {
+		windows.CloseHandle(p.job)
+		p.job = 0
 	}
+	p.assigned = false
 }
 
 // buildPlatformCmd creates the exec.Cmd. No special wrapping needed on Windows.

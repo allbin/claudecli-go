@@ -462,14 +462,15 @@ func checkWritable(dir string) error {
 // execUpdate runs `<binary> update`, forwarding every output line to onLine as
 // it arrives.
 //
-// Cancellation interrupts rather than kills: the updater stages its download
-// and renames it into place, so giving it a moment to unwind is what keeps a
-// cancelled run from leaving a partial file behind. The kill still happens
-// after updateInterruptGrace, and on platforms where an interrupt cannot be
-// delivered it happens immediately.
+// On unix, cancellation interrupts rather than kills: the updater stages its
+// download and renames it into place, so SIGINT to the process group gives it
+// — and any npm/node children doing the actual work — a moment to unwind
+// before the kill lands after updateInterruptGrace. Windows has no deliverable
+// interrupt from a windowless parent, so cancellation there is an immediate
+// job-object tree kill: no grace period, but no orphaned children either.
 func execUpdate(ctx context.Context, binary string, onLine func(string)) (int, error) {
 	cmd := exec.CommandContext(ctx, binary, "update")
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	pp := setUpdateCancel(cmd)
 	cmd.WaitDelay = updateInterruptGrace
 
 	// os/exec serializes writes when Stdout and Stderr are the same comparable
@@ -478,7 +479,12 @@ func execUpdate(ctx context.Context, binary string, onLine func(string)) (int, e
 	cmd.Stdout = w
 	cmd.Stderr = w
 
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		pp.afterStart(cmd)
+		err = cmd.Wait()
+	}
+	pp.release()
 	w.flush()
 
 	if err == nil {

@@ -372,7 +372,9 @@ func runVersionProbe(ctx context.Context, binary string) (string, error) {
 		ctx, cancel = context.WithTimeout(ctx, defaultInstallTimeout)
 		defer cancel()
 	}
-	out, err := exec.CommandContext(ctx, binary, "-v").Output()
+	cmd := exec.CommandContext(ctx, binary, "-v")
+	hideConsole(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}

@@ -120,7 +120,9 @@ func CheckCLIVersion(ctx context.Context, binaryPath string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, resolved, "-v").Output()
+	cmd := exec.CommandContext(ctx, resolved, "-v")
+	hideConsole(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil
 	}
