@@ -114,7 +114,7 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 		envOverrides["CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"] = "1"
 	}
 	cmd.Env = buildEnv(envOverrides)
-	setPlatformAttrs(cmd)
+	pp := setPlatformAttrs(cmd)
 	if cfg.WorkDir != "" {
 		cmd.Dir = cfg.WorkDir
 	}
@@ -133,17 +133,24 @@ func (e *LocalExecutor) Start(ctx context.Context, cfg *StartConfig) (*Process, 
 	}
 
 	if err := cmd.Start(); err != nil {
+		pp.release()
 		closeStdin()
 		stdout.Close()
 		stderr.Close()
 		return nil, fmt.Errorf("start: %w", err)
 	}
+	// Confine the child's process tree (Windows job object; no-op on unix).
+	pp.afterStart(cmd)
 
 	return &Process{
 		Stdout: stdout,
 		Stderr: stderr,
 		Stdin:  stdinPipe,
-		Wait:   cmd.Wait,
+		Wait: func() error {
+			err := cmd.Wait()
+			pp.release()
+			return err
+		},
 	}, nil
 }
 

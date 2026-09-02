@@ -11,13 +11,25 @@ import (
 	"time"
 )
 
-func setPlatformAttrs(cmd *exec.Cmd) {
+// platformProc holds per-spawn platform resources. On unix the process group
+// created by Setpgid needs no handle, so there is nothing to hold or release.
+type platformProc struct{}
+
+func setPlatformAttrs(cmd *exec.Cmd) *platformProc {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	}
 	cmd.WaitDelay = 5 * time.Second
+	return &platformProc{}
 }
+
+// afterStart finalizes process-tree confinement once the child is running.
+// Nothing to do on unix: Setpgid took effect at spawn.
+func (p *platformProc) afterStart(cmd *exec.Cmd) {}
+
+// release frees per-spawn platform resources. Nothing held on unix.
+func (p *platformProc) release() {}
 
 // buildPlatformCmd creates the exec.Cmd with platform-specific handling.
 // On Linux, wraps with stdbuf -oL to force line-buffered stdout when available.

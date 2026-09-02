@@ -15,6 +15,25 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: killing a session now kills the CLI's whole process tree.**
+  Previously context cancellation called `cmd.Process.Kill()`, which
+  terminates only `claude.exe` — its MCP servers (npx/node) and any Chromium
+  they spawned survived until their stdin-EOF handling exited them, or
+  forever if wedged. `LocalExecutor` now confines each spawn in an anonymous
+  kill-on-close job object: cancel calls `TerminateJobObject` (tree kill),
+  and the job handle is closed after `Wait()` returns, reaping stragglers
+  that outlive a clean CLI exit. Matches the unix `Setpgid` + `kill(-pid)`
+  behavior. If job creation or assignment fails, the executor degrades to
+  the old single-PID kill rather than failing the spawn. Known caveat:
+  assignment happens just after `Start()` (os/exec has no `CREATE_SUSPENDED`
+  path), so a child forked in that instant could escape — in practice the
+  CLI takes far longer to start MCP servers.
+
+  Upgrade note: adds a `golang.org/x/sys` dependency (Windows builds only);
+  no API changes.
+
 ## [0.7.1] - 2026-08-25
 
 ### Fixed

@@ -1369,7 +1369,7 @@ claudecli-go/
   option.go      Functional options + CLI arg builder
   executor.go         Executor interface, LocalExecutor, FixtureExecutor, BidiFixtureExecutor
   executor_unix.go    Unix process group attrs (Setpgid, SIGTERM), stdbuf wrapping
-  executor_windows.go Windows no-op platform attrs
+  executor_windows.go Windows kill-on-close job object (tree kill on cancel), CREATE_NO_WINDOW
   parse.go       JSONL stream parser (decoupled from process lifecycle)
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
   client.go      Client struct, Run/RunText/RunJSON/Connect, package-level shortcuts
@@ -1391,7 +1391,7 @@ claudecli-go/
 **Layers:**
 
 1. **Parse** (`parse.go`) — JSONL deserialization into typed events. Zero coupling to process execution. Testable with fixtures. Returns immediately after the result event to avoid blocking on CLI hang bugs.
-2. **Execute** (`executor.go`, `executor_{unix,windows}.go`) — `Executor` interface abstracts process spawning. `LocalExecutor` handles the real CLI with platform-aware command construction: `stdbuf -oL` wrapping on Linux, npm `.cmd` shim bypass on Windows.
+2. **Execute** (`executor.go`, `executor_{unix,windows}.go`) — `Executor` interface abstracts process spawning. `LocalExecutor` handles the real CLI with platform-aware command construction: `stdbuf -oL` wrapping on Linux, npm `.cmd` shim bypass on Windows. Cancellation kills the whole process tree (CLI + MCP servers + their children): `Setpgid` + `kill(-pid, SIGTERM)` on unix, a kill-on-close job object + `TerminateJobObject` on Windows.
 3. **Client** (`client.go`) — Composes executor + options. Builds CLI args, starts process synchronously, reads events in goroutine. Synthesizes `ResultEvent` if CLI exits without one. `Connect()` creates interactive sessions.
 4. **Session** (`session.go`) — Bidirectional control protocol over stdin/stdout. Handles initialize handshake, control request routing (tool permissions), and multi-turn conversations. `Connect()` marks the session ready immediately after the initialize handshake (CLI 2.1.81+ defers the system init event until the first user message).
 5. **Blocking** (`blocking.go`) — Non-streaming path using `--output-format json`. Simpler execution model for `RunBlocking`/`RunBlockingJSON`.
@@ -1406,6 +1406,14 @@ claudecli-go/
 - **Blocking stderr capped at 10 MB** — `RunBlocking` caps stderr collection at 10 MB. The streaming path uses a 1000-line ring buffer.
 - **Fork-session needs a persisted parent** — `RunBlocking` by default emits `--no-session-persistence`, so the parent must be started with `WithSessionID`, `WithResume`/`WithContinue`, or via `Connect` for `WithForkSession` to find the parent on disk.
 - **`AuthStatus` fail-close** — When the CLI exits 0 with non-JSON output, `AuthStatus` returns `AuthStateUnknown` (not `AuthStateAuthenticated`). Callers should handle this explicitly.
+- **Windows job-object assignment happens post-start** — os/exec offers no
+  `CREATE_SUSPENDED` path, so the CLI process is placed in the kill-on-close
+  job just after `Start()` returns. A child the CLI spawned in that window
+  would escape the job; in practice the CLI takes far longer than that to
+  start MCP servers. If job creation or assignment fails, the executor
+  degrades to killing only the CLI process (the pre-job behavior) instead of
+  failing the spawn. There is no Windows CI, so the job path needs a manual
+  smoke test on real Windows.
 - **`DetectInstall` on Windows is unverified** — the layouts are implemented
   from npm/winget conventions but have not been exercised on real Windows
   hardware. `.exe` binaries and npm's `node_modules` layout are handled; a
