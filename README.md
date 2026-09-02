@@ -1369,7 +1369,8 @@ claudecli-go/
   option.go      Functional options + CLI arg builder
   executor.go         Executor interface, LocalExecutor, FixtureExecutor, BidiFixtureExecutor
   executor_unix.go    Unix process group attrs (Setpgid, SIGTERM), stdbuf wrapping
-  executor_windows.go Windows kill-on-close job object (tree kill on cancel), CREATE_NO_WINDOW
+  executor_windows.go Windows kill-on-close job object (tree kill on cancel), CREATE_NO_WINDOW, npm shim bypass
+  shim.go        Resolves npm's Windows .cmd shim to the cli.js it wraps (used by executor_windows.go)
   parse.go       JSONL stream parser (decoupled from process lifecycle)
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
   client.go      Client struct, Run/RunText/RunJSON/Connect, package-level shortcuts
@@ -1391,7 +1392,7 @@ claudecli-go/
 **Layers:**
 
 1. **Parse** (`parse.go`) — JSONL deserialization into typed events. Zero coupling to process execution. Testable with fixtures. Returns immediately after the result event to avoid blocking on CLI hang bugs.
-2. **Execute** (`executor.go`, `executor_{unix,windows}.go`) — `Executor` interface abstracts process spawning. `LocalExecutor` handles the real CLI with platform-aware command construction: `stdbuf -oL` wrapping on Linux, npm `.cmd` shim bypass on Windows. Cancellation kills the whole process tree (CLI + MCP servers + their children): `Setpgid` + `kill(-pid, SIGTERM)` on unix, a kill-on-close job object + `TerminateJobObject` on Windows.
+2. **Execute** (`executor.go`, `executor_{unix,windows}.go`) — `Executor` interface abstracts process spawning. `LocalExecutor` handles the real CLI with platform-aware command construction: `stdbuf -oL` wrapping on Linux; on Windows, npm's `.cmd` shim is bypassed by running node on the wrapped `cli.js` directly (`shim.go` — os/exec refuses batch-file args it cannot safely escape), and every spawn is marked CREATE_NO_WINDOW. Cancellation kills the whole process tree (CLI + MCP servers + their children): `Setpgid` + `kill(-pid, SIGTERM)` on unix, a kill-on-close job object + `TerminateJobObject` on Windows. The same confinement covers the `AuthLogin` and `Update` spawns.
 3. **Client** (`client.go`) — Composes executor + options. Builds CLI args, starts process synchronously, reads events in goroutine. Synthesizes `ResultEvent` if CLI exits without one. `Connect()` creates interactive sessions.
 4. **Session** (`session.go`) — Bidirectional control protocol over stdin/stdout. Handles initialize handshake, control request routing (tool permissions), and multi-turn conversations. `Connect()` marks the session ready immediately after the initialize handshake (CLI 2.1.81+ defers the system init event until the first user message).
 5. **Blocking** (`blocking.go`) — Non-streaming path using `--output-format json`. Simpler execution model for `RunBlocking`/`RunBlockingJSON`.
@@ -1412,16 +1413,36 @@ claudecli-go/
   would escape the job; in practice the CLI takes far longer than that to
   start MCP servers. If job creation or assignment fails, the executor
   degrades to killing only the CLI process (the pre-job behavior) instead of
-  failing the spawn. There is no Windows CI, so the job path needs a manual
-  smoke test on real Windows.
-- **`DetectInstall` on Windows is unverified** — the layouts are implemented
-  from npm/winget conventions but have not been exercised on real Windows
-  hardware. `.exe` binaries and npm's `node_modules` layout are handled; a
-  `.cmd`/`.bat`/`.ps1` shim is not a symlink and cannot be resolved further, so
-  unless a sibling npm layout confirms the install it reports `InstallUnknown`
-  rather than guessing. `DetectInstall` also has no command for `asdf`, `deb`,
-  `rpm`, `pacman` or `apk` installs — it reports `package-manager` with an empty
-  `UpdateCmd`, matching the CLI, which does not know one either.
+  failing the spawn. There is no Windows CI, so the job path (sessions,
+  `AuthLogin`, `Update`) needs a manual smoke test on real Windows: spawn,
+  kill, confirm no node/chrome survivors in Task Manager.
+- **Cancelling `Update` on Windows kills without grace** — unix cancellation
+  sends SIGINT to the updater's process group so a staged download can be
+  unwound before the kill lands; Windows has no console interrupt deliverable
+  from a windowless parent, so cancellation there is an immediate job-object
+  tree kill. A cancelled Windows update may leave a staged partial download
+  for the CLI to clean up on its next run.
+- **`Update` on Windows fails while any session is running** — Windows locks
+  a running executable, and the CLI's own updater reports "claude.exe is in
+  use. Close other Claude Code sessions" (its bundled code confirms it damps
+  further attempts for the session). `Update()` reports this honestly — the
+  version re-read shows no change — but callers should expect
+  update-during-sessions to fail on Windows, not treat it as transient.
+- **Windows cannot distinguish an external kill from a crash** — there are no
+  signals, so a CLI terminated from outside (Task Manager, `taskkill`) exits
+  with a plain code and `CLIExitEvent.Reason` reports `crashed`, not
+  `killed`. SDK-initiated termination still reports `context_canceled`.
+- **`DetectInstall` on Windows is partially verified** — the directory logic
+  matches the CLI's own bundled install code (strings-dump of 2.1.252: the
+  versions dir is `$XDG_DATA_HOME ?? ~/.local/share` + `claude/versions` with
+  no win32 branch, the PATH entry `%USERPROFILE%\.local\bin\claude.exe`, a
+  real file rather than a symlink, caught by the PE-header check), but has
+  not been exercised on real Windows hardware. A foreign `.cmd`/`.bat`/`.ps1`
+  shim cannot be resolved further, so unless a sibling npm layout confirms
+  the install it reports `InstallUnknown` rather than guessing.
+  `DetectInstall` also has no command for `asdf`, `deb`, `rpm`, `pacman` or
+  `apk` installs — it reports `package-manager` with an empty `UpdateCmd`,
+  matching the CLI, which does not know one either.
 - **`AutoUpdate.Channel` reads user settings only** — `autoUpdatesChannel` can
   also be set in project, local and managed settings, but the CLI's own
   `/channel` command writes the user scope, and reading the full cascade would

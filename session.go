@@ -1244,6 +1244,11 @@ func (s *Session) readLoop() {
 // CLIExitEvent. ctxErr takes priority over the wait error: if the context
 // was canceled, the SDK initiated termination, so report context_canceled
 // even when the kernel reports the kill via signal.
+//
+// On Windows there are no signals, so an externally terminated CLI (Task
+// Manager, taskkill) exits with a plain code and reports "crashed" rather
+// than "killed" — the platform offers nothing to tell the two apart.
+// SDK-initiated kills are unaffected: they arrive with ctxErr set.
 func classifyExit(waitErr error, ctxErr error, cliErr error) *CLIExitEvent {
 	signal, code := extractExitDetails(waitErr)
 	ev := &CLIExitEvent{

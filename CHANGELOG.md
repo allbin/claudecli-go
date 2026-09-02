@@ -34,6 +34,39 @@ or pin a specific version (e.g. `@v0.1.0`).
   Upgrade note: adds a `golang.org/x/sys` dependency (Windows builds only);
   no API changes.
 
+- **Windows: every direct CLI spawn now suppresses its console window.**
+  Only `LocalExecutor` set CREATE_NO_WINDOW; the `AuthStatus`, `AuthLogin`,
+  `AuthLogout`, `Update` and `-v` probe spawns did not, so a windowless
+  parent (a service, a GUI app) flashed a console on screen for each —
+  once per auth-status poll.
+
+- **Windows: `AuthLogin`'s BROWSER capture works for usernames with
+  spaces.** The generated `browser.cmd` redirected to an unquoted temp
+  path; a space in it (e.g. `C:\Users\Anna Karin\...`) truncated the
+  redirect target and silently dropped the captured callback URL. The
+  target is now quoted.
+
+- **Windows: npm's `claude.cmd` shim is bypassed.** When the resolved
+  binary is npm's cmd.exe shim and the layout confirms it wraps
+  `@anthropic-ai/claude-code`, the executor runs node on the wrapped
+  `cli.js` directly — os/exec refuses to start batch files with arguments
+  cmd.exe cannot safely escape (the CVE-2024-24576 hardening), so e.g. a
+  `WithSystemPrompt` containing `%` or `"` failed at `Start()` behind a
+  shim. The bypass also removes the cmd.exe layer from the process tree.
+  Falls back to running the shim when node is missing or the layout is
+  unconfirmed.
+
+- **Cancelling `Update` interrupts the whole process group.** On unix,
+  SIGINT now goes to the updater's process group (previously the single
+  CLI process), so npm/node children unwinding a staged download are
+  interrupted too. On Windows — where no console interrupt is deliverable
+  from a windowless parent — cancellation is an immediate job-object tree
+  kill instead of a lone `claude.exe` kill that orphaned npm children.
+
+- **`AuthLogin` and `LoginProcess.Cancel` kill the login CLI's whole
+  process tree** (job object on Windows, process group on unix) instead of
+  just the CLI process.
+
 ## [0.7.1] - 2026-08-25
 
 ### Fixed
