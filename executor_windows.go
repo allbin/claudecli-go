@@ -156,8 +156,17 @@ func (p *platformProc) release() {
 	p.assigned = false
 }
 
-// buildPlatformCmd creates the exec.Cmd. No special wrapping needed on Windows.
+// buildPlatformCmd creates the exec.Cmd. When the resolved binary is npm's
+// cmd.exe shim, run the wrapped entry script with node directly (see
+// shim.go): os/exec refuses .bat/.cmd args it cannot safely escape, and the
+// bypass also drops the cmd.exe layer from the process tree. Falls back to
+// running the shim when node is missing or the layout is unconfirmed.
 func buildPlatformCmd(ctx context.Context, binary string, args []string) *exec.Cmd {
+	if cliJS, ok := findShimCLIJS(binary); ok {
+		if node, err := exec.LookPath("node"); err == nil {
+			return exec.CommandContext(ctx, node, append([]string{cliJS}, args...)...)
+		}
+	}
 	return exec.CommandContext(ctx, binary, args...)
 }
 
