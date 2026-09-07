@@ -3,6 +3,7 @@ package claudecli
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // ContextCategory is one labelled slice of the context window.
@@ -71,6 +72,11 @@ func (c *ContextUsage) Remaining() int {
 // to stay correct across compaction: result-derived usage describes the last
 // API call and does not shrink when the CLI compacts, so it drifts upward
 // until the next turn. Costs one control round-trip.
+//
+// Side effect worth knowing about: the answer names the model's window, which
+// is the one thing ContextSnapshotEvent cannot learn from the stream until a
+// turn ends. Asking once therefore unblocks mid-turn context events for the
+// first turn of the session, which would otherwise stay silent.
 func (s *Session) QueryContextUsage() (*ContextUsage, error) {
 	raw, err := s.sendControlRequestRaw("get_context_usage", nil)
 	if err != nil {
@@ -81,5 +87,48 @@ func (s *Session) QueryContextUsage() (*ContextUsage, error) {
 		return nil, fmt.Errorf("get_context_usage: decode response: %w", err)
 	}
 	usage.Raw = append(json.RawMessage(nil), raw...)
+	s.recordContextWindow(&usage)
 	return &usage, nil
+}
+
+// recordContextWindow caches the model's hard window from a get_context_usage
+// answer. RawMaxTokens is the right field: it is the model's believed limit,
+// matching ModelUsage.ContextWindow, whereas MaxTokens can be a smaller
+// compaction-policy window and would make the meter read too full.
+func (s *Session) recordContextWindow(u *ContextUsage) {
+	if u == nil || u.Model == "" {
+		return
+	}
+	window := u.RawMaxTokens
+	if window <= 0 {
+		window = u.MaxTokens
+	}
+	if window <= 0 {
+		return
+	}
+	s.contextWindows.Store(u.Model, window)
+}
+
+// observedContextWindow returns a context window learned out of band for
+// model, or 0. Like lookupModelUsage it tolerates the "[1m]"-style suffix,
+// which may be present on either side: the control response reports the
+// main-loop model as configured, inner stream events report it bare.
+func (s *Session) observedContextWindow(model string) int {
+	if model == "" {
+		return 0
+	}
+	if v, ok := s.contextWindows.Load(model); ok {
+		return v.(int)
+	}
+	window := 0
+	prefix := model + "["
+	s.contextWindows.Range(func(k, v any) bool {
+		key := k.(string)
+		if strings.HasPrefix(key, prefix) || strings.HasPrefix(model, key+"[") {
+			window = v.(int)
+			return false
+		}
+		return true
+	})
+	return window
 }

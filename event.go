@@ -803,6 +803,89 @@ type ContextSnapshot struct {
 	ContextWindow            int
 }
 
+// Used reports the tokens the measured API call occupied in the window:
+// the prompt (fresh input plus both cache buckets) plus what the model
+// generated. This is the numerator a context meter wants against
+// ContextWindow.
+func (c ContextSnapshot) Used() int {
+	return c.InputTokens + c.CacheReadInputTokens + c.CacheCreationInputTokens + c.OutputTokens
+}
+
+// ContextSnapshotPhase says which of an API call's two usage reports produced
+// a ContextSnapshotEvent.
+type ContextSnapshotPhase string
+
+const (
+	// ContextSnapshotStart marks the measurement taken from message_start.
+	// The prompt has been sent, so the input and cache buckets are final for
+	// this call, but OutputTokens is still zero: generation has not produced
+	// anything yet. A meter should render this immediately — the prompt is
+	// what dominates window occupancy — and treat the output as pending
+	// rather than as a genuine zero.
+	ContextSnapshotStart ContextSnapshotPhase = "start"
+	// ContextSnapshotFinal marks the measurement taken from message_delta,
+	// the API's last usage report for a call. OutputTokens is now the final
+	// count and the whole snapshot is settled.
+	ContextSnapshotFinal ContextSnapshotPhase = "final"
+)
+
+// ContextSnapshotEvent reports the running context measurement while a turn is
+// still in flight, so a context meter can move during the turn instead of
+// jumping at the end. It carries the same numbers ResultEvent.ContextSnapshot
+// reports at turn end; that field is unchanged and still authoritative for the
+// final state of a turn.
+//
+// Cadence: two events per API call, and a turn makes one API call per model
+// response — so a tool-using turn produces several pairs. Phase says which is
+// which: ContextSnapshotStart from message_start (prompt final, output zero),
+// ContextSnapshotFinal from message_delta (output settled). The API emits
+// exactly one message_delta per message, so this is not a per-chunk firehose.
+//
+// Requires WithIncludePartialMessages. The measurement is decoded from inner
+// stream events, which the CLI only emits under that option, and it is off by
+// default — without it this event never fires, so code that blocks waiting for
+// one waits forever.
+//
+// ContextWindow is always non-zero. The CLI does not disclose the window
+// mid-turn: it appears only in the result event's ModelUsage (and in the
+// get_context_usage control request). Rather than emit a measurement against a
+// zero window — which renders as a full or an empty meter, both wrong — the
+// event is withheld until the window for the model is known, and the window is
+// then remembered for the rest of the session. In practice that means:
+//
+//   - The first turn of a Session emits nothing; every later turn emits, because
+//     the first ResultEvent disclosed the window. Calling
+//     Session.QueryContextUsage once before or during the first turn teaches the
+//     window early and unblocks it.
+//   - ParseEvents emits nothing, since it returns at the terminal result event
+//     and so never observes a window while stream events are still arriving.
+type ContextSnapshotEvent struct {
+	InputTokens              int
+	CacheReadInputTokens     int
+	CacheCreationInputTokens int
+	OutputTokens             int
+	ContextWindow            int
+	// Model is the model named on the message_start that opened this API
+	// call, as the inner stream event reports it — bare, without the
+	// context-window suffix ModelUsage keys can carry.
+	Model string
+	// SessionID is the session the stream event belonged to.
+	SessionID string
+	Phase     ContextSnapshotPhase
+}
+
+func (*ContextSnapshotEvent) event() {}
+
+// Used reports the tokens this call occupies in the window. See
+// ContextSnapshot.Used.
+func (e *ContextSnapshotEvent) Used() int {
+	return e.InputTokens + e.CacheReadInputTokens + e.CacheCreationInputTokens + e.OutputTokens
+}
+
+func (e *ContextSnapshotEvent) String() string {
+	return fmt.Sprintf("ContextSnapshotEvent{%s: %d/%d, model: %s}", e.Phase, e.Used(), e.ContextWindow, e.Model)
+}
+
 // ContextManagementEvent is emitted when the CLI compresses or summarizes
 // older conversation turns to stay within the context window.
 // Raw contains the full JSON payload for forward compatibility.

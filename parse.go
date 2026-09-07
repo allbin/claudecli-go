@@ -36,8 +36,7 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
 	var resultText []string
-	var snapshot *ContextSnapshot
-	var lastModel string
+	var ctxTracker contextTracker
 	var turnCounter int
 	taskBackfill := newTaskTypeBackfiller()
 
@@ -139,11 +138,7 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 
 		case "result":
 			modelUsage := convertModelUsage(raw.ModelUsage)
-			if snapshot != nil && lastModel != "" {
-				if mu, ok := lookupModelUsage(modelUsage, lastModel); ok {
-					snapshot.ContextWindow = mu.ContextWindow
-				}
-			}
+			snapshot := ctxTracker.finish(modelUsage)
 			// Classify error_max_turns: emit a non-fatal ErrorEvent so callers
 			// using errors.Is(err, ErrMaxTurns) can detect it via Stream.Wait().
 			if raw.Subtype == "error_max_turns" {
@@ -185,7 +180,9 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 				SessionID: raw.SessionID,
 				Event:     raw.Event,
 			})
-			updateContextSnapshot(raw.Event, &snapshot, &lastModel)
+			if cs := ctxTracker.observe(raw.Event, raw.SessionID); cs != nil {
+				emit(cs)
+			}
 
 		case "error":
 			emit(parseErrorEvent(&raw))
@@ -775,38 +772,149 @@ type rawInnerUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 }
 
-// updateContextSnapshot inspects a raw inner stream event for message_start or
-// message_delta usage data. On message_start it resets the snapshot and records
-// the model. On message_delta it fills in output_tokens.
-func updateContextSnapshot(innerEvent json.RawMessage, snapshot **ContextSnapshot, lastModel *string) {
-	if len(innerEvent) == 0 {
+// contextTracker accumulates the context measurement carried by inner stream
+// events (message_start / message_delta) and remembers the context window per
+// model once something has disclosed one.
+//
+// Both streaming paths — ParseEvents and Session's pump — drive one of these so
+// the two agree on cadence, on reset points and on when a measurement is
+// withholdable. The zero value is ready to use.
+type contextTracker struct {
+	snapshot  *ContextSnapshot
+	lastModel string
+	// windows maps a model name to its context window. Keys arrive from
+	// ModelUsage, so they may carry the "[1m]"-style suffix; use windowFor
+	// to look one up by the bare name inner stream events report.
+	windows map[string]int
+	// externalWindow is an optional out-of-band source consulted when the
+	// stream itself has not disclosed a window yet. Session points it at the
+	// windows Session.QueryContextUsage has learned, which is what lets the
+	// very first turn of a session emit. Nil in ParseEvents.
+	externalWindow func(model string) int
+}
+
+// reset drops the in-flight measurement, at a turn boundary or a session init.
+// Learned windows survive: the window is a property of the model, not of a turn.
+func (t *contextTracker) reset() {
+	t.snapshot = nil
+	t.lastModel = ""
+}
+
+// learnWindow records a context window for model. Later calls overwrite, so a
+// model that changes window mid-session converges on the latest report.
+func (t *contextTracker) learnWindow(model string, window int) {
+	if model == "" || window <= 0 {
 		return
+	}
+	if t.windows == nil {
+		t.windows = make(map[string]int, 2)
+	}
+	t.windows[model] = window
+}
+
+// learnWindows records every window a result event's ModelUsage disclosed.
+func (t *contextTracker) learnWindows(mu map[string]ModelUsage) {
+	for model, u := range mu {
+		t.learnWindow(model, u.ContextWindow)
+	}
+}
+
+// windowFor returns the known context window for model, or 0. It tolerates the
+// suffix mismatch between ModelUsage keys ("claude-opus-4-6[1m]") and the bare
+// model names inner stream events carry ("claude-opus-4-6").
+func (t *contextTracker) windowFor(model string) int {
+	if model == "" {
+		return 0
+	}
+	if w, ok := t.windows[model]; ok {
+		return w
+	}
+	prefix := model + "["
+	for k, w := range t.windows {
+		if strings.HasPrefix(k, prefix) {
+			return w
+		}
+	}
+	if t.externalWindow != nil {
+		return t.externalWindow(model)
+	}
+	return 0
+}
+
+// finish stamps the accumulated snapshot with the window the result event
+// disclosed and hands it to ResultEvent, then resets. It returns nil when no
+// stream events were seen (the caller did not enable partial messages), which
+// is the documented nil ContextSnapshot on ResultEvent.
+func (t *contextTracker) finish(mu map[string]ModelUsage) *ContextSnapshot {
+	t.learnWindows(mu)
+	snapshot := t.snapshot
+	if snapshot != nil && t.lastModel != "" {
+		if m, ok := lookupModelUsage(mu, t.lastModel); ok {
+			snapshot.ContextWindow = m.ContextWindow
+		}
+	}
+	t.reset()
+	return snapshot
+}
+
+// observe folds one raw inner stream event into the running measurement and
+// returns the event to emit for it, or nil when there is nothing to say.
+//
+// It returns nil for any inner event other than message_start / message_delta,
+// for malformed payloads, and — deliberately — whenever the context window for
+// the model is still unknown. See ContextSnapshotEvent for why a measurement
+// against a zero window is worse than no measurement at all.
+func (t *contextTracker) observe(innerEvent json.RawMessage, sessionID string) *ContextSnapshotEvent {
+	if len(innerEvent) == 0 {
+		return nil
 	}
 	var peek rawInnerEventType
 	if err := json.Unmarshal(innerEvent, &peek); err != nil {
-		return
+		return nil
 	}
+	var phase ContextSnapshotPhase
 	switch peek.Type {
 	case "message_start":
 		var ms rawMessageStart
 		if err := json.Unmarshal(innerEvent, &ms); err != nil {
-			return
+			return nil
 		}
-		*snapshot = &ContextSnapshot{
+		// message_start opens a new API call: the previous call's numbers
+		// are stale, so start over rather than accumulate.
+		t.snapshot = &ContextSnapshot{
 			InputTokens:              ms.Message.Usage.InputTokens,
 			CacheReadInputTokens:     ms.Message.Usage.CacheReadInputTokens,
 			CacheCreationInputTokens: ms.Message.Usage.CacheCreationInputTokens,
 		}
-		*lastModel = ms.Message.Model
+		t.lastModel = ms.Message.Model
+		phase = ContextSnapshotStart
 	case "message_delta":
-		if *snapshot == nil {
-			return
+		if t.snapshot == nil {
+			return nil
 		}
 		var md rawMessageDelta
 		if err := json.Unmarshal(innerEvent, &md); err != nil {
-			return
+			return nil
 		}
-		(*snapshot).OutputTokens = md.Usage.OutputTokens
+		t.snapshot.OutputTokens = md.Usage.OutputTokens
+		phase = ContextSnapshotFinal
+	default:
+		return nil
+	}
+
+	window := t.windowFor(t.lastModel)
+	if window == 0 {
+		return nil
+	}
+	return &ContextSnapshotEvent{
+		InputTokens:              t.snapshot.InputTokens,
+		CacheReadInputTokens:     t.snapshot.CacheReadInputTokens,
+		CacheCreationInputTokens: t.snapshot.CacheCreationInputTokens,
+		OutputTokens:             t.snapshot.OutputTokens,
+		ContextWindow:            window,
+		Model:                    t.lastModel,
+		SessionID:                sessionID,
+		Phase:                    phase,
 	}
 }
 

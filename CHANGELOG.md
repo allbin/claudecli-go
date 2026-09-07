@@ -15,6 +15,52 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`ContextSnapshotEvent` — the context measurement now arrives as a live
+  event, not only at turn end.** The data was already decoded on every inner
+  `message_start` / `message_delta`, but it was held in a local and attached to
+  `ResultEvent.ContextSnapshot`, so a consumer's context meter sat still for a
+  whole turn and then jumped. It is now emitted as it happens, from both
+  streaming paths (`ParseEvents` and `Session`), which share a new
+  `contextTracker`.
+
+  Fields: `InputTokens`, `CacheReadInputTokens`, `CacheCreationInputTokens`,
+  `OutputTokens`, `ContextWindow`, `Model`, `SessionID`, `Phase`, plus a
+  `Used()` helper summing the four token fields (also added to
+  `ContextSnapshot`). Two events per API call — `Phase`
+  `ContextSnapshotStart` from `message_start`, where the prompt is final but
+  `OutputTokens` is still 0, and `ContextSnapshotFinal` from `message_delta`,
+  where the output has settled. The API emits exactly one `message_delta` per
+  message, so a tool-using turn yields one pair per API call rather than a
+  per-chunk firehose.
+
+  Requires `WithIncludePartialMessages` (off by default): without it the CLI
+  emits no inner stream events and this event never fires, so code that blocks
+  waiting for one waits forever.
+
+  `ContextWindow` is never zero. The CLI discloses the window only in the
+  result event's `modelUsage` and in the `get_context_usage` control response —
+  never on a mid-turn `message_start` (verified against CLI 2.1.263 over three
+  live runs). Emitting against a zero window would render as a full or an empty
+  meter, both wrong, so the event is withheld until a window is known and the
+  window is then remembered for the rest of the session. Consequences: a
+  `Session`'s first turn emits nothing and every later turn does;
+  `ParseEvents` emits nothing at all, since it returns at the terminal result
+  event.
+
+  `ResultEvent.ContextSnapshot` is unchanged — this is purely additive.
+
+### Changed
+
+- **`Session.QueryContextUsage()` now caches the model's context window.** It
+  is the only mid-turn source for the window, so asking once — at connect, say
+  — unblocks `ContextSnapshotEvent` for the session's first turn, which would
+  otherwise stay silent. `RawMaxTokens` is what gets cached (matching
+  `ModelUsage.ContextWindow`), falling back to `MaxTokens`; the smaller
+  compaction-policy window is deliberately not used, as it would make the meter
+  read too full. No API change and no extra round-trips.
+
 ## [0.7.2] - 2026-09-02
 
 ### Fixed

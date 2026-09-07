@@ -74,6 +74,11 @@ type Session struct {
 	activity        *activityTracker // guarded by stateMu
 	lastStdoutAt    atomic.Int64     // unix nanos of last stdout line; 0 until first line
 
+	// contextWindows caches model -> context window learned outside the event
+	// stream (QueryContextUsage). Written by caller goroutines, read by the
+	// readLoop, hence sync.Map. See observedContextWindow.
+	contextWindows sync.Map // map[string]int
+
 	// ToolProgressEvent ticker. toolProgressStop is accessed only from the
 	// readLoop goroutine (start/stop are driven by transition observations,
 	// not user calls). Interval override is atomic so tests can adjust it
@@ -999,8 +1004,7 @@ func (s *Session) readLoop() {
 	scanner.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 
 	var resultText []string
-	var snapshot *ContextSnapshot
-	var lastModel string
+	ctxTracker := contextTracker{externalWindow: s.observedContextWindow}
 	var lastStdoutErr error
 	var unknowns []*UnknownEvent
 	var turnCounter int
@@ -1048,8 +1052,7 @@ func (s *Session) readLoop() {
 		case "system":
 			// decodeStatelessEvent handles every subtype but init.
 			resultText = nil
-			snapshot = nil
-			lastModel = ""
+			ctxTracker.reset()
 			ev := parseInitEvent(&raw)
 			s.stateMu.Lock()
 			s.sessionID = raw.SessionID
@@ -1132,11 +1135,7 @@ func (s *Session) readLoop() {
 
 		case "result":
 			modelUsage := convertModelUsage(raw.ModelUsage)
-			if snapshot != nil && lastModel != "" {
-				if mu, ok := lookupModelUsage(modelUsage, lastModel); ok {
-					snapshot.ContextWindow = mu.ContextWindow
-				}
-			}
+			snapshot := ctxTracker.finish(modelUsage)
 			// Classify error_max_turns as a non-fatal ErrorEvent so
 			// downstream consumers see the typed error alongside the
 			// terminating ResultEvent (matches ParseEvents behaviour).
@@ -1157,8 +1156,6 @@ func (s *Session) readLoop() {
 				ContextSnapshot:  snapshot,
 			}
 			resultText = nil
-			snapshot = nil
-			lastModel = ""
 			// Ankomststämpla FÖRE trackState: trackState släpper state till
 			// Idle, vilket öppnar för nästa Query/QueryCtx att arma en ny
 			// generation. Stämpeln måste redan vara tagen då — annars kan
@@ -1173,7 +1170,9 @@ func (s *Session) readLoop() {
 				SessionID: raw.SessionID,
 				Event:     raw.Event,
 			})
-			updateContextSnapshot(raw.Event, &snapshot, &lastModel)
+			if cs := ctxTracker.observe(raw.Event, raw.SessionID); cs != nil {
+				pumpSend(cs)
+			}
 
 		case "error":
 			errEv := parseErrorEvent(&raw)
