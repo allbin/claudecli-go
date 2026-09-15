@@ -602,6 +602,7 @@ Session methods:
 - `Ping(timeout)` — round-trip a side-effect-free control request (`get_binary_version`) to prove the CLI's read loop is alive (not just that the process is running). Watchdog-friendly: any CLI response, including an error, counts as success
 - `SetPermissionMode(mode)` — change permissions mid-session
 - `SetModel(model)` — change model mid-session
+- `SetEffort(level)` — change reasoning effort mid-session, without a restart, and return the level the CLI resolved. Applies from the next API request, including the rest of a running turn; `""` resets to the model's default. The return value is read back from the session rather than echoed, so compare it to what you asked for: the CLI ignores an unrecognised level (the previous one stays), caps can lower it, and a model without effort (claude-haiku-4-5) returns `""`. Expect a change to invalidate the prompt cache (seen on claude-opus-5 and claude-sonnet-5). The CLI also sets the `unpin*LaunchEffort` flags in the global `.claude.json`, as `/effort` does. Checked against CLI 2.1.270 on the requests it sends, not just `get_settings`
 - `RegisterRepoRoot(dir)` — grant tool access to another directory mid-session (runtime `/add-dir`), returning the directory the CLI registered. Unlike `WithAddDirs`, which is start-time only, this avoids tearing down the session to reach a newly discovered directory. A relative path resolves against the **CLI's** working directory — not the Go process's when `WithWorkDir` is set — so use the returned value rather than `filepath.Abs`. Not idempotent: the directory must exist and must not already be registered. Requires CLI 2.1.224+; fires the `DirectoryAdded` hook.
 - `GetServerInfo()` — raw JSON from the initialize handshake
 - `RewindFiles(userMessageID)` — rewind files to a checkpoint
@@ -611,8 +612,8 @@ Session methods:
 - `StopTask(taskID)` — stop a running task
 - `BackgroundTask(toolUseID)` — background a running foreground task (Ctrl+B semantics) instead of killing it: the blocking tool call returns immediately and the work continues, emitting a `task_notification` when it settles. Empty id backgrounds every foreground task
 - `QueryContextUsage()` — live `*ContextUsage` breakdown of the context window. Prefer this over `ResultEvent.ContextSnapshot`/`ModelUsage` when the number must survive compaction: those describe the last API call and drift upward until the next turn. Also caches the model's window, which is what lets `ContextSnapshotEvent` fire during the session's *first* turn
-- `QuerySettings()` — effective, per-source and runtime-resolved settings (`Applied` is where the session's real effort level is reported)
-- `ApplyFlagSettings(map[string]any)` — merge settings into the session-scoped flag layer. Accepts any settings key, including `effortLevel` and `ultracode` (which has no CLI flag)
+- `QuerySettings()` — effective, per-source and runtime-resolved settings (`Applied` is where the session's real effort level is reported; `AppliedEffort()` decodes it)
+- `ApplyFlagSettings(map[string]any)` — merge settings into the session-scoped flag layer. Accepts any settings key, including `effortLevel` (prefer `SetEffort`) and `ultracode` (which has no CLI flag)
 - `SetPermissionRules(PermissionRules)` — replace allow/deny/ask rules mid-session. `SetPermissionMode` only switches the *mode*; this changes the rules themselves
 - `SetMaxThinkingTokens(tokens, display)` — change the extended-thinking budget and display mode mid-session. A nil budget resets to the session default; cannot enable thinking on a session that has it disabled
 - `RenameSession(title)` — set the session's user-facing title

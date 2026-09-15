@@ -15,6 +15,31 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`Session.SetEffort(EffortLevel)`** — change reasoning effort on a live
+  session. It returns the level the CLI resolved, read back from `get_settings`.
+  `WithEffort` only sets effort at launch, so until now a host had to restart the
+  CLI to change it.
+
+  Checked against CLI 2.1.270 by recording `output_config.effort` on the
+  requests the CLI sends, for claude-opus-5, claude-fable-5-1 and
+  claude-sonnet-5. The new level applies from the next request, including the
+  rest of a turn already running. `""` resets to the model's default.
+
+  Compare the returned level with the one you asked for. The CLI answers
+  success either way: it ignores an unrecognised level and keeps the previous
+  one, a `maxEffortLevel` cap can lower it, and a model without effort
+  (claude-haiku-4-5) returns `""`.
+
+  Expect a change to invalidate the prompt cache. On claude-opus-5 and
+  claude-sonnet-5 the next request wrote the conversation back into it. The CLI also sets `unpinOpus47LaunchEffort`,
+  `unpinOpus48LaunchEffort` and `unpinFable5LaunchEffort` in the global
+  `.claude.json`, which `/effort` does too. The level lasts for the session
+  only, so pass `WithEffort` again on resume.
+- **`SettingsSnapshot.AppliedEffort()`** — decodes the resolved effort level
+  from `QuerySettings().Applied`.
+
 ## [0.8.0] - 2026-09-07
 
 ### Added
