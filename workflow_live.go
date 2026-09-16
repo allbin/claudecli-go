@@ -315,6 +315,7 @@ func appendTranscriptLine(out []WorkflowTranscriptEvent, line []byte) []Workflow
 				add(&ToolResultEvent{
 					ToolUseID: block.ToolUseID,
 					Content:   extractContent(block.Content),
+					IsError:   block.IsError,
 				})
 			case "text":
 				texts = append(texts, UserContent{Type: "text", Text: block.Text})

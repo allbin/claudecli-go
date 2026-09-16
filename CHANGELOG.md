@@ -15,6 +15,18 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`ToolResultEvent.IsError` and `UserContent.IsError`.** The CLI flags a
+  failed tool call with `"is_error": true` on its `tool_result` block, both on
+  the stream and in the session transcripts `ReadWorkflowAgentTranscript`
+  reads. The SDK dropped the flag, so every consumer rendered a failed Read,
+  Bash or denied permission as a success. It is now set on `UserContent`
+  (stream tool results), on `ToolResultEvent` (MCP results on the stream) and
+  on transcript `ToolResultEvent`s. False means "not flagged", not "confirmed
+  success": CLI 2.1.270 sometimes omits the key on a successful result and
+  sometimes sends `false`.
+
 ## [0.10.0] - 2026-09-16
 
 ### Added

@@ -1505,6 +1505,43 @@ func TestParseUserEventToolResult(t *testing.T) {
 	}
 }
 
+func TestParseToolResultIsError(t *testing.T) {
+	input := `{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_bad","type":"tool_result","content":"<tool_use_error>File does not exist.</tool_use_error>","is_error":true},{"tool_use_id":"toolu_ok","type":"tool_result","content":"ok","is_error":false},{"tool_use_id":"toolu_omitted","type":"tool_result","content":"ok"}]},"parent_tool_use_id":null,"session_id":"test","uuid":"uuid1"}
+{"type":"assistant","message":{"content":[{"type":"tool_result","tool_use_id":"tu_mcp","content":"boom","is_error":true}]}}
+{"type":"result","subtype":"success","usage":{"input_tokens":1,"output_tokens":1}}
+`
+	ch := make(chan Event, 64)
+	go func() {
+		ParseEvents(context.Background(), strings.NewReader(input), ch)
+		close(ch)
+	}()
+
+	userFlags := map[string]bool{}
+	var mcp *ToolResultEvent
+	for e := range ch {
+		switch ev := e.(type) {
+		case *UserEvent:
+			for _, c := range ev.Content {
+				userFlags[c.ToolUseID] = c.IsError
+			}
+		case *ToolResultEvent:
+			mcp = ev
+		}
+	}
+	want := map[string]bool{"toolu_bad": true, "toolu_ok": false, "toolu_omitted": false}
+	if len(userFlags) != len(want) {
+		t.Fatalf("user tool results = %v, want %v", userFlags, want)
+	}
+	for id, w := range want {
+		if userFlags[id] != w {
+			t.Errorf("UserContent %s IsError = %v, want %v", id, userFlags[id], w)
+		}
+	}
+	if mcp == nil || !mcp.IsError {
+		t.Errorf("ToolResultEvent = %+v, want IsError true", mcp)
+	}
+}
+
 func TestParseUserEventSubagentPrompt(t *testing.T) {
 	input := `{"type":"system","session_id":"test","model":"sonnet"}
 {"type":"user","message":{"role":"user","content":[{"type":"text","text":"Read go.mod"}]},"parent_tool_use_id":"toolu_agent1","session_id":"test","uuid":"uuid2","timestamp":"2026-03-29T18:36:53.939Z"}

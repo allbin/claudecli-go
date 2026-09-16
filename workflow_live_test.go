@@ -517,6 +517,49 @@ func TestReadWorkflowAgentTranscriptSkipsUnknown(t *testing.T) {
 	}
 }
 
+func TestReadWorkflowAgentTranscriptToolResultIsError(t *testing.T) {
+	// The fixture's Read result omits is_error and its Bash result sends
+	// false; neither may read as flagged.
+	evs, _, err := ReadWorkflowAgentTranscript(fixtureLaunch("run"), sleeperAID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var results int
+	for _, e := range evs {
+		if tr, ok := e.Event.(*ToolResultEvent); ok {
+			results++
+			if tr.IsError {
+				t.Errorf("fixture result %s IsError = true, want false", tr.ToolUseID)
+			}
+		}
+	}
+	if results != 2 {
+		t.Fatalf("fixture tool results = %d, want 2", results)
+	}
+
+	// Hand-built: the fixture run had no failing tool call.
+	launch := tempRun(t)
+	path, _ := launch.AgentTranscriptPath("abc123")
+	lines := []string{
+		`{"type":"user","uuid":"u1","timestamp":"2026-09-16T14:09:08.678Z","message":{"role":"user","content":[{"tool_use_id":"toolu_bad","type":"tool_result","content":"<tool_use_error>File does not exist.</tool_use_error>","is_error":true}]}}`,
+		`{"type":"user","uuid":"u2","timestamp":"2026-09-16T14:09:09.678Z","message":{"role":"user","content":[{"tool_use_id":"toolu_ok","type":"tool_result","content":"fine","is_error":false}]}}`,
+	}
+	os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
+	evs, _, err = ReadWorkflowAgentTranscript(launch, "abc123", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, e := range evs {
+		if tr, ok := e.Event.(*ToolResultEvent); ok {
+			got[tr.ToolUseID] = tr.IsError
+		}
+	}
+	if len(got) != 2 || !got["toolu_bad"] || got["toolu_ok"] {
+		t.Errorf("IsError by tool use = %v, want toolu_bad:true toolu_ok:false", got)
+	}
+}
+
 func TestJournalPathScriptPathFallback(t *testing.T) {
 	// Before 0.10.0 this fallback resolved to <session>/workflows/subagents/...
 	l := &WorkflowLaunch{RunID: "wf_x", ScriptPath: "/p/sess/workflows/scripts/n-wf_x.js"}

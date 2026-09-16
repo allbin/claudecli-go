@@ -607,8 +607,14 @@ type ToolContent struct {
 // ParentToolUseID is set when this event comes from a subagent (links to the
 // parent Agent ToolUseEvent.ID). Empty for top-level assistant turns.
 type ToolResultEvent struct {
-	ToolUseID       string
-	Content         []ToolContent
+	ToolUseID string
+	Content   []ToolContent
+	// IsError is the tool_result block's is_error flag: the tool call failed
+	// (a missing file, a non-zero exit, a denied permission). It is false when
+	// the CLI omits the key. CLI 2.1.270 sometimes omits it on a successful
+	// result and sometimes sends false, so false means "not flagged", not
+	// "confirmed success".
+	IsError         bool
 	ParentToolUseID string
 }
 
@@ -695,6 +701,10 @@ type UserContent struct {
 	Text      string        // populated when Type == "text"
 	ToolUseID string        // populated when Type == "tool_result"
 	Content   []ToolContent // tool result content; populated when Type == "tool_result"
+	// IsError reports the tool_result block's is_error flag when Type ==
+	// "tool_result". False when the CLI omits the key, so it means "not
+	// flagged" rather than "confirmed success"; see [ToolResultEvent.IsError].
+	IsError bool
 }
 
 // AgentResult contains metadata from a completed subagent execution.

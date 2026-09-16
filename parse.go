@@ -266,6 +266,7 @@ func parseContentBlock(block rawContent, meta assistantMeta, resultText *[]strin
 		emit(&ToolResultEvent{
 			ToolUseID:       block.ToolUseID,
 			Content:         extractContent(block.Content),
+			IsError:         block.IsError,
 			ParentToolUseID: meta.ParentToolUseID,
 		})
 	default:
@@ -658,6 +659,7 @@ type rawContent struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
 }
 
 type rawRateLimitInfo struct {
@@ -940,6 +942,7 @@ func parseUserEvent(raw *rawEvent) *UserEvent {
 			case "tool_result":
 				uc.ToolUseID = block.ToolUseID
 				uc.Content = extractContent(block.Content)
+				uc.IsError = block.IsError
 			}
 			ev.Content = append(ev.Content, uc)
 		}
