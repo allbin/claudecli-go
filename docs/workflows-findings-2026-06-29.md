@@ -179,9 +179,9 @@ while the run is live:
 
 | File | Contents |
 | --- | --- |
-| `journal.jsonl` | `{"type":"launched"}`, then per agent `{"type":"started","key","agentId","label","phase"}` and `{"type":"result","key","agentId","result"}`, appended as agents start and finish. `phase` is `"Sleep"` etc.; the phase-less run was not inspected for it. |
+| `journal.jsonl` | `{"type":"launched"}`, then per agent `{"type":"started","key","agentId","label","phase"}` and `{"type":"result","key","agentId","result"}`, appended as agents start and finish. Without phases, `started` has no `phase` key. |
 | `agent-<agentId>.jsonl` | The agent's transcript in Claude Code's session JSONL format: a `user` line with the prompt as a string, `attachment` lines (`deferred_tools_delta`, `environment`, `model`, `skill_listing`, `instructions`, `session_context`, `date`, `prompt_snapshot`, `auto_mode`, `total_tokens_reminder`), and `assistant` lines (one content block per line, with `message.model`) and `user` lines with `tool_result`. Every line has `uuid`, `timestamp`, `isSidechain: true`, `agentId`. A Bash `tool_use` is on disk while the command runs. |
-| `agent-<agentId>.meta.json` | `{"agentType":"workflow-subagent","description":<label>,"workflowPhase","spawnDepth":1,"requestShape":"foreground","requestNonInteractive":true}`. No `model` or `worktreePath` appeared in these runs. |
+| `agent-<agentId>.meta.json` | `{"agentType":"workflow-subagent","description":<label>,"workflowPhase","spawnDepth":1,"requestShape":"foreground","requestNonInteractive":true}`. Without phases there is no `workflowPhase` key. No `model` or `worktreePath` appeared in these runs. |
 
 Agent ids seen: 17 lowercase hex characters (`acf991b72ff3c46ab`).
 
