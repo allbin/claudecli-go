@@ -165,3 +165,19 @@ func TestTaskTypeBackfillSession(t *testing.T) {
 		}
 	}
 }
+
+// CLI 2.1.270 sends task_updated{patch.status:"completed"} immediately before
+// the workflow's task_notification. The terminal patch must not prune the
+// entry, or the notification loses its classification.
+func TestTaskTypeBackfillTerminalUpdateBeforeNotification(t *testing.T) {
+	b := newTaskTypeBackfiller()
+	b.apply(&TaskEvent{Subtype: "task_started", TaskID: "w8", TaskType: "local_workflow", WorkflowName: "wf"})
+	up := b.apply(&TaskEvent{Subtype: "task_updated", TaskID: "w8", Status: "completed"})
+	notif := b.apply(&TaskEvent{Subtype: "task_notification", TaskID: "w8", Status: "completed"})
+	if !up.IsWorkflow() || !notif.IsWorkflow() || notif.WorkflowName != "wf" {
+		t.Errorf("updated=%v notification=%v name=%q", up.IsWorkflow(), notif.IsWorkflow(), notif.WorkflowName)
+	}
+	if _, ok := b.byID["w8"]; ok {
+		t.Error("entry not pruned after task_notification")
+	}
+}

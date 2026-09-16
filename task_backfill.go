@@ -75,7 +75,10 @@ func (b *taskTypeBackfiller) apply(ev *TaskEvent) *TaskEvent {
 	// Prune after stamping so the terminal task_notification still gets the
 	// backfill before its entry is dropped. Terminal task statuses share the
 	// workflow status vocabulary (completed/stopped/killed/failed/error).
-	if workflowStatusTerminal(ev.Status) {
+	// Only task_notification prunes: CLI 2.1.270 sends a task_updated with a
+	// terminal patch status just BEFORE the workflow's task_notification, and
+	// pruning there left the notification with IsWorkflow() == false.
+	if ev.Subtype == "task_notification" && workflowStatusTerminal(ev.Status) {
 		delete(b.byID, ev.TaskID)
 	}
 	return ev

@@ -96,6 +96,35 @@ func TestWorkflowTickKindsPhasedFixture(t *testing.T) {
 	}
 }
 
+// Every event of the workflow task, including the task_updated and
+// task_notification that close it, classifies as a workflow.
+func TestWorkflowLifecycleClassifiedFixture(t *testing.T) {
+	for _, name := range []string{"stream-phased.jsonl", "stream-unphased.jsonl"} {
+		tasks := decodeFixtureTasks(t, name)
+		workflowID := ""
+		for _, te := range tasks {
+			if te.Subtype == "task_started" && te.IsWorkflow() {
+				workflowID = te.TaskID
+			}
+		}
+		var subtypes []string
+		for _, te := range tasks {
+			if te.TaskID != workflowID {
+				continue
+			}
+			if !te.IsWorkflow() {
+				t.Errorf("%s: %s not classified as workflow", name, te.Subtype)
+			}
+			if te.Subtype != "task_progress" {
+				subtypes = append(subtypes, te.Subtype)
+			}
+		}
+		if got := strings.Join(subtypes, ","); got != "task_started,task_updated,task_notification" {
+			t.Errorf("%s: lifecycle = %s", name, got)
+		}
+	}
+}
+
 func TestWorkflowTickResolvesAgentIDsFromTree(t *testing.T) {
 	tasks := decodeFixtureTasks(t, "stream-phased.jsonl")
 	ids := map[string]string{}
