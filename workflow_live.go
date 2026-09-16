@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -42,6 +43,14 @@ var workflowAgentIDPattern = regexp.MustCompile(`^[a-z0-9]+$`)
 // validWorkflowAgentID reports whether id is safe to join into a path.
 func validWorkflowAgentID(id string) bool { return workflowAgentIDPattern.MatchString(id) }
 
+// validWorkflowRunID reports whether a run id is safe to join into a path as a
+// single element. The CLI's run ids look like "wf_1ed45b93-047", but that shape
+// is not pinned, so only what could leave the directory is refused: an empty
+// id, "." and "..", and any path separator.
+func validWorkflowRunID(id string) bool {
+	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, `/\`)
+}
+
 // transcriptDir returns the run's transcript directory, preferring the
 // CLI-reported TranscriptDir and falling back to a ScriptPath derivation.
 func (l *WorkflowLaunch) transcriptDir() string {
@@ -51,7 +60,7 @@ func (l *WorkflowLaunch) transcriptDir() string {
 	if l.TranscriptDir != "" {
 		return l.TranscriptDir
 	}
-	if l.ScriptPath != "" && l.RunID != "" {
+	if l.ScriptPath != "" && validWorkflowRunID(l.RunID) {
 		session := filepath.Dir(filepath.Dir(filepath.Dir(l.ScriptPath)))
 		return filepath.Join(session, "subagents", "workflows", l.RunID)
 	}

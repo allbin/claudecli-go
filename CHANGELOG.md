@@ -55,6 +55,15 @@ or pin a specific version (e.g. `@v0.1.0`).
   relied on its auth or install calls describing the process's default
   account, use a client without that entry for those calls.
 
+- **A workflow `RunID` could escape the session directory.** `ManifestPath`
+  and the `ScriptPath`-derived `JournalPath` joined `RunID` as given, and it
+  comes from agent-influenced data, so `"../../x"` pointed `ReadWorkflowSnapshot`
+  or the live readers outside the run. A `RunID` that is empty, `.`, `..` or
+  contains a path separator now derives no path (`""`, or `ErrNoTranscriptDir`
+  from the readers). Real run ids (`wf_1ed45b93-047`) are unaffected. An
+  explicit `TranscriptDir` is still used as given; confining it to
+  `ProjectsDir()` stays the caller's job.
+
 ## [0.10.0] - 2026-09-16
 
 ### Added

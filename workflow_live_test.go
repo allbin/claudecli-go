@@ -568,6 +568,27 @@ func TestJournalPathScriptPathFallback(t *testing.T) {
 	}
 }
 
+func TestWorkflowRunIDTraversalRefused(t *testing.T) {
+	for _, id := range []string{"", ".", "..", "../../../etc/passwd", `..\..\x`, "wf/x"} {
+		viaScript := &WorkflowLaunch{RunID: id, ScriptPath: "/p/sess/workflows/scripts/n.js"}
+		if got := viaScript.JournalPath(); got != "" {
+			t.Errorf("RunID %q: JournalPath = %q, want \"\"", id, got)
+		}
+		if got := viaScript.ManifestPath(); got != "" {
+			t.Errorf("RunID %q: ManifestPath via ScriptPath = %q, want \"\"", id, got)
+		}
+		viaDir := &WorkflowLaunch{RunID: id, TranscriptDir: "/p/sess/subagents/workflows/wf_x"}
+		if got := viaDir.ManifestPath(); got != "" {
+			t.Errorf("RunID %q: ManifestPath via TranscriptDir = %q, want \"\"", id, got)
+		}
+	}
+	// An explicit TranscriptDir does not depend on RunID.
+	l := &WorkflowLaunch{RunID: "..", TranscriptDir: "/p/sess/subagents/workflows/wf_x"}
+	if got := l.JournalPath(); got != "/p/sess/subagents/workflows/wf_x/journal.jsonl" {
+		t.Errorf("JournalPath = %q", got)
+	}
+}
+
 func TestReadWorkflowSnapshotFixture(t *testing.T) {
 	// The manifest the CLI wrote when the fixture run ended.
 	data, err := os.ReadFile(filepath.Join(workflowFixtureDir, "manifest.json"))

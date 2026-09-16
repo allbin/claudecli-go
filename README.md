@@ -1130,7 +1130,8 @@ A journal or transcript that does not exist yet returns an error wrapping
 `ErrInvalidAgentID` before a path is built, because the id comes from
 agent-influenced data. Unknown line types and content blocks are skipped.
 
-`TranscriptDir`, `ScriptPath` and `RunID` are joined as given. They come from
+`TranscriptDir` and `ScriptPath` are used as given (a `RunID` with a path
+separator or dots derives no path). They come from
 the stream, so a consumer that reads files on the strength of them should
 check the result is inside the CLI's projects root. `client.ProjectsDir()`
 returns that root: `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`,

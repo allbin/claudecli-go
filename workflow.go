@@ -51,7 +51,8 @@ func parseWorkflowLaunch(data json.RawMessage) *WorkflowLaunch {
 
 // ManifestPath returns the path to the workflow's run-state manifest
 // (<session>/workflows/<runId>.json), derived from ScriptPath. Returns ""
-// if the path cannot be derived.
+// if the path cannot be derived, including when RunID is empty, "." or "..",
+// or contains a path separator, since RunID comes from agent-influenced data.
 //
 // The CLI writes the manifest once, when the run reaches a terminal status
 // (CLI 2.1.270: in the same instant as the journal's last record, before
@@ -60,7 +61,7 @@ func parseWorkflowLaunch(data json.RawMessage) *WorkflowLaunch {
 // that. It survives --no-session-persistence. Its layout is an
 // undocumented CLI implementation detail and may change between versions.
 func (l *WorkflowLaunch) ManifestPath() string {
-	if l == nil || l.RunID == "" {
+	if l == nil || !validWorkflowRunID(l.RunID) {
 		return ""
 	}
 	// ScriptPath is <session>/workflows/scripts/<name>-<runId>.js, so the
