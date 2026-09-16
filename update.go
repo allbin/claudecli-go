@@ -260,7 +260,7 @@ func Update(ctx context.Context, opts ...UpdateOption) (*UpdateResult, error) {
 // Update runs the Claude CLI's own updater for this client's binary. See the
 // package-level [Update] for the full contract.
 func (c *Client) Update(ctx context.Context, opts ...UpdateOption) (*UpdateResult, error) {
-	result, err := runUpdate(ctx, c.binaryPath(), osUpdateEnv(), opts)
+	result, err := runUpdate(ctx, c.binaryPath(), newUpdateEnv(c.cliEnv()), opts)
 	if err != nil {
 		c.log().Debug("update", "err", err)
 		return result, err
@@ -282,11 +282,17 @@ type updateEnv struct {
 	runUpdate func(ctx context.Context, binary string, onLine func(string)) (int, error)
 }
 
-func osUpdateEnv() updateEnv {
+// newUpdateEnv builds the update operations for a client whose CLI runs with
+// env; `claude update` runs with that env too, so it updates the install that
+// client's config dir names.
+func newUpdateEnv(env cliEnv) updateEnv {
+	cmdEnv := env.cmdEnv()
 	return updateEnv{
-		installEnv: osInstallEnv(),
+		installEnv: newInstallEnv(env),
 		writable:   checkWritable,
-		runUpdate:  execUpdate,
+		runUpdate: func(ctx context.Context, binary string, onLine func(string)) (int, error) {
+			return execUpdate(ctx, binary, cmdEnv, onLine)
+		},
 	}
 }
 
@@ -468,8 +474,9 @@ func checkWritable(dir string) error {
 // before the kill lands after updateInterruptGrace. Windows has no deliverable
 // interrupt from a windowless parent, so cancellation there is an immediate
 // job-object tree kill: no grace period, but no orphaned children either.
-func execUpdate(ctx context.Context, binary string, onLine func(string)) (int, error) {
+func execUpdate(ctx context.Context, binary string, env []string, onLine func(string)) (int, error) {
 	cmd := exec.CommandContext(ctx, binary, "update")
+	cmd.Env = env
 	pp := setUpdateCancel(cmd)
 	cmd.WaitDelay = updateInterruptGrace
 

@@ -26,6 +26,34 @@ or pin a specific version (e.g. `@v0.1.0`).
   on transcript `ToolResultEvent`s. False means "not flagged", not "confirmed
   success": CLI 2.1.270 sometimes omits the key on a successful result and
   sometimes sends `false`.
+- **`Client.ProjectsDir()` and `ProjectsDir()`.** They return the projects root
+  a client's CLI writes session and workflow transcripts under, so a consumer
+  can confine a `WorkflowLaunch.TranscriptDir` taken from the stream.
+  `CLAUDE_CONFIG_DIR` is resolved as the spawned CLI sees it: a `WithEnv` entry
+  in the client's defaults overrides the process environment. Without that, a
+  client built with `WithEnv(map[string]string{"CLAUDE_CONFIG_DIR": dir})`
+  looked under the process's config dir while its CLI wrote under `dir`. A set
+  but empty or relative value returns the new `ErrConfigDirNotAbsolute`,
+  because CLI 2.1.270 does not fall back to `~/.claude` for an empty value; it
+  writes `projects/` under the run's working directory. A per-call `WithEnv`
+  and a `CLAUDE_CONFIG_DIR` set in a settings file's env block are not seen.
+
+### Fixed
+
+- **`DetectInstall`, `LatestPublished`, `Update` and the auth commands ignored
+  a client's `WithEnv`.** They read `CLAUDE_CONFIG_DIR`, `XDG_DATA_HOME`,
+  `HOME` and the auto-updater switches from the process environment and
+  spawned `claude -v`, `claude update` and `claude auth` without the client's
+  entries. A client with its own `CLAUDE_CONFIG_DIR` therefore reported the
+  process account's settings, update state and login: `AuthStatus` said
+  "authenticated" for a config dir that holds no credentials, and `AuthLogin`
+  and `AuthLogout` acted on the wrong account. They now see what `Run` sees.
+  Clients without `WithEnv`, including the package-level shortcuts, behave as
+  before.
+
+  Upgrade note: if you built a client with `WithEnv(CLAUDE_CONFIG_DIR)` and
+  relied on its auth or install calls describing the process's default
+  account, use a client without that entry for those calls.
 
 ## [0.10.0] - 2026-09-16
 

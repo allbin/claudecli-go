@@ -256,7 +256,7 @@ func DetectInstall(ctx context.Context) (*InstallInfo, error) {
 // DetectInstall reports how this client's Claude CLI was installed. See the
 // package-level [DetectInstall] for the full contract.
 func (c *Client) DetectInstall(ctx context.Context) (*InstallInfo, error) {
-	info, err := detectInstall(ctx, c.binaryPath(), osInstallEnv())
+	info, err := detectInstall(ctx, c.binaryPath(), newInstallEnv(c.cliEnv()))
 	if err != nil {
 		return nil, err
 	}
@@ -284,19 +284,28 @@ type installEnv struct {
 	dataDir     string              // $XDG_DATA_HOME, else ~/.local/share
 }
 
-func osInstallEnv() installEnv {
-	dir, file := claudeConfigPaths()
+func osInstallEnv() installEnv { return newInstallEnv(nil) }
+
+// newInstallEnv builds the lookups for a client whose CLI runs with env over
+// the process environment. Variables, the config and data dirs, and the
+// version probe all see what that client's CLI sees, so a client built with
+// WithEnv(CLAUDE_CONFIG_DIR) reads that account's settings and update state.
+func newInstallEnv(env cliEnv) installEnv {
+	dir, file := claudeConfigPaths(env)
+	cmdEnv := env.cmdEnv()
 	return installEnv{
 		lookPath:    exec.LookPath,
 		evalSymlink: filepath.EvalSymlinks,
 		readFile:    readSmallFile,
 		readHeader:  readFileHeader,
-		runVersion:  runVersionProbe,
-		pathDirs:    osPathDirs,
-		getenv:      os.Getenv,
-		configDir:   dir,
-		configFile:  file,
-		dataDir:     xdgDataDir(),
+		runVersion: func(ctx context.Context, binary string) (string, error) {
+			return runVersionProbe(ctx, binary, cmdEnv)
+		},
+		pathDirs:   osPathDirs,
+		getenv:     env.getenv,
+		configDir:  dir,
+		configFile: file,
+		dataDir:    xdgDataDir(env),
 	}
 }
 
@@ -312,11 +321,11 @@ func (e installEnv) env(name string) string {
 // xdgDataDir reports the base directory the native installer keeps its
 // versioned binaries under — $XDG_DATA_HOME, else ~/.local/share, matching the
 // CLI's own resolution.
-func xdgDataDir() string {
-	if d := os.Getenv("XDG_DATA_HOME"); d != "" {
+func xdgDataDir(env cliEnv) string {
+	if d := env.getenv("XDG_DATA_HOME"); d != "" {
 		return d
 	}
-	home, err := os.UserHomeDir()
+	home, err := env.userHomeDir()
 	if err != nil {
 		return ""
 	}
@@ -325,12 +334,14 @@ func xdgDataDir() string {
 
 // claudeConfigPaths reports the CLI's config directory and config file.
 // CLAUDE_CONFIG_DIR relocates both; otherwise the directory is ~/.claude and
-// the file is ~/.claude.json (they are deliberately not nested).
-func claudeConfigPaths() (dir, file string) {
-	if d := os.Getenv("CLAUDE_CONFIG_DIR"); d != "" {
+// the file is ~/.claude.json (they are deliberately not nested). Unlike
+// [Client.ProjectsDir], an empty CLAUDE_CONFIG_DIR is treated as unset: the
+// probe degrades to the default layout rather than failing.
+func claudeConfigPaths(env cliEnv) (dir, file string) {
+	if d := env.getenv("CLAUDE_CONFIG_DIR"); d != "" {
 		return d, filepath.Join(d, ".claude.json")
 	}
-	home, err := os.UserHomeDir()
+	home, err := env.userHomeDir()
 	if err != nil {
 		return "", ""
 	}
@@ -366,13 +377,14 @@ func readFileHeader(name string) ([]byte, error) {
 
 // runVersionProbe runs `<binary> -v` and returns the version token the CLI
 // prints (it emits e.g. "2.1.87 (Claude Code)").
-func runVersionProbe(ctx context.Context, binary string) (string, error) {
+func runVersionProbe(ctx context.Context, binary string, env []string) (string, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, defaultInstallTimeout)
 		defer cancel()
 	}
 	cmd := exec.CommandContext(ctx, binary, "-v")
+	cmd.Env = env
 	hideConsole(cmd)
 	out, err := cmd.Output()
 	if err != nil {

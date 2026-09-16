@@ -171,6 +171,9 @@ err = client.AuthLogout(ctx)
 ```
 
 Package-level shortcuts (`AuthStatus`, `AuthLogin`, `AuthLogout`) use the default client.
+The auth commands run with the client's default `WithEnv` entries, as `Run`
+does, so a client with its own `CLAUDE_CONFIG_DIR` checks and changes that
+account.
 Use `NewClient([]ClientOption{WithLogger(logger)})` for debug logging.
 
 | Login option              | Description                          |
@@ -250,8 +253,11 @@ which need not describe the binary now first on PATH, so it only breaks ties
 (`Source` is then `config`). When it disagrees with conclusive path evidence,
 the path wins and `ConfigMismatch` is set.
 
-`client.DetectInstall(ctx)` uses that client's configured binary; the
-package-level shortcut uses the default client.
+`client.DetectInstall(ctx)` uses that client's configured binary and its
+default `WithEnv` entries (`CLAUDE_CONFIG_DIR`, `XDG_DATA_HOME`, `HOME`, the
+auto-updater switches), so it reads the config the client's CLI reads. The same
+holds for `LatestPublished` and `Update`. The package-level shortcuts use the
+default client.
 
 ### Every copy on PATH
 
@@ -1124,6 +1130,15 @@ A journal or transcript that does not exist yet returns an error wrapping
 `ErrInvalidAgentID` before a path is built, because the id comes from
 agent-influenced data. Unknown line types and content blocks are skipped.
 
+`TranscriptDir`, `ScriptPath` and `RunID` are joined as given. They come from
+the stream, so a consumer that reads files on the strength of them should
+check the result is inside the CLI's projects root. `client.ProjectsDir()`
+returns that root: `$CLAUDE_CONFIG_DIR/projects`, else `~/.claude/projects`,
+with the client's default `WithEnv` entries taking precedence over the process
+environment, as they do for the CLI it spawns. A set but empty or relative
+`CLAUDE_CONFIG_DIR` returns `ErrConfigDirNotAbsolute`: the CLI then writes
+`projects/` under each run's working directory.
+
 ### The final manifest
 
 `WorkflowLaunch.ManifestPath()` (`<session>/workflows/<runId>.json`) is written
@@ -1443,6 +1458,7 @@ claudecli-go/
   workflow_live.go Live workflow files: offset-based journal and agent transcript readers, agent meta
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
   client.go      Client struct, Run/RunText/RunJSON/Connect, package-level shortcuts
+  env.go         The env a client's CLI sees (WithEnv over the process env): ProjectsDir, and the lookups DetectInstall/Update/auth spawn with
   session.go     Interactive session with bidirectional control protocol
   control.go     Control message types, ContentBlock/ImageSource for multimodal input
   blocking.go    RunBlocking/RunBlockingJSON — non-streaming JSON output mode

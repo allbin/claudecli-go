@@ -214,6 +214,10 @@ const defaultAuthTimeout = 5 * time.Second
 // AuthStatus returns the current authentication state. Errors are reserved for
 // infrastructure failures (binary not found, timeout). "Not logged in" is
 // returned as a result with Status == AuthStateUnauthenticated, not an error.
+//
+// The auth commands run with the client's default WithEnv entries, like Run
+// does, so a client with its own CLAUDE_CONFIG_DIR reports, logs in and logs
+// out that account rather than the process's.
 func (c *Client) AuthStatus(ctx context.Context) (*AuthStatusResult, error) {
 	log := c.log()
 	binary, err := exec.LookPath(c.binaryPath())
@@ -231,6 +235,7 @@ func (c *Client) AuthStatus(ctx context.Context) (*AuthStatusResult, error) {
 	}
 
 	cmd := exec.CommandContext(ctx, binary, "auth", "status", "--json")
+	cmd.Env = c.cliEnv().cmdEnv()
 	hideConsole(cmd)
 	out, err := cmd.CombinedOutput()
 	log.Debug("auth status: raw output", "stdout+stderr", string(out), "cmd_err", err)
@@ -279,6 +284,7 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 		"noBrowser", cfg.noBrowser, "method", cfg.method, "sso", cfg.sso)
 
 	cmd := exec.CommandContext(ctx, binary, args...)
+	cmd.Env = c.cliEnv().cmdEnv()
 	// Confine the login CLI's process tree (job object on Windows, process
 	// group on unix) so cancellation cannot orphan children such as the
 	// BROWSER capture script.
@@ -296,7 +302,10 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 			return nil, fmt.Errorf("auth login: %w", err)
 		}
 		urlFile = uf
-		cmd.Env = append(os.Environ(), "BROWSER="+scriptPath)
+		if cmd.Env == nil {
+			cmd.Env = os.Environ()
+		}
+		cmd.Env = append(cmd.Env, "BROWSER="+scriptPath)
 		log.Debug("auth login: BROWSER capture", "script", scriptPath, "urlFile", urlFile)
 	}
 
@@ -450,6 +459,7 @@ func (c *Client) AuthLogout(ctx context.Context) error {
 	}
 
 	cmd := exec.CommandContext(ctx, binary, "auth", "logout")
+	cmd.Env = c.cliEnv().cmdEnv()
 	hideConsole(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

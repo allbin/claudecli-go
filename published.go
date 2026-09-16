@@ -228,7 +228,7 @@ func LatestPublished(ctx context.Context, opts ...PublishedOption) (*Published, 
 // LatestPublished reports the version published for this client's install. See
 // the package-level [LatestPublished] for the full contract.
 func (c *Client) LatestPublished(ctx context.Context, opts ...PublishedOption) (*Published, error) {
-	pub, err := latestPublished(ctx, c.binaryPath(), osInstallEnv(), opts)
+	pub, err := latestPublished(ctx, c.binaryPath(), newInstallEnv(c.cliEnv()), opts)
 	if err != nil {
 		c.log().Debug("latest published", "err", err)
 		return nil, err
