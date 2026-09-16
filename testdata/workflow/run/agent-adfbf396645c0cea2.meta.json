@@ -1,0 +1,1 @@
+{"agentType":"workflow-subagent","description":"joiner","workflowPhase":"Join","spawnDepth":1,"requestShape":"foreground","requestNonInteractive":true}

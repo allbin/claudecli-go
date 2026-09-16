@@ -1,0 +1,7 @@
+{"type":"launched"}
+{"type":"started","key":"v2:5551503c3a6a68057ba349ba728dc4a88c0c4bbb4d2b8f5779afd573f6f2648f","agentId":"acf991b72ff3c46ab","label":"sleeper-a","phase":"Sleep"}
+{"type":"started","key":"v2:2f165ce4ff5ed27251a17da2867aeee1aba007f11cc25214475e2116d9429476","agentId":"a02d67ad343d076cc","label":"sleeper-b","phase":"Sleep"}
+{"type":"result","key":"v2:5551503c3a6a68057ba349ba728dc4a88c0c4bbb4d2b8f5779afd573f6f2648f","agentId":"acf991b72ff3c46ab","result":"DONE-A"}
+{"type":"result","key":"v2:2f165ce4ff5ed27251a17da2867aeee1aba007f11cc25214475e2116d9429476","agentId":"a02d67ad343d076cc","result":"DONE-B"}
+{"type":"started","key":"v2:61111b8ac6aaf663f4e229fa2be3247e88add4408f14cd7e019e3488dee45eda","agentId":"adfbf396645c0cea2","label":"joiner","phase":"Join"}
+{"type":"result","key":"v2:61111b8ac6aaf663f4e229fa2be3247e88add4408f14cd7e019e3488dee45eda","agentId":"adfbf396645c0cea2","result":"DONE-ADONE-B"}

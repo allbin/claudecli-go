@@ -497,6 +497,8 @@ type rawEvent struct {
 	OutputFile       string                  `json:"output_file,omitempty"`
 	WorkflowProgress []WorkflowProgressEntry `json:"workflow_progress,omitempty"`
 	Patch            json.RawMessage         `json:"patch,omitempty"`
+	OwnedBySubagent  bool                    `json:"owned_by_subagent,omitempty"`
+	IsBackgrounded   bool                    `json:"is_backgrounded,omitempty"`
 
 	// system subtype thinking_tokens
 	EstimatedTokens      int `json:"estimated_tokens,omitempty"`
@@ -1078,6 +1080,8 @@ func parseTaskEvent(raw *rawEvent, line []byte) *TaskEvent {
 		Summary:          raw.Summary,
 		OutputFile:       raw.OutputFile,
 		EndTime:          endTime,
+		OwnedBySubagent:  raw.OwnedBySubagent,
+		IsBackgrounded:   raw.IsBackgrounded,
 		TotalTokens:      raw.Usage.TotalTokens,
 		ToolUses:         raw.Usage.ToolUses,
 		DurationMs:       raw.Usage.DurationMs,

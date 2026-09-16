@@ -1,0 +1,102 @@
+{
+  "runId": "wf_1ed45b93-047",
+  "timestamp": "2026-09-16T14:10:43.190Z",
+  "taskId": "wr4ugqun6",
+  "script": "export const meta = {\n  name: 'sleep-join',\n  description: '…",
+  "scriptPath": "/home/u/.claude/projects/proj/3f4ae78b-88f4-4cfd-9adf-b5185b8ade8f/workflows/scripts/sleep-join-wf_1ed45b93-047.js",
+  "result": "DONE-ADONE-B",
+  "agentCount": 3,
+  "logs": [],
+  "durationMs": 96049,
+  "summary": "Two parallel sleepers, then a joiner concatenates their replies",
+  "workflowName": "sleep-join",
+  "status": "completed",
+  "startTime": 1789567747124,
+  "phases": [
+    {
+      "title": "Sleep"
+    },
+    {
+      "title": "Join"
+    }
+  ],
+  "defaultModel": "claude-opus-5[1m]",
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Sleep"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Join"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "sleeper-a",
+      "phaseIndex": 1,
+      "phaseTitle": "Sleep",
+      "agentId": "acf991b72ff3c46ab",
+      "model": "claude-opus-5[1m]",
+      "state": "done",
+      "startedAt": 1789567747155,
+      "queuedAt": 1789567747152,
+      "attempt": 1,
+      "lastToolName": "Bash",
+      "lastToolSummary": "python3 -c 'import time; time.sleep(90)'",
+      "promptPreview": "First, use the Read tool to read the file /etc/hostname. Then run this exact foreground Bash command (timeout 300000 ms, NOT in the background): python3 -c 'import time; time.sleep(90)'\nAfter it finishes, reply with exactly: DONE-A\nNothing else.",
+      "promptFramed": false,
+      "lastProgressAt": 1789567841569,
+      "tokens": 29849,
+      "toolCalls": 2,
+      "durationMs": 94409,
+      "resultPreview": "DONE-A"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "sleeper-b",
+      "phaseIndex": 1,
+      "phaseTitle": "Sleep",
+      "agentId": "a02d67ad343d076cc",
+      "model": "claude-opus-5[1m]",
+      "state": "done",
+      "startedAt": 1789567747159,
+      "queuedAt": 1789567747152,
+      "attempt": 1,
+      "lastToolName": "Bash",
+      "lastToolSummary": "python3 -c 'import time; time.sleep(90)'",
+      "promptPreview": "First, use the Read tool to read the file /etc/hostname. Then run this exact foreground Bash command (timeout 300000 ms, NOT in the background): python3 -c 'import time; time.sleep(90)'\nAfter it finishes, reply with exactly: DONE-B\nNothing else.",
+      "promptFramed": false,
+      "lastProgressAt": 1789567842318,
+      "tokens": 29849,
+      "toolCalls": 2,
+      "durationMs": 93976,
+      "resultPreview": "DONE-B"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "joiner",
+      "phaseIndex": 2,
+      "phaseTitle": "Join",
+      "agentId": "adfbf396645c0cea2",
+      "model": "claude-opus-5[1m]",
+      "state": "done",
+      "startedAt": 1789567842324,
+      "queuedAt": 1789567842320,
+      "attempt": 1,
+      "promptPreview": "You are given two replies. Reply with only their concatenation (first then second), no spaces, no other text.\nFirst reply: DONE-A\nSecond reply: DONE-B",
+      "promptFramed": false,
+      "lastProgressAt": 1789567843189,
+      "tokens": 29206,
+      "toolCalls": 0,
+      "durationMs": 864,
+      "resultPreview": "DONE-ADONE-B"
+    }
+  ],
+  "totalTokens": 88904,
+  "totalToolCalls": 4
+}

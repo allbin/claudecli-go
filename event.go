@@ -178,11 +178,30 @@ func (e *CompactBoundaryEvent) String() string {
 // Dynamic workflows (https://code.claude.com/docs/en/workflows) surface
 // through this same machinery as a single synthetic task with
 // TaskType == "local_workflow" (see IsWorkflow). For those, WorkflowName
-// is set, Prompt carries the full workflow script (on task_started),
-// WorkflowProgress carries per-phase / per-agent progress (on
-// task_progress), and OutputFile points at the workflow's result file (on
-// a completed task_notification). To monitor a workflow out-of-band, see
-// UserEvent.WorkflowLaunch and WatchWorkflow.
+// is set, Prompt carries the full workflow script (on task_started), and
+// OutputFile points at the workflow's result file (on a completed
+// task_notification).
+//
+// A workflow's task_progress comes in two kinds (CLI 2.1.270):
+//
+//   - Tree ticks carry WorkflowProgress, the full phase and agent list with
+//     per-agent state. The CLI sends one only when an agent changes state or
+//     a phase changes.
+//   - Usage ticks have WorkflowProgress == nil. They are the majority, sent as
+//     agents make tool calls. They carry no tree, so nil means "no tree in
+//     this tick", never "no agents". Use HasWorkflowTree to tell them apart.
+//
+// On both kinds Description names the agent that ticked ("<phase>: <label>",
+// or the bare label without phases), and the CLI puts that label, not a
+// tool, in LastToolName. The SDK resolves it into WorkflowAgentLabel,
+// WorkflowPhaseTitle and WorkflowAgentID. TotalTokens and ToolUses are
+// summed over the whole workflow, not the named agent. The terminal
+// task_notification carries no tree.
+//
+// Workflow agents' own messages never reach the stream. To follow one live,
+// read its transcript with ReadWorkflowAgentTranscript, using the
+// UserEvent.WorkflowLaunch of the run and the agent id from the tree or from
+// ReadWorkflowJournal.
 type TaskEvent struct {
 	Subtype   string // "task_started", "task_progress", "task_updated", "task_notification"
 	TaskID    string
@@ -204,10 +223,24 @@ type TaskEvent struct {
 	WorkflowName string
 
 	// task_progress
+	// LastToolName is the tool a subagent last called. On workflow ticks the
+	// CLI sends the ticking agent's label here instead; prefer
+	// WorkflowAgentLabel.
 	LastToolName string
-	// WorkflowProgress carries per-phase and per-agent state for a workflow
-	// task (TaskType == "local_workflow"). Empty for ordinary subagent tasks.
+	// WorkflowProgress carries per-phase and per-agent state on a workflow
+	// tree tick. It is nil on usage ticks, which carry no tree (see
+	// HasWorkflowTree), and on ordinary subagent tasks.
 	WorkflowProgress []WorkflowProgressEntry
+	// WorkflowAgentLabel, WorkflowPhaseTitle and WorkflowAgentID identify the
+	// agent a workflow task_progress tick is about, on both tree and usage
+	// ticks. The SDK resolves them by matching Description against the agents
+	// of the latest tree for the task. They are empty when the description
+	// matches no known agent or is ambiguous; WorkflowPhaseTitle is also
+	// empty for an agent without a phase, and WorkflowAgentID for an agent
+	// that is still queued.
+	WorkflowAgentLabel string
+	WorkflowPhaseTitle string
+	WorkflowAgentID    string
 
 	// task_notification
 	Status  string
@@ -218,6 +251,19 @@ type TaskEvent struct {
 
 	// task_updated
 	EndTime int64 // patch.end_time, epoch milliseconds; 0 if absent
+
+	// OwnedBySubagent is true when a subagent, not the main loop, owns the
+	// task. Bash commands run inside workflow agents surface on the parent
+	// stream this way, as task_started/task_notification with TaskType
+	// "local_bash"; their ToolUseID is the Bash tool_use id in the owning
+	// agent's transcript, not a main-loop tool call. The CLI sends
+	// owned_by_subagent only on task_started; the SDK backfills it onto the
+	// task's later events like TaskType.
+	OwnedBySubagent bool
+	// IsBackgrounded reports the CLI's is_backgrounded flag, sent on the
+	// task_started of shell tasks and not backfilled. A foreground Bash call
+	// inside a workflow agent reports false. False when absent.
+	IsBackgrounded bool
 
 	// task_progress + task_notification
 	TotalTokens int
@@ -245,6 +291,12 @@ func (e *TaskEvent) String() string {
 // task_started of the same task_id, so IsWorkflow stays correct across the
 // whole lifecycle — including the terminal task_notification.
 func (e *TaskEvent) IsWorkflow() bool { return e.TaskType == "local_workflow" }
+
+// HasWorkflowTree reports whether this event carries a workflow progress tree
+// (WorkflowProgress). A workflow task_progress without one is a usage tick:
+// it still names the ticking agent and updates the workflow's usage totals,
+// but says nothing about the agent list, so keep the last tree you saw.
+func (e *TaskEvent) HasWorkflowTree() bool { return e.WorkflowProgress != nil }
 
 // HookEvent is emitted when the CLI runs a configured hook (SessionStart,
 // PreToolUse, PostToolUse, etc.). Subtype is "hook_started" when the hook
