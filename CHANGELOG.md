@@ -15,6 +15,8 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-16
+
 ### Added
 
 - **`ToolResultEvent.IsError` and `UserContent.IsError`.** The CLI flags a
