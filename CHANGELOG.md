@@ -51,9 +51,10 @@ or pin a specific version (e.g. `@v0.1.0`).
 ### Changed
 
 - **`WatchWorkflow`, `WatchOption` and `WithPollInterval` are deprecated.** The
-  run manifest they poll is written once, when the run ends (checked on CLI
-  2.1.270 over four runs), so `WatchWorkflow` never showed a live run. It
-  stayed silent and then delivered one terminal snapshot. Rebuilding it on the
+  run manifest they poll is written once, when the run ends. That was checked
+  on CLI 2.1.270 in two polled probe runs and the new live integration test.
+  So `WatchWorkflow` never showed a live run: it stayed silent and then
+  delivered one terminal snapshot. Rebuilding it on the
   journal would change what it sends, so it is deprecated and not rebuilt. A
   consumer rebuilding a view after a reload also needs the byte offsets, which a
   channel of snapshots hides. Use the offset-based readers above. To wait for
@@ -66,6 +67,13 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ### Fixed
 
+- **A workflow's `task_notification` reported `IsWorkflow() == false`.** CLI
+  2.1.270 sends a `task_updated` whose patch status is `completed` just before
+  the workflow's `task_notification`. The task-type backfill dropped its entry
+  on that terminal status, so the notification arrived with `TaskType` and
+  `WorkflowName` empty. Only `task_notification` now ends a task's backfill.
+  Upgrade note: code that gated on `IsWorkflow()` to detect a finished workflow
+  never saw it finish, and now does.
 - `WorkflowLaunch.JournalPath()` resolved to the wrong directory
   (`<session>/workflows/subagents/...`) when the launch had a `ScriptPath` but
   no `TranscriptDir`. Launches parsed from the stream always carry

@@ -198,8 +198,18 @@ Agent ids seen: 17 lowercase hex characters (`acf991b72ff3c46ab`).
   `last_tool_name` is the label, not a tool. Splitting on `": "` is unsafe, as
   the phase-less run with labels `"check: one"` showed. The SDK matches the
   description against the last tree instead.
-- Observed sequences: `TTnnnnTTnT` and `TTnnnnTTT` (two-phase runs). The workflow's
+- Through the SDK's `Session` (stream-json input), in all four integration
+  runs, the first tree tick came before any agent started. Its `description`
+  was the workflow's own description and its `last_tool_name` was `""`. The raw
+  `-p` probes did not show that tick, and their first tick already named an
+  agent.
+- Observed sequences: `TTnnnnTTnT` and `TTnnnnTTT` (raw `-p` probes),
+  `T*TTnnnnnnTnT` and `T*TTnnnnnTT` (integration runs, `*` = workflow-level). The workflow's
   `task_notification` carries no tree.
+- The workflow task closes with `task_updated` (`patch.status: "completed"`)
+  and then `task_notification`, in that order, in every run. The SDK
+  backfill used to treat the `task_updated` as the end of the task, which left
+  the notification unclassified. Fixed in the same change.
 
 ### Bash inside workflow agents
 

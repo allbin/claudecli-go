@@ -193,7 +193,9 @@ func (e *CompactBoundaryEvent) String() string {
 //
 // On both kinds Description names the agent that ticked ("<phase>: <label>",
 // or the bare label without phases), and the CLI puts that label, not a
-// tool, in LastToolName. The SDK resolves it into WorkflowAgentLabel,
+// tool, in LastToolName. The exception is the first tree tick, sent before any
+// agent has started: its Description is the workflow's own description and
+// LastToolName is empty. The SDK resolves it into WorkflowAgentLabel,
 // WorkflowPhaseTitle and WorkflowAgentID. TotalTokens and ToolUses are
 // summed over the whole workflow, not the named agent. The terminal
 // task_notification carries no tree.
@@ -235,7 +237,8 @@ type TaskEvent struct {
 	// agent a workflow task_progress tick is about, on both tree and usage
 	// ticks. The SDK resolves them by matching Description against the agents
 	// of the latest tree for the task. They are empty when the description
-	// matches no known agent or is ambiguous; WorkflowPhaseTitle is also
+	// matches no known agent or is ambiguous, including the first tree tick,
+	// which names the workflow rather than an agent; WorkflowPhaseTitle is also
 	// empty for an agent without a phase, and WorkflowAgentID for an agent
 	// that is still queued.
 	WorkflowAgentLabel string

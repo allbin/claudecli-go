@@ -1065,7 +1065,9 @@ A workflow's `task_progress` events come in two kinds, and most carry no tree:
 
 `HasWorkflowTree()` tells them apart. On both kinds the CLI names the agent that
 ticked in `Description` (`"<phase>: <label>"`, or the bare label without phases)
-and puts that label, not a tool, in `LastToolName`. Labels may contain `": "`,
+and puts that label, not a tool, in `LastToolName`. The first tree tick can
+come before any agent has started. It carries the workflow's own description
+and an empty `LastToolName`. Labels may contain `": "`,
 so the SDK does not split the string. It matches it against the last tree and
 sets `WorkflowAgentLabel`, `WorkflowPhaseTitle` and `WorkflowAgentID`, and
 leaves them empty when the match is unknown or ambiguous.
