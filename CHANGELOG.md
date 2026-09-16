@@ -15,6 +15,8 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-16
+
 ### Added
 
 - **Readers for a running workflow's on-disk state.** The CLI writes these files
@@ -882,7 +884,8 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/allbin/claudecli-go/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/allbin/claudecli-go/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/allbin/claudecli-go/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/allbin/claudecli-go/compare/v0.7.1...v0.7.2
