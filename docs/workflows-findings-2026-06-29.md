@@ -143,3 +143,77 @@ derive with no guessing:
 
 No new top-level event types, CLI flags, or triggering API are required.
 ```
+
+---
+
+## Addendum (2026-09-16): CLI 2.1.270
+
+The original text above is unchanged. Some of it is wrong for current CLIs, and
+this section corrects it. Probes ran `claude -p --output-format stream-json
+--verbose --dangerously-skip-permissions` with a two-phase workflow: "Sleep"
+ran two agents, each doing a Read and then a 90 s foreground
+`python3 -c 'import time; time.sleep(90)'` (the CLI refuses a foreground
+`sleep`), and "Join" ran one agent. A poller copied the transcript dir every
+5 s. A third run used no phases and labels containing `": "`. The live
+integration test `TestIntegrationWorkflowLiveState`
+(`workflow_integration_test.go`) repeats the core checks through the SDK.
+Trimmed captures are in `testdata/workflow/`.
+
+### Corrections
+
+- **The manifest is terminal-only.** The table above says `workflows/<runId>.json`
+  is "checkpointed continuously". That was inferred from a killed run, and a
+  kill is also a terminal write. In both polled runs no poll during the run
+  found the manifest. Its mtime was 3 ms after the journal's last `result`
+  line and about 1 s before the process exited. The SDK integration test
+  checks the same thing on every run. `WatchWorkflow` is therefore deprecated
+  and `ReadWorkflowSnapshot` is documented as reading the final state.
+- **The stream's `workflow_progress[]` is not "the same live data" as a live
+  manifest.** It arrives only on some ticks (below), and no live manifest
+  exists.
+
+### Live on-disk sources
+
+Under `transcriptDir` (`<session>/subagents/workflows/<runId>/`), all written
+while the run is live:
+
+| File | Contents |
+| --- | --- |
+| `journal.jsonl` | `{"type":"launched"}`, then per agent `{"type":"started","key","agentId","label","phase"}` and `{"type":"result","key","agentId","result"}`, appended as agents start and finish. `phase` is `"Sleep"` etc.; the phase-less run was not inspected for it. |
+| `agent-<agentId>.jsonl` | The agent's transcript in Claude Code's session JSONL format: a `user` line with the prompt as a string, `attachment` lines (`deferred_tools_delta`, `environment`, `model`, `skill_listing`, `instructions`, `session_context`, `date`, `prompt_snapshot`, `auto_mode`, `total_tokens_reminder`), and `assistant` lines (one content block per line, with `message.model`) and `user` lines with `tool_result`. Every line has `uuid`, `timestamp`, `isSidechain: true`, `agentId`. A Bash `tool_use` is on disk while the command runs. |
+| `agent-<agentId>.meta.json` | `{"agentType":"workflow-subagent","description":<label>,"workflowPhase","spawnDepth":1,"requestShape":"foreground","requestNonInteractive":true}`. No `model` or `worktreePath` appeared in these runs. |
+
+Agent ids seen: 17 lowercase hex characters (`acf991b72ff3c46ab`).
+
+### `task_progress`: two kinds
+
+- **Tree ticks** carry `workflow_progress[]`: phases plus agent entries with
+  `state`, `lastToolName`, `toolCalls`, `tokens`, and a new field
+  `promptFramed`. A queued agent has no `agentId` yet. They fire when an agent
+  changes state or the phase changes.
+- **Usage ticks** have `workflow_progress: null`. `usage.total_tokens` and
+  `usage.tool_uses` are workflow-wide sums, and they never decreased.
+- On **both** kinds, `description` names the agent that ticked:
+  `"<phaseTitle>: <label>"`, or just `"<label>"` for a workflow without phases.
+  `last_tool_name` is the label, not a tool. Splitting on `": "` is unsafe, as
+  the phase-less run with labels `"check: one"` showed. The SDK matches the
+  description against the last tree instead.
+- Observed sequences: `TTnnnnTTnT` and `TTnnnnTTT` (two-phase runs). The workflow's
+  `task_notification` carries no tree.
+
+### Bash inside workflow agents
+
+Each Bash call inside a workflow agent reaches the parent stream as a
+`task_started` with `task_type:"local_bash"`, `"owned_by_subagent": true` and
+`"is_backgrounded": false`, followed by a `task_notification`. **Unlike the
+2026-09 brief, the `task_notification` does not carry `owned_by_subagent`**
+(0 of 6 notifications across three runs). The SDK backfills it from
+`task_started`. The task's `tool_use_id` equals the Bash `tool_use` id in the
+owning agent's transcript, which links the stream task to the agent.
+
+### Not forwarded
+
+No stream event had `parent_tool_use_id` set, and none of the agents'
+`tool_use` ids appeared on the stream. The raw probes did not pass the SDK's
+forward-subagent-text setting. The integration test runs with
+`WithForwardSubagentText()` and checks the same thing.

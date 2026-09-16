@@ -15,6 +15,62 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **Readers for a running workflow's on-disk state.** The CLI writes these files
+  under `WorkflowLaunch.TranscriptDir` while the run is live:
+  - `ReadWorkflowJournal(launch, offset)` returns typed `WorkflowJournalEntry`
+    records (`launched`, `started` with `AgentID`/`Label`/`Phase`/`Key`,
+    `result` with `Result`).
+  - `ReadWorkflowAgentTranscript(launch, agentID, offset)` decodes an agent's
+    `agent-<id>.jsonl` into `WorkflowTranscriptEvent`s. Each one wraps a
+    `*TextEvent`, `*ThinkingEvent`, `*ToolUseEvent`, `*ToolResultEvent` or
+    `*UserEvent` (the prompt) and adds the line's `UUID` and `Timestamp`.
+  - `ReadWorkflowAgentMeta(launch, agentID)` reads `agent-<id>.meta.json`.
+  - `WorkflowLaunch.AgentTranscriptPath` / `AgentMetaPath`.
+
+  Both JSONL readers take a byte offset and return the next one. They leave a
+  half-written last line unconsumed, so a caller can poll cheaply and rebuild
+  after a reload from a stored offset or from 0. Agent ids must match
+  `[a-z0-9]+` (`ErrInvalidAgentID`), since they come from agent-influenced data.
+  Unknown line types and content blocks are skipped. New sentinels:
+  `ErrInvalidAgentID`, `ErrNoTranscriptDir`, `ErrOffsetBeyondEOF`.
+- **`TaskEvent.OwnedBySubagent` and `IsBackgrounded`.** Bash commands run
+  inside workflow agents reach the parent stream as `local_bash` tasks owned by
+  a subagent. The CLI sends `owned_by_subagent` only on `task_started`, so the
+  SDK backfills it onto the task's `task_notification`, as it does `TaskType`.
+- **The two kinds of workflow tick are explicit.** `TaskEvent.HasWorkflowTree()`
+  separates tree ticks from usage ticks. Usage ticks have `WorkflowProgress ==
+  nil`, meaning no tree in that tick, and they are most of the ticks.
+  `WorkflowAgentLabel`, `WorkflowPhaseTitle` and `WorkflowAgentID` name the
+  agent a tick is about. The SDK resolves them by matching `Description`
+  against the last tree, because the `"<phase>: <label>"` string cannot be
+  split safely: without phases it is the bare label, and labels may contain
+  `": "`.
+
+### Changed
+
+- **`WatchWorkflow`, `WatchOption` and `WithPollInterval` are deprecated.** The
+  run manifest they poll is written once, when the run ends (checked on CLI
+  2.1.270 over four runs), so `WatchWorkflow` never showed a live run. It
+  stayed silent and then delivered one terminal snapshot. Rebuilding it on the
+  journal would change what it sends, so it is deprecated and not rebuilt. A
+  consumer rebuilding a view after a reload also needs the byte offsets, which a
+  channel of snapshots hides. Use the offset-based readers above. To wait for
+  the end, watch for the workflow's `task_notification` and call
+  `ReadWorkflowSnapshot`. `WatchWorkflow` keeps working as before.
+- Doc comments on `WorkflowLaunch.ManifestPath`, `WorkflowSnapshot` and
+  `ReadWorkflowSnapshot` no longer claim the manifest is written live. They now
+  say it is terminal-only. `docs/workflows-findings-2026-06-29.md` has a dated
+  addendum.
+
+### Fixed
+
+- `WorkflowLaunch.JournalPath()` resolved to the wrong directory
+  (`<session>/workflows/subagents/...`) when the launch had a `ScriptPath` but
+  no `TranscriptDir`. Launches parsed from the stream always carry
+  `TranscriptDir`, so only hand-built launches were affected.
+
 ## [0.9.0] - 2026-09-15
 
 ### Added

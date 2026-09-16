@@ -1052,31 +1052,93 @@ task omit it. The SDK backfills `TaskType` and `WorkflowName` from the matching
 whole lifecycle — you can gate on `IsWorkflow()` for progress and the terminal
 `task_notification` too, not just the launch.
 
-### Monitoring out-of-band
+### Two kinds of progress tick
 
-The runtime also persists live run state on disk keyed by `RunID` (it survives
-the SDK's `--no-session-persistence`). Given a `WorkflowLaunch`, you can monitor
-the run from a separate goroutine without consuming the event stream:
+A workflow's `task_progress` events come in two kinds, and most carry no tree:
+
+- **Tree ticks** have `WorkflowProgress` set: every phase and agent with its
+  state, `LastToolName`, `ToolCalls` and `Tokens`. The CLI sends one only when
+  an agent changes state or the phase changes.
+- **Usage ticks** have `WorkflowProgress == nil`. That means "no tree in this
+  tick", not "no agents", so keep the last tree. `TotalTokens` and `ToolUses`
+  are summed over the whole workflow.
+
+`HasWorkflowTree()` tells them apart. On both kinds the CLI names the agent that
+ticked in `Description` (`"<phase>: <label>"`, or the bare label without phases)
+and puts that label, not a tool, in `LastToolName`. Labels may contain `": "`,
+so the SDK does not split the string. It matches it against the last tree and
+sets `WorkflowAgentLabel`, `WorkflowPhaseTitle` and `WorkflowAgentID`, and
+leaves them empty when the match is unknown or ambiguous.
+
+Bash commands run by workflow agents also reach the stream, as `local_bash`
+tasks with `OwnedBySubagent` set. Their `ToolUseID` is the Bash `tool_use` in
+the owning agent's transcript. The agents' own messages never reach the stream,
+not even with `WithForwardSubagentText()`. To see them, read the files below.
+
+### Reading a live run from disk
+
+The runtime writes the run's state under `WorkflowLaunch.TranscriptDir`
+(`<session>/subagents/workflows/<runId>/`), and it survives the SDK's
+`--no-session-persistence`. These files are written while the run is live:
+
+| File | Reader | Contents |
+| --- | --- | --- |
+| `journal.jsonl` | `ReadWorkflowJournal` | `launched`, then per agent `started` (`AgentID`, `Label`, `Phase`, `Key`) and `result` (`Result`) |
+| `agent-<id>.jsonl` | `ReadWorkflowAgentTranscript` | The agent's conversation as `*UserEvent` (prompt), `*TextEvent`, `*ThinkingEvent`, `*ToolUseEvent`, `*ToolResultEvent`, each with `UUID` and `Timestamp` |
+| `agent-<id>.meta.json` | `ReadWorkflowAgentMeta` | `AgentType`, `Description` (label), `WorkflowPhase`, and `Model`/`WorktreePath` when the CLI writes them |
+
+The JSONL readers take a byte offset and return the offset to pass next time.
+They skip a half-written last line without consuming it, so polling mid-write
+is safe. To rebuild a view after a reload, persist the offsets or re-read from
+0:
 
 ```go
-launch := userEvent.WorkflowLaunch
-snaps, err := claudecli.WatchWorkflow(ctx, launch,
-    claudecli.WithPollInterval(time.Second))
-for snap := range snaps { // closes on terminal status (completed/stopped/killed)
-    fmt.Printf("%s: %d/%d agents, %d tokens\n",
-        snap.Status, len(snap.Agents()), snap.AgentCount, snap.TotalTokens)
-}
+var journalOff int64
+agentOff := map[string]int64{}
 
-// Or a one-shot read (e.g. to fetch the final Result after completion):
+entries, next, err := claudecli.ReadWorkflowJournal(launch, journalOff)
+if err == nil {
+    journalOff = next
+}
+for _, e := range entries {
+    if e.Type != "started" {
+        continue
+    }
+    evs, next, err := claudecli.ReadWorkflowAgentTranscript(launch, e.AgentID, agentOff[e.AgentID])
+    if err != nil {
+        continue // not written yet
+    }
+    agentOff[e.AgentID] = next
+    for _, te := range evs {
+        if tu, ok := te.Event.(*claudecli.ToolUseEvent); ok {
+            fmt.Printf("%s %s: %s\n", te.Timestamp.Format(time.TimeOnly), e.Label, tu.Name)
+        }
+    }
+}
+```
+
+A journal or transcript that does not exist yet returns an error wrapping
+`fs.ErrNotExist`. Agent ids must match `[a-z0-9]+`, and anything else returns
+`ErrInvalidAgentID` before a path is built, because the id comes from
+agent-influenced data. Unknown line types and content blocks are skipped.
+
+### The final manifest
+
+`WorkflowLaunch.ManifestPath()` (`<session>/workflows/<runId>.json`) is written
+**once, when the run ends**. It does not exist while the run is live. After the
+workflow's `task_notification`, `ReadWorkflowSnapshot` returns the final
+`Status`, `Result`, totals and tree:
+
+```go
 snap, err := claudecli.ReadWorkflowSnapshot(launch)
 ```
 
-`WorkflowLaunch.ManifestPath()` / `JournalPath()` expose the underlying file
-paths. This reads an **undocumented internal CLI layout** that may change between
-versions, so it degrades gracefully (transient read/parse errors are retried;
-`Raw` preserves the full manifest). The in-stream `WorkflowProgress` carries the
-same live data, so the filesystem path is a complement for out-of-band or
-fire-and-forget monitoring, not a requirement.
+`WatchWorkflow` polls that manifest, so it stays silent for the whole run and
+then delivers one terminal snapshot. It is deprecated; use the readers above.
+
+All of this reads an **undocumented internal CLI layout** (observed on CLI
+2.1.270) that may change between versions. The readers fail soft and keep `Raw`
+where they can.
 
 ## Multimodal input
 
@@ -1206,7 +1268,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers. `ModelDisplayName()` renders the model ID as e.g. `"Opus 5"`. Also carries `CLIVersion`, `CWD`, `PermissionMode` (the mode actually in effect), `OutputStyle`, `SlashCommands`, `Plugins` (`[]PluginInfo`), and `MCPServerErrors` (`[]MCPServerError` — `--mcp-config` entries skipped by validation, which never appear in `MCPServers`; requires CLI 2.1.219+). |
 | `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
 | `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
-| `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_updated`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`, `EndTime`, `SubagentType`. `IsWorkflow()` is true for dynamic-workflow runs (`TaskType == "local_workflow"`), where `WorkflowName`, `WorkflowProgress` (per-phase/per-agent `[]WorkflowProgressEntry`), and `OutputFile` (on completion) are also set. See [Dynamic workflows](#dynamic-workflows). |
+| `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_updated`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`, `EndTime`, `SubagentType`. `OwnedBySubagent` (a subagent owns the task, e.g. a workflow agent's Bash; backfilled from `task_started`) and `IsBackgrounded` (`task_started` of shell tasks). `IsWorkflow()` is true for dynamic-workflow runs (`TaskType == "local_workflow"`), where `WorkflowName` and `OutputFile` (on completion) are also set. On workflow `task_progress`, `WorkflowProgress` (per-phase/per-agent `[]WorkflowProgressEntry`) is set only on tree ticks (`HasWorkflowTree()`), and `WorkflowAgentLabel`/`WorkflowPhaseTitle`/`WorkflowAgentID` name the agent that ticked. See [Dynamic workflows](#dynamic-workflows). |
 | `*HookEvent`       | Hook lifecycle event (system subtypes `hook_started`, `hook_progress`, `hook_response`). Requires `WithIncludeHookEvents()` — the CLI emits nothing otherwise. Fields: `HookID`, `HookName`, `HookEvent` (e.g. `"SessionStart"`), and on `hook_response`: `Output`, `Stdout`, `Stderr`, `ExitCode`, `Outcome`. |
 | `*ThinkingEvent`   | Model thinking output. Includes `Signature` for verification. `Content` may be empty while `Signature` is set — treat `Content=="" && Signature!=""` as "thinking hidden", not "no thinking". `ParentToolUseID` set when from a subagent, plus `Model`/`SubagentType`/`TaskDescription` — see [Per-subagent model](#per-subagent-model). |
 | `*TextEvent`       | Assistant text output. `ParentToolUseID` set when from a subagent, plus `Model`/`SubagentType`/`TaskDescription` — see [Per-subagent model](#per-subagent-model). |
@@ -1374,6 +1436,9 @@ claudecli-go/
   executor_windows.go Windows kill-on-close job object (tree kill on cancel), CREATE_NO_WINDOW, npm shim bypass
   shim.go        Resolves npm's Windows .cmd shim to the cli.js it wraps (used by executor_windows.go)
   parse.go       JSONL stream parser (decoupled from process lifecycle)
+  task_backfill.go Restores task_started-only fields (TaskType, WorkflowName, OwnedBySubagent) onto later task events; resolves the agent a workflow tick names
+  workflow.go    WorkflowLaunch paths, WorkflowProgressEntry, terminal manifest (ReadWorkflowSnapshot, deprecated WatchWorkflow)
+  workflow_live.go Live workflow files: offset-based journal and agent transcript readers, agent meta
   stream.go      Stream with State(), Events(), Next(), Wait(), Close()
   client.go      Client struct, Run/RunText/RunJSON/Connect, package-level shortcuts
   session.go     Interactive session with bidirectional control protocol
@@ -1484,4 +1549,6 @@ claudecli-go/
   (`mcp_message`), MCP elicitations, and tool-driven dialogs
   (`request_user_dialog`).
 - **Workflows emit two `ResultEvent`s** — A [dynamic workflow](#dynamic-workflows) run produces two result events: the first reports it launched in the background, the second carries the real answer once it completes. Consume the **last** `ResultEvent`. A workflow also does not survive its parent CLI process (the run settles at `status: "killed"`).
-- **Workflow on-disk state is an internal layout** — `WatchWorkflow`/`ReadWorkflowSnapshot` read CLI run-state files (`~/.claude/projects/.../workflows/<runId>.json`) whose paths and JSON shape are undocumented and may change across CLI versions. They parse defensively and preserve `Raw`, but treat this as best-effort. File GC/lifetime is unverified.
+- **Workflow on-disk state is an internal layout** — `ReadWorkflowJournal`, `ReadWorkflowAgentTranscript`, `ReadWorkflowAgentMeta` and `ReadWorkflowSnapshot` read CLI run-state files under `~/.claude/projects/...` whose paths and JSON shape are undocumented and may change across CLI versions. They fail soft and preserve `Raw` where they can, but treat them as best-effort. File GC/lifetime is unverified.
+- **The workflow manifest is terminal-only** — `<session>/workflows/<runId>.json` is written when the run ends, so `ReadWorkflowSnapshot` fails with `fs.ErrNotExist` during a run and the deprecated `WatchWorkflow` shows nothing until the end. Follow a live run through the journal and agent transcripts.
+- **Workflow agents' messages are not on the stream** — even with `WithForwardSubagentText()`, a workflow agent's text and tool calls appear only in its on-disk transcript. The stream carries only the workflow's `TaskEvent`s and the agents' Bash tasks (`OwnedBySubagent`).

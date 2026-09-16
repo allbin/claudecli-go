@@ -19,8 +19,10 @@ import (
 // The workflow itself streams progress through TaskEvent
 // (TaskType == "local_workflow"); the final answer arrives as a later
 // TextEvent / ResultEvent in the same session. A WorkflowLaunch is the
-// handle for monitoring the run out-of-band via the on-disk run state —
-// see ManifestPath, JournalPath, ReadWorkflowSnapshot, and WatchWorkflow.
+// handle for reading the run's on-disk state. While the run is live, read
+// the journal (ReadWorkflowJournal) and each agent's transcript and meta
+// (ReadWorkflowAgentTranscript, ReadWorkflowAgentMeta). Once it has ended,
+// ReadWorkflowSnapshot reads the manifest with the final result.
 type WorkflowLaunch struct {
 	Status        string `json:"status"` // "async_launched"
 	TaskID        string `json:"taskId"`
@@ -51,8 +53,11 @@ func parseWorkflowLaunch(data json.RawMessage) *WorkflowLaunch {
 // (<session>/workflows/<runId>.json), derived from ScriptPath. Returns ""
 // if the path cannot be derived.
 //
-// The manifest is written and updated live by the CLI's workflow runtime
-// and survives the --no-session-persistence flag. Its layout is an
+// The CLI writes the manifest once, when the run reaches a terminal status
+// (CLI 2.1.270: in the same instant as the journal's last record, before
+// the workflow's task_notification reaches the stream). It does not exist
+// while the run is live; use JournalPath and the agent transcripts for
+// that. It survives --no-session-persistence. Its layout is an
 // undocumented CLI implementation detail and may change between versions.
 func (l *WorkflowLaunch) ManifestPath() string {
 	if l == nil || l.RunID == "" {
@@ -71,22 +76,16 @@ func (l *WorkflowLaunch) ManifestPath() string {
 	return ""
 }
 
-// JournalPath returns the path to the workflow's append-only per-agent
-// journal (<transcriptDir>/journal.jsonl). Returns "" if it cannot be
-// derived. Each line is a {"type":"started"|"result", "agentId", ...}
-// record appended as agents start and finish.
+// JournalPath returns the path to the workflow's append-only journal
+// (<transcriptDir>/journal.jsonl). Returns "" if it cannot be derived. The
+// CLI appends a record as the run launches and as each agent starts and
+// finishes; read it with ReadWorkflowJournal.
 func (l *WorkflowLaunch) JournalPath() string {
-	if l == nil {
+	dir := l.transcriptDir()
+	if dir == "" {
 		return ""
 	}
-	if l.TranscriptDir != "" {
-		return filepath.Join(l.TranscriptDir, "journal.jsonl")
-	}
-	if l.ScriptPath != "" && l.RunID != "" {
-		session := filepath.Dir(filepath.Dir(l.ScriptPath))
-		return filepath.Join(session, "subagents", "workflows", l.RunID, "journal.jsonl")
-	}
-	return ""
+	return filepath.Join(dir, "journal.jsonl")
 }
 
 // WorkflowProgressEntry is one entry in a workflow's progress list. The same
@@ -133,11 +132,10 @@ type WorkflowPhase struct {
 	Title string `json:"title"`
 }
 
-// WorkflowSnapshot is a point-in-time view of a workflow run, read from its
-// on-disk manifest. The manifest is checkpointed live, so polling it (see
-// WatchWorkflow) yields successively more complete snapshots until Status is
-// terminal. Result is the workflow's return value (a JSON string or object);
-// it is populated once the run completes.
+// WorkflowSnapshot is the final state of a workflow run, read from its
+// on-disk manifest. The CLI writes the manifest only when the run ends, so a
+// snapshot's Status is terminal in practice. Result is the workflow's return
+// value (a JSON string or object).
 type WorkflowSnapshot struct {
 	RunID          string                  `json:"runId"`
 	TaskID         string                  `json:"taskId"`
@@ -196,10 +194,10 @@ func parseWorkflowSnapshot(data []byte) (*WorkflowSnapshot, error) {
 // derived from a WorkflowLaunch (missing runId / script path).
 var ErrNoManifestPath = errors.New("claudecli: cannot derive workflow manifest path")
 
-// ReadWorkflowSnapshot reads and parses the workflow's manifest once. Use it
-// to fetch the final Result after the run completes, or for a single
-// point-in-time status check. It wraps os errors, so callers can test for a
-// not-yet-written manifest with errors.Is(err, fs.ErrNotExist).
+// ReadWorkflowSnapshot reads and parses the workflow's manifest. Use it to
+// fetch the final Result and totals after the run has ended. While the run is
+// live the manifest does not exist, and the error wraps fs.ErrNotExist; for
+// live state use ReadWorkflowJournal and ReadWorkflowAgentTranscript.
 func ReadWorkflowSnapshot(launch *WorkflowLaunch) (*WorkflowSnapshot, error) {
 	path := launch.ManifestPath()
 	if path == "" {
@@ -217,6 +215,8 @@ func ReadWorkflowSnapshot(launch *WorkflowLaunch) (*WorkflowSnapshot, error) {
 const defaultWorkflowPollInterval = 500 * time.Millisecond
 
 // WatchOption configures WatchWorkflow.
+//
+// Deprecated: only WatchWorkflow uses it.
 type WatchOption func(*watchConfig)
 
 type watchConfig struct {
@@ -225,6 +225,8 @@ type watchConfig struct {
 
 // WithPollInterval sets how often WatchWorkflow re-reads the manifest.
 // Values <= 0 are ignored. Defaults to 500ms.
+//
+// Deprecated: only WatchWorkflow uses it.
 func WithPollInterval(d time.Duration) WatchOption {
 	return func(c *watchConfig) {
 		if d > 0 {
@@ -233,20 +235,20 @@ func WithPollInterval(d time.Duration) WatchOption {
 	}
 }
 
-// WatchWorkflow polls a launched workflow's on-disk manifest and streams a
+// WatchWorkflow polls a launched workflow's on-disk manifest and sends a
 // WorkflowSnapshot whenever its contents change, until the run reaches a
 // terminal status or ctx is cancelled. The returned channel is closed when
-// watching ends; the final snapshot sent before closure is the terminal one
-// (unless ctx was cancelled first).
+// watching ends.
 //
-// This monitors the run out-of-band: it does not consume the event stream and
-// works from any goroutine or process that can read ~/.claude/projects. A
-// not-yet-written manifest is tolerated — WatchWorkflow keeps polling until it
-// appears. Note the workflow does not survive its parent CLI process; if that
-// process exits, the manifest settles at a terminal status ("killed").
+// The CLI writes the manifest only when the run ends, so in practice the
+// channel stays silent for the whole run and then delivers one terminal
+// snapshot. It returns an error only when the manifest path cannot be
+// derived; read and parse failures are retried.
 //
-// It returns an error only when the manifest path cannot be derived; all
-// runtime read/parse hiccups are treated as transient and retried.
+// Deprecated: WatchWorkflow does not show a live run. To follow one, poll
+// ReadWorkflowJournal and ReadWorkflowAgentTranscript with the offsets they
+// return; to wait for the end, watch the stream for the workflow's
+// task_notification and then call ReadWorkflowSnapshot.
 func WatchWorkflow(ctx context.Context, launch *WorkflowLaunch, opts ...WatchOption) (<-chan WorkflowSnapshot, error) {
 	path := launch.ManifestPath()
 	if path == "" {

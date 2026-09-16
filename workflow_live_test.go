@@ -487,3 +487,36 @@ func TestReadWorkflowAgentTranscriptSkipsUnknown(t *testing.T) {
 		t.Errorf("events = %v", got)
 	}
 }
+
+func TestJournalPathScriptPathFallback(t *testing.T) {
+	// Before 0.10.0 this fallback resolved to <session>/workflows/subagents/...
+	l := &WorkflowLaunch{RunID: "wf_x", ScriptPath: "/p/sess/workflows/scripts/n-wf_x.js"}
+	if got, want := l.JournalPath(), "/p/sess/subagents/workflows/wf_x/journal.jsonl"; got != want {
+		t.Errorf("JournalPath = %q, want %q", got, want)
+	}
+}
+
+func TestReadWorkflowSnapshotFixture(t *testing.T) {
+	// The manifest the CLI wrote when the fixture run ended.
+	data, err := os.ReadFile(filepath.Join(workflowFixtureDir, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	launch := &WorkflowLaunch{RunID: "wf_1ed45b93-047", ScriptPath: filepath.Join(dir, "workflows", "scripts", "sleep-join-wf_1ed45b93-047.js")}
+	if err := os.MkdirAll(filepath.Dir(launch.ScriptPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launch.ManifestPath(), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := ReadWorkflowSnapshot(launch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result string
+	_ = json.Unmarshal(snap.Result, &result)
+	if !snap.IsTerminal() || result != "DONE-ADONE-B" || snap.AgentCount != 3 || len(snap.Agents()) != 3 || len(snap.Phases) != 2 {
+		t.Errorf("snapshot = status %q result %q agents %d/%d phases %d", snap.Status, result, snap.AgentCount, len(snap.Agents()), len(snap.Phases))
+	}
+}
