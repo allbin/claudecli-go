@@ -604,3 +604,42 @@ func TestSessionNotificationEchoIsNotPromptEcho(t *testing.T) {
 		t.Errorf("Wait = %+v, want A", got)
 	}
 }
+
+// A dynamic workflow's final answer is itself a wake-up result: the query's
+// own result reports the launch, and the answer arrives later with origin
+// task-notification. It is unsolicited — Wait keeps the launch result — but
+// it reaches Events() with the answer text.
+func TestSessionWorkflowAnswerIsUnsolicited(t *testing.T) {
+	lines := fixtureLines(t, "workflow/stream-phased.jsonl")
+	sim := newSessionSim()
+	client := NewWithExecutor(sim.bidi)
+	go func() {
+		sim.handleInit(t)
+		sim.readStdin(t)
+		for _, l := range lines {
+			sim.send(l)
+		}
+	}()
+
+	session, err := client.Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	defer sim.bidi.StdoutWriter.Close()
+
+	if err := session.Query("ultracode: run two agents"); err != nil {
+		t.Fatal(err)
+	}
+	launch := nextResult(t, session.Events(), 2*time.Second)
+	answer := nextResult(t, session.Events(), 2*time.Second)
+	if launch.Unsolicited || launch.Origin != nil {
+		t.Errorf("launch result = %+v", launch)
+	}
+	if !answer.Unsolicited || !answer.Origin.IsTaskNotification() || answer.NumTurns != 1 {
+		t.Errorf("workflow answer = %+v, want an unsolicited task-notification result", answer)
+	}
+	if got, _ := session.Wait(); got != launch {
+		t.Errorf("Wait = %+v, want the launch result", got)
+	}
+}

@@ -662,6 +662,25 @@ Every event is stamped on arrival with the query generation that was active when
 - `QueryHandle.Gen()` / `Dropped()` — generation for orphan correlation; drop counter for this mailbox
 
 A `QueryCtx` whose stdin write fails marks the session `StateFailed` (stdin is poisoned — no events will ever arrive) so callers can recycle it instead of hanging in `StateRunning`.
+
+### Results the CLI starts by itself (task notifications)
+
+Not every `ResultEvent` answers a prompt you sent. The CLI starts turns of its own to deliver background-task notifications, and each one ends in a result whose `Origin.Kind` is `OriginTaskNotification`:
+
+- **Resume after orphaned tasks.** When a process dies while a `run_in_background` shell is still running and the session is resumed, the CLI reports the orphaned task and closes it with an empty result (`NumTurns` 0, zero usage) *before* it reads your prompt.
+- **Wake-up after a background task finishes.** After an `end_turn` result, a finishing background task makes the CLI wake up, let the model react, and emit another result with real output. A [dynamic workflow](#dynamic-workflows)'s final answer arrives this way.
+
+The Session marks such a result `Unsolicited` when it arrives while no query is pending, or while the pending query's prompt has not been consumed yet. An unsolicited result does not end the query: `Wait()` keeps waiting, the state stays `StateRunning`, the activity tracker stays busy, and in routed mode it goes to the orphan mailbox (`ActiveQueryAtArrival` 0) instead of the query's handle. It still reaches `Events()`, so **a loop that stops at the first `ResultEvent` should skip `Unsolicited` ones**:
+
+```go
+case *claudecli.ResultEvent:
+    if e.Unsolicited {
+        continue // the CLI's own task-notification turn; may still carry text you want
+    }
+    return e
+```
+
+A prompt sent while the CLI's notification turn is running a tool is folded into that turn, and the turn's single task-notification result is the only answer it gets. The Session tells the two cases apart by the prompt's replay echo, which is why sessions always run the CLI with `--replay-user-messages` (the echoes reach `Events()` only with `WithReplayUserMessages()`). `ParseEvents`, `RunText` and `RunBlocking` skip task-notification results the same way and return the result that follows. Observed on CLI 2.1.280.
 ### Rich tool permissions
 
 `WithCanUseTool` receives only the tool name and input. `WithCanUseToolRequest`
@@ -810,7 +829,7 @@ The CLI receives the message immediately but processes it at a safe boundary (be
 
 **Concurrency**: writes to stdin are mutex-serialized, so concurrent `SendMessage` calls are safe. Under extreme write volume the OS pipe buffer (64KB on Linux) provides natural backpressure — `SendMessage` blocks until the CLI drains stdin. If the pipe fills while the CLI is waiting for a control response (permission prompt), this could theoretically deadlock. In practice this requires dozens of queued messages and is unlikely for normal usage patterns.
 
-**Delivery confirmation**: by default, `SendMessage` is fire-and-forget — you write to stdin with no acknowledgment. Enable `WithReplayUserMessages()` to have the CLI echo each user message back on stdout as a `UserEvent` with `IsReplay=true`. This confirms the CLI has read and accepted the message:
+**Delivery confirmation**: by default, `SendMessage` is fire-and-forget — you write to stdin with no acknowledgment. Enable `WithReplayUserMessages()` to receive the CLI's echo of each user message as a `UserEvent` with `IsReplay=true`. This confirms the CLI has read and accepted the message. (The CLI always runs with `--replay-user-messages`; the Session uses the echo to [classify task-notification results](#results-the-cli-starts-by-itself-task-notifications). The option only decides whether echoes reach `Events()`.) A notification the CLI folds into a running turn is echoed too, with `Origin.Kind == OriginTaskNotification`; skip those when confirming your own messages:
 
 ```go
 session, err := client.Connect(ctx,
@@ -823,7 +842,7 @@ session.SendMessage("Also update the tests")
 for event := range session.Events() {
     switch e := event.(type) {
     case *claudecli.UserEvent:
-        if e.IsReplay {
+        if e.IsReplay && e.Origin == nil {
             fmt.Printf("CLI confirmed: %s\n", e.Text())
         }
     }
@@ -1293,11 +1312,11 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*TurnEvent`       | New assistant turn started. `Turn` is a 1-based counter, `ToolName` is the first tool in the turn (empty for text-only turns). Only emitted for top-level turns (subagent messages excluded). |
 | `*ToolUseEvent`    | Tool invocation with name and input. `ParseAgentInput()` returns typed `*AgentInput` for Agent tool calls. `ParentToolUseID` set when from a subagent, plus `Model`/`SubagentType`/`TaskDescription` — see [Per-subagent model](#per-subagent-model). `ServerSide` is true for server-side tools (web search, code execution). `MCP` is true for MCP tool calls. |
 | `*ToolResultEvent` | Result from a tool invocation. `Content` is `[]ToolContent` supporting text and image blocks. `Text()` returns concatenated text. `IsError` is the block's `is_error` flag; false when the CLI omits it, so it means "not flagged", not "confirmed success". `ParentToolUseID` set when from a subagent. |
-| `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks; a tool_result block carries `IsError`, with the same meaning as on `ToolResultEvent`). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil only when the event carries a subagent's result — a completion or an `"async_launched"` background launch, never an ordinary tool result) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `WorkflowLaunch` (non-nil when a dynamic workflow is launched in the background) carries `RunID`, `WorkflowName`, `ScriptPath`, `TranscriptDir` and helpers for out-of-band monitoring — see [Dynamic workflows](#dynamic-workflows). `IsReplay` is true when echoed via `--replay-user-messages`. `Text()` returns concatenated text. |
+| `*UserEvent`       | Tool result or subagent message fed back to the model. `Content` is `[]UserContent` (text or tool_result blocks; a tool_result block carries `IsError`, with the same meaning as on `ToolResultEvent`). `ParentToolUseID` links subagent events to the parent Agent tool call (empty for top-level). `AgentResult` (non-nil only when the event carries a subagent's result — a completion or an `"async_launched"` background launch, never an ordinary tool result) carries `AgentID`, `AgentType`, `Prompt`, `TotalDurationMs`, `TotalTokens`, `TotalToolUseCount`. `WorkflowLaunch` (non-nil when a dynamic workflow is launched in the background) carries `RunID`, `WorkflowName`, `ScriptPath`, `TranscriptDir` and helpers for out-of-band monitoring — see [Dynamic workflows](#dynamic-workflows). `IsReplay` is true when echoed via `--replay-user-messages`. `Origin` is non-nil for a message the CLI injected itself (a folded task notification has `Kind == OriginTaskNotification`). `Text()` returns concatenated text. |
 | `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string (or `"content/<type>"` for unknown content blocks), `Raw` is the full JSON. Forward-compat catch-all — also used for error fallback diagnostics on non-zero exit. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
-| `*ResultEvent`     | Session complete. Text, cost, duration, usage, `NumTurns`, `StopReason`, `StructuredOutput`, `ModelUsage` (per-model context window, token limits, web search/fetch counts), `ContextSnapshot` (per-API-call usage from last `message_start`/`message_delta`; requires `WithIncludePartialMessages`; nil otherwise). Synthesized if CLI exits cleanly without one. |
+| `*ResultEvent`     | Session complete. Text, cost, duration, usage, `NumTurns`, `StopReason`, `StructuredOutput`, `ModelUsage` (per-model context window, token limits, web search/fetch counts), `ContextSnapshot` (per-API-call usage from last `message_start`/`message_delta`; requires `WithIncludePartialMessages`; nil otherwise). `Origin` (what started the turn; nil for your prompt, `Kind == OriginTaskNotification` for the CLI's own notification turns), `ResultIndex` (the CLI's per-process delivery sequence, nil on older CLIs; a gap means a result was lost) and `Unsolicited` (the result does not answer your prompt — see [task notifications](#results-the-cli-starts-by-itself-task-notifications)). Synthesized if CLI exits cleanly without one. |
 | `*ContextSnapshotEvent` | Mid-turn context measurement, so a context meter can move during the turn instead of jumping at the end. Same numbers as `ResultEvent.ContextSnapshot` plus `Model`, `SessionID` and `Phase`; `Used()` sums the four token fields. Two per API call (`Phase` `start` from `message_start` — prompt final, `OutputTokens` still 0 — and `final` from `message_delta`), so a tool-using turn emits several pairs. **Requires `WithIncludePartialMessages`.** `ContextWindow` is never zero: the CLI does not disclose the window mid-turn, so the event is withheld until one is known and then remembered for the session. In practice a Session's first turn is silent and later turns are not; calling `QueryContextUsage()` once unblocks the first turn too. `ParseEvents` never emits it (it returns at the terminal result). |
 | `*ContextManagementEvent` | Emitted when the CLI compresses or summarizes older turns to fit the context window. `Raw` contains the full JSON payload. |
 | `*ThinkingTokensEvent` | Running estimate of thinking-token usage during a turn (system subtype `thinking_tokens`). `EstimatedTokens` (cumulative) and `EstimatedTokensDelta` (increment). A progress signal, not authoritative accounting — use `ResultEvent.Usage` for final counts. |
@@ -1380,7 +1399,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `WithDebugFile(string)`              | Write CLI debug logs to a file path.                                                                  |
 | `WithDisableSlashCommands()`         | Disable all slash command / skill processing in prompts.                                              |
 | `WithFileCheckpointing()`            | Enable SDK file checkpointing via `CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING` env var.                |
-| `WithReplayUserMessages()`           | Echo user messages back on stdout as `UserEvent` with `IsReplay=true`, confirming message delivery. Useful for tracking `SendMessage` acknowledgment during active turns. Sessions only. |
+| `WithReplayUserMessages()`           | Deliver the CLI's echo of each user message as `UserEvent` with `IsReplay=true`, confirming message delivery. Useful for tracking `SendMessage` acknowledgment during active turns. Sessions only. Sessions always pass `--replay-user-messages`; without this option the echoes are dropped before `Events()`. |
 
 Options set at call time **replace** (not merge with) client-level defaults.
 
@@ -1485,6 +1504,7 @@ claudecli-go/
 
 ## Known limitations / TODO
 
+- **Task-notification classification relies on the replay echo** — a task-notification result counts as the answer only when the pending prompt's echo arrived first (the prompt was folded into the CLI's notification turn). Slash commands such as `/cost` are never echoed, so a slash-command query that got folded into a notification turn would leave `Wait()` waiting; not observed, since local commands run on their own. Verified against CLI 2.1.280.
 - **JSONL format is unversioned** — Claude CLI's `stream-json` output format is not formally versioned by Anthropic. Tested with Claude Code CLI 2.x. Breaking changes across CLI versions are possible.
 - **No retry/backoff** — `RateLimitEvent` is emitted (with `ResetsAt` timestamp and `RateLimitType`) but the package does not automatically retry or backoff. Consumers must implement their own retry logic.
 - **`stdbuf` recommended on Linux** — `LocalExecutor` uses `stdbuf -oL` for line-buffered stdout on Linux when available, falling back to direct execution without it.
@@ -1567,7 +1587,7 @@ claudecli-go/
   "unsupported control request" error; this also covers SDK-hosted MCP servers
   (`mcp_message`), MCP elicitations, and tool-driven dialogs
   (`request_user_dialog`).
-- **Workflows emit two `ResultEvent`s** — A [dynamic workflow](#dynamic-workflows) run produces two result events: the first reports it launched in the background, the second carries the real answer once it completes. Consume the **last** `ResultEvent`. A workflow also does not survive its parent CLI process (the run settles at `status: "killed"`).
+- **Workflows emit two `ResultEvent`s** — A [dynamic workflow](#dynamic-workflows) run produces two result events: the first reports it launched in the background, the second carries the real answer once it completes. Consume the **last** `ResultEvent`. On a Session the second one is `Unsolicited` (it is a task-notification wake-up), so `Wait()` returns the launch result; read the answer from `Events()`. `RunText`, `Stream.Wait` and `ParseEvents` also stop at the launch result. A workflow also does not survive its parent CLI process (the run settles at `status: "killed"`).
 - **Workflow on-disk state is an internal layout** — `ReadWorkflowJournal`, `ReadWorkflowAgentTranscript`, `ReadWorkflowAgentMeta` and `ReadWorkflowSnapshot` read CLI run-state files under `~/.claude/projects/...` whose paths and JSON shape are undocumented and may change across CLI versions. They fail soft and preserve `Raw` where they can, but treat them as best-effort. File GC/lifetime is unverified.
 - **The workflow manifest is terminal-only** — `<session>/workflows/<runId>.json` is written when the run ends, so `ReadWorkflowSnapshot` fails with `fs.ErrNotExist` during a run and the deprecated `WatchWorkflow` shows nothing until the end. Follow a live run through the journal and agent transcripts.
 - **Workflow agents' messages are not on the stream** — even with `WithForwardSubagentText()`, a workflow agent's text and tool calls appear only in its on-disk transcript. The stream carries only the workflow's `TaskEvent`s and the agents' Bash tasks (`OwnedBySubagent`).

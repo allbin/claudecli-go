@@ -827,11 +827,20 @@ type ResultEvent struct {
 	//     wakes up, lets the model react to the notification, and emits a
 	//     second result with real model output.
 	//
+	// Unsolicited does not mean empty. A dynamic workflow's final answer
+	// arrives this way: the query's own result reports the launch, and the
+	// answer is the wake-up result after the workflow completes.
+	//
 	// Session.Wait, the Session's state and QueryHandle ignore unsolicited
 	// results; they still reach Session.Events() (or the orphan mailbox in
 	// routed mode), so a consumer that ends its per-query loop on the first
 	// ResultEvent must check this field. ParseEvents sets it from Origin
 	// alone and keeps reading past such a result.
+	//
+	// A task-notification result is not unsolicited when the pending query's
+	// prompt was folded into that turn: a prompt that arrives while the
+	// CLI's notification turn is running a tool joins that turn, and the
+	// turn's result is the only answer it gets.
 	Unsolicited bool
 }
 

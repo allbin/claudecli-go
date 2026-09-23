@@ -15,6 +15,54 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`ResultEvent.Origin`, `ResultEvent.ResultIndex`, `UserEvent.Origin`.** The
+  CLI stamps an `origin` object on results and user messages it injected
+  itself. `Origin` carries `Kind`, `Subkind` and the raw object; the constant
+  `OriginTaskNotification` (`"task-notification"`) marks the CLI's own
+  background-task notification turns, and `Origin.IsTaskNotification()` is
+  nil-safe. `ResultIndex` is the CLI's per-process delivery sequence
+  (`result_index`, from 0; a gap means a result was lost; nil on older CLIs).
+  `queued_turn_count` is not exposed: CLI 2.1.280 reports 0 even while a
+  prompt sits unread in stdin, so it cannot answer "is my prompt pending".
+- **`ResultEvent.Unsolicited`.** True for a result that closes a turn the CLI
+  started by itself and does not answer a prompt you sent. See Fixed.
+
+### Fixed
+
+- **A task-notification result was taken as the answer to the pending
+  query.** On `--resume`, when the previous process died while a
+  `run_in_background` shell was still running, CLI 2.1.280 reports the
+  orphaned task and closes it with an empty result (`NumTurns` 0, zero usage,
+  `origin` task-notification) before it reads the prompt. `Session.Wait()`
+  returned that empty result, the session went `StateIdle` and the activity
+  tracker went idle mid-turn; in routed mode the empty result became the
+  `QueryHandle`'s answer and the real one went to the orphan mailbox. The
+  same happened when a background task finished and the CLI woke up by
+  itself while a query was pending. Such a result is now `Unsolicited`: it
+  leaves `Wait()`, state, activity and the query generation alone, reaches
+  `Events()` (or the orphan mailbox, with `ActiveQueryAtArrival` 0), and the
+  query's real result follows. A wake-up result that arrives with no query
+  pending no longer replaces the result `Wait()` returns for the last query.
+  `ParseEvents`, `RunText` and `RunBlocking` skip such results too; `RunText`
+  previously returned `""` on a resume like this.
+
+  A prompt that arrives while the notification turn is running a tool is
+  folded into that turn, and the turn's single task-notification result is
+  its only answer. The Session detects the fold from the prompt's replay
+  echo and treats that result as the answer, so `Wait()` does not hang.
+
+  Upgrade notes:
+  - Sessions now always run the CLI with `--replay-user-messages`. Echoes
+    reach `Events()` only with `WithReplayUserMessages()`, as before.
+  - A loop over `Events()` that ends a query at the first `ResultEvent` should
+    skip results with `Unsolicited` set.
+  - A dynamic workflow's final answer is a task-notification wake-up, so on a
+    Session it now arrives with `Unsolicited` set. Code that takes the last
+    `ResultEvent` from `Events()` keeps working; code that skips unsolicited
+    results must make an exception for it.
+
 ## [0.10.1] - 2026-09-16
 
 ### Added
