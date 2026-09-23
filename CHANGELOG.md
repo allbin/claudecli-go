@@ -15,6 +15,8 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-23
+
 ### Added
 
 - **`ResultEvent.Origin`, `ResultEvent.ResultIndex`, `UserEvent.Origin`.** The
