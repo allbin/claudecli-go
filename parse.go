@@ -145,19 +145,16 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 				mte := classifyMaxTurns(raw.Errors)
 				emit(&ErrorEvent{Err: mte, Fatal: false})
 			}
-			emit(&ResultEvent{
-				Text:             strings.Join(resultText, ""),
-				Subtype:          raw.Subtype,
-				StopReason:       raw.StopReason,
-				StructuredOutput: raw.StructuredOutput,
-				Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
-				CostUSD:          raw.CostUSD,
-				SessionID:        raw.SessionID,
-				NumTurns:         raw.NumTurns,
-				Usage:            raw.Usage.toUsage(),
-				ModelUsage:       modelUsage,
-				ContextSnapshot:  snapshot,
-			})
+			ev := newResultEvent(&raw, strings.Join(resultText, ""), modelUsage, snapshot)
+			// A result the CLI produced for its own task notification (the
+			// empty one a --resume emits for tasks orphaned by the previous
+			// process) arrives before the prompt's turn. It is not the answer.
+			ev.Unsolicited = ev.Origin.IsTaskNotification()
+			emit(ev)
+			if ev.Unsolicited {
+				resultText = nil
+				continue
+			}
 			// Result is the terminal event. Return immediately to avoid
 			// blocking on scanner.Scan() if the CLI keeps stdout open (known bug).
 			return
@@ -527,6 +524,9 @@ type rawEvent struct {
 	Timestamp       string          `json:"timestamp,omitempty"`
 	ToolUseResult   json.RawMessage `json:"tool_use_result,omitempty"`
 	IsReplay        bool            `json:"isReplay,omitempty"`
+	// Origin is set on user messages and results the CLI injected itself;
+	// see Origin.
+	Origin json.RawMessage `json:"origin,omitempty"`
 
 	// Set on synthetic assistant messages that claude-cli emits when the
 	// upstream Anthropic stream drops mid-turn. The accompanying content
@@ -547,6 +547,7 @@ type rawEvent struct {
 	Errors           []string                 `json:"errors,omitempty"`
 	Usage            rawUsage                 `json:"usage,omitempty"`
 	ModelUsage       map[string]rawModelUsage `json:"modelUsage,omitempty"`
+	ResultIndex      *int                     `json:"result_index,omitempty"`
 
 	// rate_limit_event
 	RateLimitInfo rawRateLimitInfo `json:"rate_limit_info,omitempty"`
@@ -922,12 +923,54 @@ func (t *contextTracker) observe(innerEvent json.RawMessage, sessionID string) *
 	}
 }
 
+// newResultEvent builds the ResultEvent both decode loops emit for a "result"
+// line. Unsolicited is left to the caller: ParseEvents and Session decide it
+// differently.
+func newResultEvent(raw *rawEvent, text string, modelUsage map[string]ModelUsage, snapshot *ContextSnapshot) *ResultEvent {
+	return &ResultEvent{
+		Text:             text,
+		Subtype:          raw.Subtype,
+		StopReason:       raw.StopReason,
+		StructuredOutput: raw.StructuredOutput,
+		Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
+		CostUSD:          raw.CostUSD,
+		SessionID:        raw.SessionID,
+		NumTurns:         raw.NumTurns,
+		Usage:            raw.Usage.toUsage(),
+		ModelUsage:       modelUsage,
+		ContextSnapshot:  snapshot,
+		Origin:           parseOrigin(raw.Origin),
+		ResultIndex:      raw.ResultIndex,
+	}
+}
+
+// parseOrigin decodes the CLI's "origin" object. Nil when absent, null, or
+// not an object with a kind — an origin without a kind says nothing.
+func parseOrigin(data json.RawMessage) *Origin {
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	var o struct {
+		Kind    string `json:"kind"`
+		Subkind string `json:"subkind"`
+	}
+	if err := json.Unmarshal(data, &o); err != nil || o.Kind == "" {
+		return nil
+	}
+	return &Origin{
+		Kind:    o.Kind,
+		Subkind: o.Subkind,
+		Raw:     append(json.RawMessage(nil), data...),
+	}
+}
+
 func parseUserEvent(raw *rawEvent) *UserEvent {
 	ev := &UserEvent{
 		SessionID: raw.SessionID,
 		UUID:      raw.UUID,
 		Timestamp: raw.Timestamp,
 		IsReplay:  raw.IsReplay,
+		Origin:    parseOrigin(raw.Origin),
 	}
 	if raw.ParentToolUseID != nil {
 		ev.ParentToolUseID = *raw.ParentToolUseID

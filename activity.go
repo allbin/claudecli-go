@@ -14,7 +14,9 @@ import "time"
 //     ToolUseEvent (pending count increments, no event emitted).
 //   - awaiting_tool_result → thinking: last top-level ToolResultEvent
 //     (pending count hits zero).
-//   - any → idle: ResultEvent or fatal ErrorEvent.
+//   - any → idle: ResultEvent or fatal ErrorEvent. An unsolicited result
+//     (the CLI's own task-notification turn) goes to thinking instead while a
+//     query is still pending.
 //
 // Subagent events (ParentToolUseID != "") do not affect top-level state —
 // from the consumer's perspective, the parent Agent tool_use is still
@@ -104,6 +106,24 @@ func (t *activityTracker) observe(ev Event) *CLIStateChangeEvent {
 			next = ActivityIdle
 		}
 	}
+	return t.moveTo(next)
+}
+
+// observeUnsolicitedResult handles a result that closes a turn the CLI started
+// by itself (see Session.observeUnsolicitedResult). The turn's tool uses are
+// over. The tracker goes idle unless a caller's prompt is still waiting, in
+// which case the CLI is about to start on it and the tracker stays thinking.
+func (t *activityTracker) observeUnsolicitedResult(queryPending bool) *CLIStateChangeEvent {
+	t.pendingToolUses = 0
+	if queryPending {
+		return t.moveTo(ActivityThinking)
+	}
+	return t.moveTo(ActivityIdle)
+}
+
+// moveTo transitions to next and returns the event to emit, or nil when the
+// tracker is already there.
+func (t *activityTracker) moveTo(next ActivityState) *CLIStateChangeEvent {
 	if next == t.state {
 		return nil
 	}

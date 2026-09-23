@@ -669,6 +669,44 @@ type UserEvent struct {
 	// stdin, produced by the CLI's --replay-user-messages flag. Replay events
 	// confirm that the CLI has read and accepted the message.
 	IsReplay bool
+	// Origin reports who put this message into the conversation. Nil for a
+	// message the caller sent. The CLI also replays the background-task
+	// notifications it folds into a running turn, as a text message wrapped
+	// in <task-notification> with Origin.Kind OriginTaskNotification.
+	Origin *Origin
+}
+
+// Origin kinds the SDK acts on. The CLI defines more (peer, channel,
+// coordinator, unclassified, observer, auto-continuation, observer-activity);
+// they are passed through in Origin.Kind unchanged.
+const (
+	// OriginTaskNotification marks a turn or message the CLI injected to
+	// deliver background-task notifications (a finished or stopped
+	// run_in_background shell, a subagent, a scheduled trigger).
+	OriginTaskNotification = "task-notification"
+	// OriginHuman marks a message a person typed. The CLI mostly omits origin
+	// for these instead.
+	OriginHuman = "human"
+)
+
+// Origin is the CLI's provenance record for a user message or a result
+// (the "origin" field).
+type Origin struct {
+	// Kind is the discriminator, e.g. OriginTaskNotification.
+	Kind string
+	// Subkind narrows a task-notification: "scheduled-trigger",
+	// "peer-send-message" or "projects-relay". Empty for a plain background
+	// task notification and for other kinds.
+	Subkind string
+	// Raw is the origin object as the CLI sent it, for the fields other
+	// kinds carry (a peer's from/name, a channel's server).
+	Raw json.RawMessage
+}
+
+// IsTaskNotification reports whether o is a task-notification origin. Safe on
+// a nil receiver.
+func (o *Origin) IsTaskNotification() bool {
+	return o != nil && o.Kind == OriginTaskNotification
 }
 
 func (*UserEvent) event() {}
@@ -766,10 +804,43 @@ type ResultEvent struct {
 	// ContextSnapshot captures usage from the last API call's stream events.
 	// Nil if no stream_event events were observed.
 	ContextSnapshot *ContextSnapshot
+	// Origin reports what started the turn this result closes. Nil when the
+	// CLI omits the field, which it does for a turn started by a prompt from
+	// stdin or argv, and on CLIs that predate it. Kind is
+	// OriginTaskNotification for a turn the CLI started by itself to deliver
+	// background-task notifications — see Unsolicited.
+	Origin *Origin
+	// ResultIndex is the CLI's delivery sequence number for this result
+	// within the process, starting at 0 (result_index). A gap means a result
+	// was lost. Nil on CLIs that predate the field.
+	ResultIndex *int
+	// Unsolicited is true when this result closes a turn the CLI started by
+	// itself and does not answer a prompt the caller sent: Origin is
+	// OriginTaskNotification and, on a Session, the pending query's prompt
+	// had not been consumed into that turn. Two cases produce one:
+	//
+	//   - on --resume, when the previous process died while a background
+	//     task was still running, the CLI reports the orphaned tasks with a
+	//     task_notification and closes that notification with an empty result
+	//     (NumTurns 0, zero usage) before it reads the first prompt;
+	//   - after an end_turn result, when a background task finishes, the CLI
+	//     wakes up, lets the model react to the notification, and emits a
+	//     second result with real model output.
+	//
+	// Session.Wait, the Session's state and QueryHandle ignore unsolicited
+	// results; they still reach Session.Events() (or the orphan mailbox in
+	// routed mode), so a consumer that ends its per-query loop on the first
+	// ResultEvent must check this field. ParseEvents sets it from Origin
+	// alone and keeps reading past such a result.
+	Unsolicited bool
 }
 
 func (*ResultEvent) event() {}
 func (e *ResultEvent) String() string {
+	if e.Unsolicited {
+		return fmt.Sprintf("ResultEvent{Unsolicited, Origin: %s, Cost: $%.4f, Tokens: %d/%d}",
+			e.Origin.Kind, e.CostUSD, e.Usage.InputTokens, e.Usage.OutputTokens)
+	}
 	if e.StopReason != "" {
 		return fmt.Sprintf("ResultEvent{Cost: $%.4f, Duration: %s, Tokens: %d/%d, StopReason: %s}",
 			e.CostUSD, e.Duration, e.Usage.InputTokens, e.Usage.OutputTokens, e.StopReason)

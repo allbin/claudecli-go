@@ -206,10 +206,14 @@ func WithExtraArgs(args map[string]string) Option {
 // auto-memory, background prefetches, keychain reads, and CLAUDE.md auto-discovery.
 func WithBare() Option { return func(o *options) { o.bare = true } }
 
-// WithReplayUserMessages causes the CLI to echo user messages back on stdout
-// after reading them from stdin. The echoed messages appear as UserEvent with
-// IsReplay=true, confirming message delivery. Only works with interactive
-// sessions (Connect) which use stream-json I/O.
+// WithReplayUserMessages delivers the CLI's echo of each user message it reads
+// from stdin as a UserEvent with IsReplay=true, confirming message delivery.
+// Only works with interactive sessions (Connect) which use stream-json I/O.
+//
+// Sessions always run the CLI with --replay-user-messages, because the echo is
+// how the Session tells whether a prompt has been consumed (see
+// ResultEvent.Unsolicited). This option only decides whether the echoes reach
+// Events(); without it they are dropped.
 func WithReplayUserMessages() Option {
 	return func(o *options) { o.replayUserMessages = true }
 }
@@ -657,9 +661,10 @@ func (o *options) buildSessionArgs() []string {
 		args = append(args, "--permission-prompt-tool", toolName)
 	}
 
-	if o.replayUserMessages {
-		args = append(args, "--replay-user-messages")
-	}
+	// Always on: the echo is how Session knows a prompt was consumed, which
+	// decides whether a task-notification result answers it. Without
+	// WithReplayUserMessages the echoes are dropped before Events().
+	args = append(args, "--replay-user-messages")
 
 	return args
 }

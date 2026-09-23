@@ -118,6 +118,7 @@ type rawBlockingResult struct {
 	NumTurns         int             `json:"num_turns"`
 	IsError          bool            `json:"is_error"`
 	Usage            rawUsage        `json:"usage"`
+	Origin           json.RawMessage `json:"origin,omitempty"`
 }
 
 func parseBlockingJSON(data []byte) (*BlockingResult, error) {
@@ -134,12 +135,20 @@ func parseBlockingJSON(data []byte) (*BlockingResult, error) {
 		if len(arr) == 0 {
 			return nil, fmt.Errorf("empty blocking result array")
 		}
-		// Prefer the "result" typed element; fall back to last.
+		// Prefer the last "result" typed element that answers the prompt,
+		// skipping the CLI's own task-notification results (a --resume after
+		// orphaned background tasks emits an empty one first); then any
+		// "result"; then the last element.
 		idx := len(arr) - 1
-		for i := len(arr) - 1; i >= 0; i-- {
+		found := false
+		for i := len(arr) - 1; i >= 0 && !found; i-- {
+			if arr[i].Type == "result" && !parseOrigin(arr[i].Origin).IsTaskNotification() {
+				idx, found = i, true
+			}
+		}
+		for i := len(arr) - 1; i >= 0 && !found; i-- {
 			if arr[i].Type == "result" {
-				idx = i
-				break
+				idx, found = i, true
 			}
 		}
 		return rawToBlocking(&arr[idx]), nil

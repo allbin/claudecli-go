@@ -253,6 +253,7 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 		controlTimeout:    controlTimeout,
 		initTimeout:       initTimeout,
 		stdinWriteTimeout: resolved.stdinWriteTimeout,
+		surfaceReplays:    resolved.replayUserMessages,
 		resultReady:       make(chan struct{}),
 		readyCh:           make(chan struct{}),
 		activity:          newActivityTracker(),

@@ -73,6 +73,15 @@ type Session struct {
 	readyOnce       sync.Once
 	activity        *activityTracker // guarded by stateMu
 	lastStdoutAt    atomic.Int64     // unix nanos of last stdout line; 0 until first line
+	// promptEchoed records that the CLI replayed a caller-sent prompt while
+	// the current query was pending, i.e. the prompt has been consumed into a
+	// turn. Guarded by stateMu; reset by prepareQuery. See
+	// observeUnsolicitedResult.
+	promptEchoed bool
+	// surfaceReplays is WithReplayUserMessages. The CLI always runs with
+	// --replay-user-messages (the echo is the only proof a prompt was
+	// consumed); without the option the echoes are dropped before Events().
+	surfaceReplays bool
 
 	// contextWindows caches model -> context window learned outside the event
 	// stream (QueryContextUsage). Written by caller goroutines, read by the
@@ -190,6 +199,62 @@ func (s *Session) stamp(ev Event) *stampedEvent {
 	return &stampedEvent{ev: ev, at: now, gen: gen}
 }
 
+// stampNoQuery arrival-stamps an event that belongs to no query, without
+// touching the active generation. Used for unsolicited results.
+func (s *Session) stampNoQuery(ev Event) *stampedEvent {
+	now := time.Now()
+	s.lastEventAtNs.Store(now.UnixNano())
+	return &stampedEvent{ev: ev, at: now}
+}
+
+// notePromptEcho records that the CLI has read a caller-sent prompt while a
+// query is pending. The echo of a task notification the CLI folded into the
+// turn (origin task-notification) and subagent messages do not count.
+func (s *Session) notePromptEcho(ue *UserEvent) {
+	if ue.ParentToolUseID != "" || (ue.Origin != nil && ue.Origin.Kind != OriginHuman) {
+		return
+	}
+	s.stateMu.Lock()
+	if s.state == StateRunning {
+		s.promptEchoed = true
+	}
+	s.stateMu.Unlock()
+}
+
+// observeUnsolicitedResult decides whether ev closes a turn the CLI started by
+// itself instead of answering the pending query, and if so marks it
+// Unsolicited and returns the activity transition to emit before it.
+//
+// Only a task-notification result qualifies, and only while no caller prompt
+// has been consumed since the query was sent. Two CLI behaviours (2.1.280)
+// make that the rule:
+//
+//   - A notification turn runs ahead of a prompt that is waiting in stdin: the
+//     empty result a --resume emits for tasks the previous process orphaned,
+//     and the wake-up turn after a background task finishes, both arrive
+//     before the prompt's replay echo. Neither answers the prompt; the
+//     prompt's own turn follows with a result that has no origin.
+//   - A prompt that arrives while a notification turn is running a tool is
+//     folded into that turn: its echo appears mid-turn, and the turn's single
+//     result, still origin task-notification, is the only result the prompt
+//     gets. Treating it as unsolicited would leave Wait blocked for good.
+//
+// With no query pending, a task-notification result is always unsolicited: it
+// must not replace the last query's result that Wait returns.
+func (s *Session) observeUnsolicitedResult(ev *ResultEvent) (*CLIStateChangeEvent, bool) {
+	if !ev.Origin.IsTaskNotification() {
+		return nil, false
+	}
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	pending := s.state == StateRunning
+	if pending && s.promptEchoed {
+		return nil, false
+	}
+	ev.Unsolicited = true
+	return s.activity.observeUnsolicitedResult(pending), true
+}
+
 // ActivityState returns the current activity state.
 func (s *Session) ActivityState() ActivityState {
 	s.stateMu.Lock()
@@ -235,6 +300,7 @@ func (s *Session) prepareQuery() error {
 	s.waited = false
 	s.result = nil
 	s.err = nil
+	s.promptEchoed = false
 	s.resultReady = make(chan struct{})
 	s.resultCloseOnce = sync.Once{}
 	return nil
@@ -977,18 +1043,22 @@ func (s *Session) readLoop() {
 	// ticker here so its lifetime mirrors the state machine exactly.
 	// Transitionen får samma ankomststämpel (tid + generation) som det
 	// utlösande eventet, så den attribueras till samma query.
+	emitTransition := func(transition *CLIStateChangeEvent, at time.Time, gen uint64) {
+		if transition == nil {
+			return
+		}
+		pumpSendRaw(&stampedEvent{ev: transition, at: at, gen: gen})
+		if transition.State == ActivityAwaitingToolResult {
+			s.startToolProgressTicker()
+		} else {
+			s.stopToolProgressTicker()
+		}
+	}
 	pumpSendStamped := func(sev *stampedEvent) {
 		s.stateMu.Lock()
 		transition := s.activity.observe(sev.ev)
 		s.stateMu.Unlock()
-		if transition != nil {
-			pumpSendRaw(&stampedEvent{ev: transition, at: sev.at, gen: sev.gen})
-			if transition.State == ActivityAwaitingToolResult {
-				s.startToolProgressTicker()
-			} else {
-				s.stopToolProgressTicker()
-			}
-		}
+		emitTransition(transition, sev.at, sev.gen)
 		pumpSendRaw(sev)
 	}
 	// pumpSend stämplar vid enqueue — ankomstpunkten för parsade events.
@@ -1024,6 +1094,12 @@ func (s *Session) readLoop() {
 		}
 
 		if ev, ok := decodeStatelessEvent(&raw, line, taskBackfill); ok {
+			if ue, isUser := ev.(*UserEvent); isUser && ue.IsReplay {
+				s.notePromptEcho(ue)
+				if !s.surfaceReplays {
+					continue
+				}
+			}
 			if ev != nil {
 				pumpSend(ev)
 			}
@@ -1142,20 +1218,18 @@ func (s *Session) readLoop() {
 			if raw.Subtype == "error_max_turns" {
 				pumpSend(&ErrorEvent{Err: classifyMaxTurns(raw.Errors), Fatal: false})
 			}
-			ev := &ResultEvent{
-				Text:             strings.Join(resultText, ""),
-				Subtype:          raw.Subtype,
-				StopReason:       raw.StopReason,
-				StructuredOutput: raw.StructuredOutput,
-				Duration:         time.Duration(raw.DurationMS) * time.Millisecond,
-				CostUSD:          raw.CostUSD,
-				SessionID:        raw.SessionID,
-				NumTurns:         raw.NumTurns,
-				Usage:            raw.Usage.toUsage(),
-				ModelUsage:       modelUsage,
-				ContextSnapshot:  snapshot,
-			}
+			ev := newResultEvent(&raw, strings.Join(resultText, ""), modelUsage, snapshot)
 			resultText = nil
+			if transition, held := s.observeUnsolicitedResult(ev); held {
+				// The CLI's own task-notification turn, not the pending
+				// query's: leave state, Wait and the query generation alone.
+				// Stamped with no generation, so in routed mode it goes to
+				// the orphan mailbox rather than the query's handle.
+				sev := s.stampNoQuery(ev)
+				emitTransition(transition, sev.at, s.activeGen.Load())
+				pumpSendRaw(sev)
+				continue
+			}
 			// Ankomststämpla FÖRE trackState: trackState släpper state till
 			// Idle, vilket öppnar för nästa Query/QueryCtx att arma en ny
 			// generation. Stämpeln måste redan vara tagen då — annars kan

@@ -137,6 +137,14 @@ func (s *Stream) trackState(event Event) {
 	case *InitEvent:
 		s.state = StateRunning
 	case *ResultEvent:
+		if e.Unsolicited {
+			// The CLI's own task-notification turn, ahead of the prompt's.
+			// Kept only as a fallback for a run that never answers.
+			if s.result == nil {
+				s.result = e
+			}
+			return
+		}
 		s.state = StateDone
 		s.result = e
 		if s.err == nil && e.Subtype == "error_max_turns" {
