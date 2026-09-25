@@ -219,7 +219,7 @@ func (c *Client) Connect(ctx context.Context, opts ...Option) (*Session, error) 
 
 	proc, err := c.executor.Start(ctx, &StartConfig{
 		Args:                    args,
-		Env:                     resolved.env,
+		Env:                     resolved.sessionEnv(),
 		WorkDir:                 resolved.workDir,
 		KeepStdinOpen:           true,
 		EnableFileCheckpointing: resolved.enableFileCheckpointing,

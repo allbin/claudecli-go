@@ -2,6 +2,7 @@ package claudecli
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 	"time"
@@ -77,6 +78,7 @@ type options struct {
 	extraArgs                          map[string]string
 	stderrCallback                     func(string)
 	enableFileCheckpointing            bool
+	artifactWatch                      bool
 	bare                               bool
 	replayUserMessages                 bool
 	dangerouslySkipPerms               bool
@@ -287,7 +289,44 @@ func WithForwardSubagentText() Option { return func(o *options) { o.forwardSubag
 // terminal event — so the suggestion never arrives there. RunBlocking omits
 // the flag entirely, because the CLI rejects it when the output format is
 // plain JSON.
-func WithPromptSuggestions() Option             { return func(o *options) { o.promptSuggestions = true } }
+func WithPromptSuggestions() Option { return func(o *options) { o.promptSuggestions = true } }
+
+// WithArtifactWatch lets a Session hold live watches on claude.ai artifacts,
+// so a comment sent to Claude on a watched artifact wakes the session with a
+// turn of its own. That turn arrives unprompted: its ResultEvent has Origin
+// OriginTaskNotification and Unsolicited set.
+//
+// The CLI grants watches only to interactive sessions and to sessions whose
+// CLAUDE_CODE_ENTRYPOINT is sdk-ts or sdk-py. This option sets it to sdk-ts,
+// and sets CLAUDE_CODE_ARTIFACT=1 because the CLI turns the Artifact tools off
+// by default for the sdk-* entrypoints. A WithEnv entry for either variable
+// wins. Claiming sdk-ts also:
+//
+//   - hides the session from the CLI's interactive resume picker;
+//   - drops the built-in claude-code-guide agent;
+//   - reports the session to Anthropic's telemetry as the TypeScript SDK.
+//
+// Watches do not survive a restart. After WithResume, the model must watch the
+// artifact again (ArtifactComments action "watch" with its url), and comments
+// reach the session through that watch only when the user message that asked
+// for it carries origin {"kind":"human"}, which Session does not send yet. A
+// watch armed by publishing the artifact needs no such message.
+//
+// Only effective with Connect.
+func WithArtifactWatch() Option { return func(o *options) { o.artifactWatch = true } }
+
+// sessionEnv is the WithEnv map plus the variables Connect-only options imply.
+// WithEnv entries win.
+func (o *options) sessionEnv() map[string]string {
+	if !o.artifactWatch {
+		return o.env
+	}
+	env := make(map[string]string, len(o.env)+2)
+	env["CLAUDE_CODE_ENTRYPOINT"] = "sdk-ts"
+	env["CLAUDE_CODE_ARTIFACT"] = "1"
+	maps.Copy(env, o.env)
+	return env
+}
 func WithTimeout(d time.Duration) Option        { return func(o *options) { o.timeout = d } }
 func WithStderrCallback(fn func(string)) Option { return func(o *options) { o.stderrCallback = fn } }
 func WithFileCheckpointing() Option             { return func(o *options) { o.enableFileCheckpointing = true } }

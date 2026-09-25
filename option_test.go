@@ -1,6 +1,7 @@
 package claudecli
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"testing"
@@ -708,4 +709,41 @@ func TestWithExtraArgsReservedFlagPanics(t *testing.T) {
 func TestWithExtraArgsNonReservedOK(t *testing.T) {
 	// Should not panic.
 	WithExtraArgs(map[string]string{"custom-flag": "val"})
+}
+
+func TestArtifactWatchSessionEnv(t *testing.T) {
+	var cfg *StartConfig
+	exec := &capturingExecutor{capture: func(c *StartConfig) { cfg = c }}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if s, err := NewWithExecutor(exec).Connect(ctx, WithArtifactWatch(), WithInitTimeout(50*time.Millisecond)); err == nil {
+		s.Close()
+	}
+	if cfg == nil {
+		t.Fatal("StartConfig not captured")
+	}
+	if cfg.Env["CLAUDE_CODE_ENTRYPOINT"] != "sdk-ts" || cfg.Env["CLAUDE_CODE_ARTIFACT"] != "1" {
+		t.Errorf("Env = %v, want entrypoint sdk-ts and artifact 1", cfg.Env)
+	}
+}
+
+func TestArtifactWatchEnvOverrideWins(t *testing.T) {
+	o := resolveOptions(nil, []Option{
+		WithEnv(map[string]string{"CLAUDE_CODE_ENTRYPOINT": "sdk-py", "FOO": "bar"}),
+		WithArtifactWatch(),
+	})
+	env := o.sessionEnv()
+	if env["CLAUDE_CODE_ENTRYPOINT"] != "sdk-py" || env["CLAUDE_CODE_ARTIFACT"] != "1" || env["FOO"] != "bar" {
+		t.Errorf("sessionEnv = %v", env)
+	}
+	if o.env["CLAUDE_CODE_ARTIFACT"] != "" {
+		t.Error("sessionEnv mutated the WithEnv map")
+	}
+}
+
+func TestSessionEnvWithoutArtifactWatch(t *testing.T) {
+	o := resolveOptions(nil, []Option{WithEnv(map[string]string{"FOO": "bar"})})
+	if env := o.sessionEnv(); len(env) != 1 || env["FOO"] != "bar" {
+		t.Errorf("sessionEnv = %v, want the WithEnv map unchanged", env)
+	}
 }

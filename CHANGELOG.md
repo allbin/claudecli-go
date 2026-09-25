@@ -15,6 +15,18 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`WithArtifactWatch()`.** With it, a `Connect` session can hold live watches
+  on claude.ai artifacts it publishes, so a comment sent to Claude wakes the
+  session with an `Unsolicited` task-notification turn. The CLI grants watches
+  only to the `sdk-ts` and `sdk-py` entrypoints, so the option sets
+  `CLAUDE_CODE_ENTRYPOINT=sdk-ts` and `CLAUDE_CODE_ARTIFACT=1`; the Artifact
+  tools are off by default under `sdk-*`. `WithEnv` entries win. Side effects
+  of the `sdk-ts` claim: the session is hidden from `claude --resume`'s
+  picker, the `claude-code-guide` agent is dropped, and telemetry counts the
+  session as the TypeScript SDK. Watches do not survive `WithResume`.
+
 ## [0.11.0] - 2026-09-23
 
 ### Added

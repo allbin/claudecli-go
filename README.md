@@ -681,6 +681,28 @@ case *claudecli.ResultEvent:
 ```
 
 A prompt sent while the CLI's notification turn is running a tool is folded into that turn, and the turn's single task-notification result is the only answer it gets. The Session tells the two cases apart by the prompt's replay echo, which is why sessions always run the CLI with `--replay-user-messages` (the echoes reach `Events()` only with `WithReplayUserMessages()`). `ParseEvents`, `RunText` and `RunBlocking` skip task-notification results the same way and return the result that follows. Observed on CLI 2.1.280.
+
+### Artifact comments (`WithArtifactWatch`)
+
+A session that publishes a claude.ai artifact with the CLI's `Artifact` tool can keep a live watch on it. When a viewer comments on the artifact and uses "Send to Claude", the CLI posts a reply of its own and then wakes the session with a turn that ends in an `Unsolicited` result, as described above. The CLI grants watches only to interactive sessions and to the TypeScript and Python Agent SDKs, identified by `CLAUDE_CODE_ENTRYPOINT`. A default session (`sdk-go`) gets `Live subscription: none — this is a print (-p) … session`.
+
+```go
+s, err := claudecli.Connect(ctx, claudecli.WithArtifactWatch())
+```
+
+`WithArtifactWatch()` sets `CLAUDE_CODE_ENTRYPOINT=sdk-ts`. It also sets `CLAUDE_CODE_ARTIFACT=1`, because the CLI turns the Artifact tools off by default for the `sdk-*` entrypoints. A `WithEnv` entry for either variable wins. Claiming `sdk-ts` has other effects in the CLI: the transcript is hidden from the interactive `claude --resume` picker, the built-in `claude-code-guide` agent is dropped, and telemetry reports the session as the TypeScript SDK.
+
+A wake turn on stdout:
+
+1. `{"type":"command_lifecycle","command_uuid":U,"state":"started"}` (arrives as an `UnknownEvent`)
+2. a fresh `system`/`init`
+3. the model's assistant and tool messages, each with `user_message_uuid` U
+4. a `result` with `"origin":{"kind":"task-notification"}`
+5. `command_lifecycle` with `"state":"completed"`
+
+The notification the model reads (`<task-notification><task-type>artifact-auto-react</task-type>…`) is written to the transcript but not echoed on stdout.
+
+Watches are held by the process. After `WithResume` the watch list is empty, and the model has to watch the artifact again (`ArtifactComments` action `"watch"` with its url). That watch forwards comments only when the user message asking for it carries `"origin":{"kind":"human"}`, which `Session` does not send yet. See [Known limitations](#known-limitations--todo). Observed on CLI 2.1.282.
 ### Rich tool permissions
 
 `WithCanUseTool` receives only the tool name and input. `WithCanUseToolRequest`
@@ -1503,6 +1525,9 @@ claudecli-go/
 5. **Blocking** (`blocking.go`) — Non-streaming path using `--output-format json`. Simpler execution model for `RunBlocking`/`RunBlockingJSON`.
 
 ## Known limitations / TODO
+
+- **User messages carry no origin** — the CLI treats a stdin user message without `"origin":{"kind":"human"}` as unattributed and fails closed at its human-only gates. One observed consequence: after `WithResume`, a watch the model re-arms with `WithArtifactWatch` never forwards comments. Its SDK schema says a host wrapping keyboard input must set the origin itself. Session has no way to do that per message yet. Verified against CLI 2.1.282.
+- **`command_lifecycle` is not parsed** — the only stdout marker for the start of a turn the CLI starts itself (such as an artifact comment wake) arrives as an `UnknownEvent`.
 
 - **Task-notification classification relies on the replay echo** — a task-notification result counts as the answer only when the pending prompt's echo arrived first (the prompt was folded into the CLI's notification turn). Slash commands such as `/cost` are never echoed, so a slash-command query that got folded into a notification turn would leave `Wait()` waiting; not observed, since local commands run on their own. Verified against CLI 2.1.280.
 - **JSONL format is unversioned** — Claude CLI's `stream-json` output format is not formally versioned by Anthropic. Tested with Claude Code CLI 2.x. Breaking changes across CLI versions are possible.
