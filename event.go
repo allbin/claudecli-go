@@ -70,6 +70,22 @@ type InitEvent struct {
 	// CLIVersion strings. Older CLIs omit it, so an empty slice means "no
 	// advertisement", not "no features".
 	Capabilities []string
+
+	// Unsolicited is true when the turn this init opens was started by the
+	// CLI itself, with no caller message waiting to be read: a wake-up after
+	// a background task, or an artifact comment notice. The CLI emits an init
+	// at the start of every turn, so this is the earliest sign of such a
+	// turn; its result then arrives with ResultEvent.Unsolicited or, when a
+	// prompt was folded into it, answering that prompt.
+	//
+	// Some notices, such as an artifact comment when auto-reply is
+	// notify-only, emit nothing else before the model's output: no
+	// command_lifecycle line and no replayed user message.
+	//
+	// False does not prove the caller started the turn. While a sent message
+	// is still unread, a notification turn can run ahead of it, and its init
+	// is not flagged. Session only; ParseEvents leaves it false.
+	Unsolicited bool
 }
 
 // HasCapability reports whether the CLI advertised the named optional protocol
@@ -111,6 +127,9 @@ func (e MCPServerError) String() string {
 
 func (*InitEvent) event() {}
 func (e *InitEvent) String() string {
+	if e.Unsolicited {
+		return fmt.Sprintf("InitEvent{Unsolicited, SessionID: %s, Model: %s}", e.SessionID, e.Model)
+	}
 	return fmt.Sprintf("InitEvent{SessionID: %s, Model: %s}", e.SessionID, e.Model)
 }
 

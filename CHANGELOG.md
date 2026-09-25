@@ -15,6 +15,19 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`InitEvent.Unsolicited`.** The Session sets it on the `system`/`init`
+  that opens a turn the CLI started by itself, while no message the caller
+  sent was waiting to be read. It is the earliest stdout sign of an artifact
+  comment wake or a background-task wake-up. When the CLI does not
+  auto-reply to a comment (notify-only, plan mode, hourly cap, no reply
+  tool), CLI 2.1.282 enqueues the notice without a uuid, and the wake emits
+  no `command_lifecycle` and no replayed user message. Its init is then the
+  only start signal. The flag is not set when a notification turn runs ahead
+  of a prompt still waiting in stdin, and never before the first message sent.
+  `ParseEvents` leaves it false.
+
 ## [0.12.0] - 2026-09-25
 
 ### Added

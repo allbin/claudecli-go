@@ -692,7 +692,7 @@ s, err := claudecli.Connect(ctx, claudecli.WithArtifactWatch())
 
 `WithArtifactWatch()` sets `CLAUDE_CODE_ENTRYPOINT=sdk-ts`. It also sets `CLAUDE_CODE_ARTIFACT=1`, because the CLI turns the Artifact tools off by default for the `sdk-*` entrypoints. A `WithEnv` entry for either variable wins. Claiming `sdk-ts` has other effects in the CLI: the transcript is hidden from the interactive `claude --resume` picker, the built-in `claude-code-guide` agent is dropped, and telemetry reports the session as the TypeScript SDK.
 
-A wake turn on stdout:
+A wake turn on stdout, after the CLI auto-replied:
 
 1. `{"type":"command_lifecycle","command_uuid":U,"state":"started"}` (arrives as an `UnknownEvent`)
 2. a fresh `system`/`init`
@@ -700,7 +700,18 @@ A wake turn on stdout:
 4. a `result` with `"origin":{"kind":"task-notification"}`
 5. `command_lifecycle` with `"state":"completed"`
 
+When the CLI does not auto-reply, its notice has no uuid, and steps 1 and 5 are missing and the messages carry no `user_message_uuid`. Four notices behave this way: auto-reply is notify-only (the permission check for posting a reply came back "ask"), paused in plan mode, held back by the hourly cap, or impossible because no reply tool is loaded. The wake then opens with a bare `system`/`init`. Nothing on stdout names the notification before the model's output.
+
 The notification the model reads (`<task-notification><task-type>artifact-auto-react</task-type>…`) is written to the transcript but not echoed on stdout.
+
+To mark a wake when it starts rather than at its result, watch for `InitEvent.Unsolicited`. The Session sets it on an init that arrives while no message it sent is waiting to be read, which on CLI 2.1.81+ can only be a turn the CLI started by itself. It works for both shapes above. It is not set when a notification turn runs ahead of a prompt still waiting in stdin; that turn's result is still `Unsolicited`.
+
+```go
+case *claudecli.InitEvent:
+    if e.Unsolicited {
+        markWakeStarted() // a CLI-initiated turn: artifact comment, background task wake-up
+    }
+```
 
 Watches are held by the process. After `WithResume` the watch list is empty, and the model has to watch the artifact again (`ArtifactComments` action `"watch"` with its url). That watch forwards comments only when the user message asking for it names the artifact and is marked as typed by a person (see [Human messages](#human-messages-fromhuman)); otherwise the tool reports that comments do NOT reach the session. Observed on CLI 2.1.282, 3 of 3 runs each way.
 
@@ -1336,7 +1347,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | Type               | Description                                                                                                                 |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------- |
 | `*StartEvent`      | Emitted before process launch. Contains resolved model, args, working dir.                                                  |
-| `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers. `ModelDisplayName()` renders the model ID as e.g. `"Opus 5"`. Also carries `CLIVersion`, `CWD`, `PermissionMode` (the mode actually in effect), `OutputStyle`, `SlashCommands`, `Plugins` (`[]PluginInfo`), and `MCPServerErrors` (`[]MCPServerError` — `--mcp-config` entries skipped by validation, which never appear in `MCPServers`; requires CLI 2.1.219+). |
+| `*InitEvent`       | CLI session started. Session ID, model, available tools, agents, skills, MCP servers. `ModelDisplayName()` renders the model ID as e.g. `"Opus 5"`. Also carries `CLIVersion`, `CWD`, `PermissionMode` (the mode actually in effect), `OutputStyle`, `SlashCommands`, `Plugins` (`[]PluginInfo`), and `MCPServerErrors` (`[]MCPServerError` — `--mcp-config` entries skipped by validation, which never appear in `MCPServers`; requires CLI 2.1.219+). The CLI emits one at the start of every turn; `Unsolicited` marks a turn the CLI started by itself (Session only — see [artifact comments](#artifact-comments-withartifactwatch)). |
 | `*CompactStatusEvent` | Compaction status change. `Status` is `"compacting"` or `""` (cleared).                                                  |
 | `*CompactBoundaryEvent` | Compaction boundary marker. `Trigger` (`"manual"`/`"auto"`), `PreTokens`, `Raw` metadata.                              |
 | `*TaskEvent`       | Subagent lifecycle update (system subtypes `task_started`, `task_progress`, `task_updated`, `task_notification`). `ToolUseID` links to the parent Agent call. Fields: `TaskID`, `Description`, `TaskType`, `Prompt`, `LastToolName`, `Status`, `Summary`, `TotalTokens`, `ToolUses`, `DurationMs`, `EndTime`, `SubagentType`. `OwnedBySubagent` (a subagent owns the task, e.g. a workflow agent's Bash; backfilled from `task_started`) and `IsBackgrounded` (`task_started` of shell tasks). `IsWorkflow()` is true for dynamic-workflow runs (`TaskType == "local_workflow"`), where `WorkflowName` and `OutputFile` (on completion) are also set. On workflow `task_progress`, `WorkflowProgress` (per-phase/per-agent `[]WorkflowProgressEntry`) is set only on tree ticks (`HasWorkflowTree()`), and `WorkflowAgentLabel`/`WorkflowPhaseTitle`/`WorkflowAgentID` name the agent that ticked. See [Dynamic workflows](#dynamic-workflows). |
@@ -1538,7 +1549,7 @@ claudecli-go/
 
 ## Known limitations / TODO
 
-- **`command_lifecycle` is not parsed** — the only stdout marker for the start of a turn the CLI starts itself (such as an artifact comment wake) arrives as an `UnknownEvent`.
+- **`command_lifecycle` is not parsed** — it arrives as an `UnknownEvent`. It marks the start of a CLI-initiated turn only when the CLI's notice has a uuid; `InitEvent.Unsolicited` covers both cases.
 
 - **Task-notification classification relies on the replay echo** — a task-notification result counts as the answer only when the pending prompt's echo arrived first (the prompt was folded into the CLI's notification turn). Slash commands such as `/cost` are never echoed, so a slash-command query that got folded into a notification turn would leave `Wait()` waiting; not observed, since local commands run on their own. Verified against CLI 2.1.280.
 - **JSONL format is unversioned** — Claude CLI's `stream-json` output format is not formally versioned by Anthropic. Tested with Claude Code CLI 2.x. Breaking changes across CLI versions are possible.

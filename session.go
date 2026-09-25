@@ -78,6 +78,13 @@ type Session struct {
 	// turn. Guarded by stateMu; reset by prepareQuery. See
 	// observeUnsolicitedResult.
 	promptEchoed bool
+	// unread counts caller messages written to stdin that the CLI has not
+	// yet shown it consumed, turnEchoed records that one was echoed since the
+	// last result, and sentAny that one was ever written. Guarded by stateMu.
+	// See noteTurnStart.
+	unread     int
+	turnEchoed bool
+	sentAny    bool
 	// surfaceReplays is WithReplayUserMessages. The CLI always runs with
 	// --replay-user-messages (the echo is the only proof a prompt was
 	// consumed); without the option the echoes are dropped before Events().
@@ -218,7 +225,42 @@ func (s *Session) notePromptEcho(ue *UserEvent) {
 	if s.state == StateRunning {
 		s.promptEchoed = true
 	}
+	if s.unread > 0 {
+		s.unread--
+	}
+	s.turnEchoed = true
 	s.stateMu.Unlock()
+}
+
+// noteTurnStart reports whether the turn a system/init line opens was started
+// by the CLI itself: no caller message is waiting to be consumed, and none was
+// echoed since the last result. CLI 2.1.81+ emits init only at the start of a
+// turn, never while idle, and a caller message's echo follows its turn's init.
+// Older CLIs also emit one at startup, so no init counts before the first
+// caller message.
+//
+// A notification the CLI enqueues without a uuid starts its turn with nothing
+// before this init: no command_lifecycle, no replay echo. CLI 2.1.282 does
+// that for artifact comment notices when auto-reply is notify-only, paused in
+// plan mode, capped, or has no reply tool.
+func (s *Session) noteTurnStart() bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.sentAny && s.unread == 0 && !s.turnEchoed
+}
+
+// noteTurnEnd settles the unread count at a result. A turn started by a
+// caller message that is never echoed, such as a slash command, ends with a
+// result that has no task-notification origin and no echo before it; that
+// result consumes one message.
+func (s *Session) noteTurnEnd(ev *ResultEvent) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	callerTurn := ev.Origin == nil || ev.Origin.Kind == OriginHuman
+	if callerTurn && !s.turnEchoed && s.unread > 0 {
+		s.unread--
+	}
+	s.turnEchoed = false
 }
 
 // observeUnsolicitedResult decides whether ev closes a turn the CLI started by
@@ -382,7 +424,18 @@ func (s *Session) sendUserMessage(m Message) error {
 	if err != nil {
 		return fmt.Errorf("marshal user message: %w", err)
 	}
-	return s.writeStdin(append(data, '\n'))
+	// Counted before the write, so the turn's init can never arrive first.
+	s.stateMu.Lock()
+	s.unread++
+	s.sentAny = true
+	s.stateMu.Unlock()
+	if err := s.writeStdin(append(data, '\n')); err != nil {
+		s.stateMu.Lock()
+		s.unread--
+		s.stateMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // Query sends a user message to the CLI.
@@ -1156,6 +1209,7 @@ func (s *Session) readLoop() {
 			resultText = nil
 			ctxTracker.reset()
 			ev := parseInitEvent(&raw)
+			ev.Unsolicited = s.noteTurnStart()
 			s.stateMu.Lock()
 			s.sessionID = raw.SessionID
 			s.stateMu.Unlock()
@@ -1246,6 +1300,7 @@ func (s *Session) readLoop() {
 			}
 			ev := newResultEvent(&raw, strings.Join(resultText, ""), modelUsage, snapshot)
 			resultText = nil
+			s.noteTurnEnd(ev)
 			if transition, held := s.observeUnsolicitedResult(ev); held {
 				// The CLI's own task-notification turn, not the pending
 				// query's: leave state, Wait and the query generation alone.
