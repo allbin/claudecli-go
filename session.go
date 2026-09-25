@@ -338,16 +338,45 @@ func (s *Session) validateSendable() error {
 	return nil
 }
 
-// sendUserMessage marshals and writes a user message with the given content.
-func (s *Session) sendUserMessage(content any) error {
+// Message is a user message for QueryMsg, SendMsg and QueryCtxMsg.
+type Message struct {
+	// Text is the prompt. With Blocks, it goes first as a text block.
+	Text string
+	// Blocks are multimodal content blocks sent after Text.
+	Blocks []ContentBlock
+	// FromHuman stamps the message with origin {"kind":"human"}: a person
+	// typed it into this session. Leave it false for anything else, such as
+	// a schedule, another agent, or a guest the host does not vouch for.
+	//
+	// The CLI treats a message without it as unattributed and closes its
+	// human-only gates to it. For example, when the model watches an artifact
+	// because the user asked, comments sent to Claude reach the session only
+	// if the asking message carries this origin (see WithArtifactWatch).
+	FromHuman bool
+}
+
+func (m Message) content() any {
+	if len(m.Blocks) == 0 {
+		return m.Text
+	}
+	c := make([]ContentBlock, 0, 1+len(m.Blocks))
+	c = append(c, TextBlock(m.Text))
+	return append(c, m.Blocks...)
+}
+
+// sendUserMessage marshals and writes a user message.
+func (s *Session) sendUserMessage(m Message) error {
 	s.stateMu.Lock()
 	sid := s.sessionID
 	s.stateMu.Unlock()
 	msg := userMessage{
 		Type:            "user",
 		SessionID:       sid,
-		Message:         messageBody{Role: "user", Content: content},
+		Message:         messageBody{Role: "user", Content: m.content()},
 		ParentToolUseID: nil,
+	}
+	if m.FromHuman {
+		msg.Origin = &wireOrigin{Kind: OriginHuman}
 	}
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -358,26 +387,25 @@ func (s *Session) sendUserMessage(content any) error {
 
 // Query sends a user message to the CLI.
 func (s *Session) Query(prompt string) error {
+	return s.QueryMsg(Message{Text: prompt})
+}
+
+// QueryWithContent sends a user message with multimodal content blocks.
+// The prompt is prepended as a text block, followed by the provided blocks.
+func (s *Session) QueryWithContent(prompt string, blocks ...ContentBlock) error {
+	return s.QueryMsg(Message{Text: prompt, Blocks: blocks})
+}
+
+// QueryMsg is Query for a Message, for a caller that sets fields beyond the
+// text, such as FromHuman.
+func (s *Session) QueryMsg(m Message) error {
 	if err := s.prepareQuery(); err != nil {
 		return err
 	}
 	// Emit thinking transition before writing stdin so the transition is
 	// visible in the pump ahead of any CLI response to this query.
 	s.emitQueryActivity()
-	return s.sendUserMessage(prompt)
-}
-
-// QueryWithContent sends a user message with multimodal content blocks.
-// The prompt is prepended as a text block, followed by the provided blocks.
-func (s *Session) QueryWithContent(prompt string, blocks ...ContentBlock) error {
-	if err := s.prepareQuery(); err != nil {
-		return err
-	}
-	content := make([]ContentBlock, 0, 1+len(blocks))
-	content = append(content, TextBlock(prompt))
-	content = append(content, blocks...)
-	s.emitQueryActivity()
-	return s.sendUserMessage(content)
+	return s.sendUserMessage(m)
 }
 
 // SendMessage sends a user message without result tracking.
@@ -385,24 +413,22 @@ func (s *Session) QueryWithContent(prompt string, blocks ...ContentBlock) error 
 // allowing mid-turn message injection. The CLI folds injected messages
 // into the current turn's result.
 func (s *Session) SendMessage(prompt string) error {
-	if err := s.validateSendable(); err != nil {
-		return err
-	}
-	s.emitQueryActivity()
-	return s.sendUserMessage(prompt)
+	return s.SendMsg(Message{Text: prompt})
 }
 
 // SendMessageWithContent sends a multimodal user message without result tracking.
 // See SendMessage for usage details.
 func (s *Session) SendMessageWithContent(prompt string, blocks ...ContentBlock) error {
+	return s.SendMsg(Message{Text: prompt, Blocks: blocks})
+}
+
+// SendMsg is SendMessage for a Message.
+func (s *Session) SendMsg(m Message) error {
 	if err := s.validateSendable(); err != nil {
 		return err
 	}
-	content := make([]ContentBlock, 0, 1+len(blocks))
-	content = append(content, TextBlock(prompt))
-	content = append(content, blocks...)
 	s.emitQueryActivity()
-	return s.sendUserMessage(content)
+	return s.sendUserMessage(m)
 }
 
 // emitQueryActivity pushes a CLIStateChangeEvent(thinking) to the event

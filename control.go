@@ -174,6 +174,12 @@ type userMessage struct {
 	Message         messageBody `json:"message"`
 	ParentToolUseID *string     `json:"parent_tool_use_id"`
 	UUID            string      `json:"uuid,omitempty"`
+	Origin          *wireOrigin `json:"origin,omitempty"`
+}
+
+// wireOrigin is the origin a host may stamp on a user message it writes.
+type wireOrigin struct {
+	Kind string `json:"kind"`
 }
 
 type messageBody struct {

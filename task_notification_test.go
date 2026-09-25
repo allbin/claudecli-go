@@ -571,6 +571,60 @@ func TestSessionFoldedPromptTaskNotificationResult(t *testing.T) {
 	}
 }
 
+// A prompt sent with FromHuman is echoed with origin human (CLI 2.1.282); that
+// echo still marks the prompt consumed, so a fold still answers the query.
+func TestSessionFoldedHumanPromptTaskNotificationResult(t *testing.T) {
+	lines := fixtureLines(t, "task_notification_fold.jsonl")
+	for i, l := range lines {
+		if strings.Contains(l, `"content":"Reply with just the word PONG."`) && strings.Contains(l, `"isReplay":true`) {
+			lines[i] = strings.Replace(l, `"isReplay":true`, `"isReplay":true,"origin":{"kind":"human"}`, 1)
+		}
+	}
+	first, rest := splitAfterResults(t, lines, 1)
+
+	sim := newSessionSim()
+	go func() {
+		sim.handleInit(t)
+		sim.readStdin(t)
+		for _, l := range first {
+			sim.send(l)
+		}
+		sim.readStdin(t)
+		for _, l := range rest {
+			sim.send(l)
+		}
+	}()
+	session, err := NewWithExecutor(sim.bidi).Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	defer sim.bidi.StdoutWriter.Close()
+
+	if err := session.QueryMsg(Message{Text: "start", FromHuman: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.QueryMsg(Message{Text: "Reply with just the word PONG.", FromHuman: true}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan *ResultEvent, 1)
+	go func() {
+		got, _ := session.Wait()
+		done <- got
+	}()
+	select {
+	case got := <-done:
+		if got == nil || got.Unsolicited || got.Text != "PONG" {
+			t.Errorf("answer = %+v, want the folded PONG result", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait blocked: the human-origin echo did not count as the prompt's")
+	}
+}
+
 // The echo of a task notification folded into the query's own turn carries
 // origin task-notification; it is not the prompt's echo and must not make a
 // later notification result count as the answer.

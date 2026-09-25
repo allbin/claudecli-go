@@ -25,7 +25,14 @@ or pin a specific version (e.g. `@v0.1.0`).
   tools are off by default under `sdk-*`. `WithEnv` entries win. Side effects
   of the `sdk-ts` claim: the session is hidden from `claude --resume`'s
   picker, the `claude-code-guide` agent is dropped, and telemetry counts the
-  session as the TypeScript SDK. Watches do not survive `WithResume`.
+  session as the TypeScript SDK. Watches do not survive `WithResume`; to
+  forward comments again, the model re-arms the watch in a turn started by a
+  `FromHuman` message that names the artifact.
+- **`Message`, `Session.QueryMsg`, `Session.SendMsg`, `Session.QueryCtxMsg`.**
+  `Message.FromHuman` stamps `"origin":{"kind":"human"}` on the user message.
+  The CLI treats a message without it as unattributed and closes its
+  human-only gates to it. Set it only for text a person typed; the existing
+  string-taking methods send no origin, as before.
 
 ## [0.11.0] - 2026-09-23
 

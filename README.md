@@ -702,7 +702,19 @@ A wake turn on stdout:
 
 The notification the model reads (`<task-notification><task-type>artifact-auto-react</task-type>…`) is written to the transcript but not echoed on stdout.
 
-Watches are held by the process. After `WithResume` the watch list is empty, and the model has to watch the artifact again (`ArtifactComments` action `"watch"` with its url). That watch forwards comments only when the user message asking for it carries `"origin":{"kind":"human"}`, which `Session` does not send yet. See [Known limitations](#known-limitations--todo). Observed on CLI 2.1.282.
+Watches are held by the process. After `WithResume` the watch list is empty, and the model has to watch the artifact again (`ArtifactComments` action `"watch"` with its url). That watch forwards comments only when the user message asking for it names the artifact and is marked as typed by a person (see [Human messages](#human-messages-fromhuman)); otherwise the tool reports that comments do NOT reach the session. Observed on CLI 2.1.282, 3 of 3 runs each way.
+
+### Human messages (`FromHuman`)
+
+The CLI trusts some requests only when a person made them, and it decides that from the user message's `origin`. A message without one is unattributed, and the CLI closes those gates to it. Its SDK schema leaves it to the host: a host that wraps keyboard input must stamp `{"kind":"human"}` itself. On stdin the CLI keeps that one origin and drops any other kind.
+
+`QueryMsg`, `SendMsg` and `QueryCtxMsg` take a `Message`; set `FromHuman` for text a person typed into this session:
+
+```go
+err := s.QueryMsg(claudecli.Message{Text: input, FromHuman: true})
+```
+
+Leave it false for anything else: schedules, other agents, guests the host does not vouch for. `Query`, `SendMessage` and the other string-taking methods send no origin, as before.
 ### Rich tool permissions
 
 `WithCanUseTool` receives only the tool name and input. `WithCanUseToolRequest`
@@ -1526,7 +1538,6 @@ claudecli-go/
 
 ## Known limitations / TODO
 
-- **User messages carry no origin** — the CLI treats a stdin user message without `"origin":{"kind":"human"}` as unattributed and fails closed at its human-only gates. One observed consequence: after `WithResume`, a watch the model re-arms with `WithArtifactWatch` never forwards comments. Its SDK schema says a host wrapping keyboard input must set the origin itself. Session has no way to do that per message yet. Verified against CLI 2.1.282.
 - **`command_lifecycle` is not parsed** — the only stdout marker for the start of a turn the CLI starts itself (such as an artifact comment wake) arrives as an `UnknownEvent`.
 
 - **Task-notification classification relies on the replay echo** — a task-notification result counts as the answer only when the pending prompt's echo arrived first (the prompt was folded into the CLI's notification turn). Slash commands such as `/cost` are never echoed, so a slash-command query that got folded into a notification turn would leave `Wait()` waiting; not observed, since local commands run on their own. Verified against CLI 2.1.280.

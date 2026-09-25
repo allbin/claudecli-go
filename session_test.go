@@ -1767,7 +1767,7 @@ func TestPrepareQueryEdgeCases(t *testing.T) {
 		}
 
 		// Send a message so the sim goroutine can read and close
-		session.sendUserMessage("cleanup")
+		session.sendUserMessage(Message{Text: "cleanup"})
 	})
 }
 
@@ -3166,5 +3166,83 @@ func TestSessionTrackStateFatalError(t *testing.T) {
 
 	if st := session.State(); st != StateDone && st != StateFailed {
 		t.Errorf("expected terminal state, got %s", st)
+	}
+}
+
+// sentUserMessage connects to a sim, runs send, and returns the user message
+// the session wrote to stdin.
+func sentUserMessage(t *testing.T, send func(*Session) error) map[string]any {
+	t.Helper()
+	sim := newSessionSim()
+	got := make(chan map[string]any, 1)
+	go func() {
+		sim.handleInitAndReady(t)
+		got <- sim.readStdin(t)
+		sim.sendTextAndResult("ok")
+	}()
+	session, err := NewWithExecutor(sim.bidi).Connect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	if err := send(session); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case msg := <-got:
+		return msg
+	case <-time.After(5 * time.Second):
+		t.Fatal("no user message on stdin")
+		return nil
+	}
+}
+
+func TestMessageFromHumanStampsOrigin(t *testing.T) {
+	cases := []struct {
+		name string
+		send func(*Session) error
+	}{
+		{"QueryMsg", func(s *Session) error { return s.QueryMsg(Message{Text: "hi", FromHuman: true}) }},
+		{"SendMsg", func(s *Session) error { return s.SendMsg(Message{Text: "hi", FromHuman: true}) }},
+		{"QueryCtxMsg", func(s *Session) error {
+			_, err := s.QueryCtxMsg(context.Background(), Message{Text: "hi", FromHuman: true})
+			return err
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			msg := sentUserMessage(t, c.send)
+			origin, _ := msg["origin"].(map[string]any)
+			if origin["kind"] != "human" {
+				t.Errorf("origin = %v, want {kind: human}", msg["origin"])
+			}
+			if body := msg["message"].(map[string]any); body["content"] != "hi" {
+				t.Errorf("content = %v, want hi", body["content"])
+			}
+		})
+	}
+}
+
+func TestMessageWithoutFromHumanOmitsOrigin(t *testing.T) {
+	for name, send := range map[string]func(*Session) error{
+		"Query":       func(s *Session) error { return s.Query("hi") },
+		"SendMessage": func(s *Session) error { return s.SendMessage("hi") },
+		"QueryMsg":    func(s *Session) error { return s.QueryMsg(Message{Text: "hi"}) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			if msg := sentUserMessage(t, send); msg["origin"] != nil {
+				t.Errorf("origin = %v, want none", msg["origin"])
+			}
+		})
+	}
+}
+
+func TestMessageBlocksFollowText(t *testing.T) {
+	msg := sentUserMessage(t, func(s *Session) error {
+		return s.SendMsg(Message{Text: "look", Blocks: []ContentBlock{TextBlock("extra")}, FromHuman: true})
+	})
+	content, _ := msg["message"].(map[string]any)["content"].([]any)
+	if len(content) != 2 || content[0].(map[string]any)["text"] != "look" || content[1].(map[string]any)["text"] != "extra" {
+		t.Errorf("content = %v, want [look extra]", content)
 	}
 }

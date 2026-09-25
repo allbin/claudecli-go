@@ -298,7 +298,7 @@ func (s *Session) armQuery() *QueryHandle {
 	}
 	r.active = h
 	r.mu.Unlock()
-	// Generationen armas FÖRE stdin-skrivningen (queryRouted), så childens
+	// Generationen armas FÖRE stdin-skrivningen (QueryCtxMsg), så childens
 	// svar på den nya frågan alltid stämplas med rätt generation.
 	s.activeGen.Store(gen)
 	return h
@@ -398,16 +398,17 @@ func (s *Session) RouterStats() RouterStats {
 // inga events kommer) och handtaget stängs med felet — sessionen ska då
 // kastas och ersättas. Session.Wait() fungerar som vanligt per query.
 func (s *Session) QueryCtx(ctx context.Context, prompt string) (*QueryHandle, error) {
-	return s.queryRouted(ctx, prompt, nil)
+	return s.QueryCtxMsg(ctx, Message{Text: prompt})
 }
 
 // QueryCtxWithContent is QueryCtx with multimodal content blocks; the prompt
 // is prepended as a text block (jfr QueryWithContent).
 func (s *Session) QueryCtxWithContent(ctx context.Context, prompt string, blocks ...ContentBlock) (*QueryHandle, error) {
-	return s.queryRouted(ctx, prompt, blocks)
+	return s.QueryCtxMsg(ctx, Message{Text: prompt, Blocks: blocks})
 }
 
-func (s *Session) queryRouted(ctx context.Context, prompt string, blocks []ContentBlock) (*QueryHandle, error) {
+// QueryCtxMsg is QueryCtx for a Message.
+func (s *Session) QueryCtxMsg(ctx context.Context, m Message) (*QueryHandle, error) {
 	if ctx != nil {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -423,14 +424,7 @@ func (s *Session) queryRouted(ctx context.Context, prompt string, blocks []Conte
 	// Query: transitionen syns före CLI:ns svar).
 	s.emitQueryActivity()
 
-	var content any = prompt
-	if len(blocks) > 0 {
-		c := make([]ContentBlock, 0, 1+len(blocks))
-		c = append(c, TextBlock(prompt))
-		c = append(c, blocks...)
-		content = c
-	}
-	if err := s.sendUserMessage(content); err != nil {
+	if err := s.sendUserMessage(m); err != nil {
 		s.failQuery(err)
 		s.router.detach(h, err)
 		return nil, err

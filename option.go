@@ -309,8 +309,8 @@ func WithPromptSuggestions() Option { return func(o *options) { o.promptSuggesti
 // Watches do not survive a restart. After WithResume, the model must watch the
 // artifact again (ArtifactComments action "watch" with its url), and comments
 // reach the session through that watch only when the user message that asked
-// for it carries origin {"kind":"human"}, which Session does not send yet. A
-// watch armed by publishing the artifact needs no such message.
+// for it names the artifact and was sent with Message.FromHuman. A watch armed
+// by publishing the artifact needs no such message.
 //
 // Only effective with Connect.
 func WithArtifactWatch() Option { return func(o *options) { o.artifactWatch = true } }
