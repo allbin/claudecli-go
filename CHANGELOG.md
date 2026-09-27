@@ -15,6 +15,8 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-27
+
 ### Added
 
 - **`ResultEvent.IsError`, `TerminalReason`, `APIErrorStatus`, `Errors`.** The
@@ -1065,7 +1067,8 @@ existing type switches keep compiling. Two things to know when adopting:
   case *claudecli.ThinkingTokensEvent:  // e.EstimatedTokens / e.EstimatedTokensDelta
   ```
 
-[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/allbin/claudecli-go/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/allbin/claudecli-go/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/allbin/claudecli-go/compare/v0.12.0...v0.13.0
 [0.10.0]: https://github.com/allbin/claudecli-go/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/allbin/claudecli-go/compare/v0.8.0...v0.9.0
