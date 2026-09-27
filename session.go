@@ -1155,6 +1155,10 @@ func (s *Session) readLoop() {
 	var resultText []string
 	ctxTracker := contextTracker{externalWindow: s.observedContextWindow}
 	var lastStdoutErr error
+	// turnAPIErr: a synthetic API-error message was reported in the current
+	// turn, so its is_error result needs no second ErrorEvent.
+	var turnAPIErr bool
+	var errorResult *ResultEvent // last is_error result, for exit diagnostics
 	var unknowns []*UnknownEvent
 	var turnCounter int
 	taskBackfill := newTaskTypeBackfiller()
@@ -1221,37 +1225,33 @@ func (s *Session) readLoop() {
 			if raw.Message == nil {
 				continue
 			}
+			parentToolUseID := ""
+			if raw.ParentToolUseID != nil {
+				parentToolUseID = *raw.ParentToolUseID
+			}
 			// Samma skydd som ParseEvents (parse.go): claude-cli syntetiserar
-			// ett assistant-message när Anthropic-strömmen dör mitt i en tur
-			// (model="<synthetic>", isApiErrorMessage=true, text="API Error:
-			// ..."). Utan detta skydd levereras transportfelet som svarstext
+			// ett assistant-message när ett API-anrop fallerar
+			// (model="<synthetic>", is_api_error_message=true, text="API
+			// Error: ..."). Utan detta skydd levereras felet som svarstext
 			// (Neo discord-agent 2026-05-22 via ParseEvents; samma lucka
-			// fanns kvar här i Session-vägen). Emit fatal ErrorEvent +
+			// fanns kvar här i Session-vägen). Toppnivå: fatal ErrorEvent +
 			// StateFailed; loopen fortsätter så processtädningen
 			// (stderr-drän, proc.Wait) sker normalt när sessionen stängs.
-			if raw.IsApiErrorMessage {
-				msg := ""
-				for _, block := range raw.Message.Content {
-					if block.Type == "text" {
-						msg += block.Text
-					}
+			// En subagents fel avslutar bara subagenten: icke-fatalt.
+			if raw.isAPIErrorMessage() {
+				apiErr := syntheticAPIError(&raw)
+				if parentToolUseID != "" {
+					pumpSend(&ErrorEvent{Err: apiErr})
+					continue
 				}
-				if msg == "" {
-					msg = "synthetic CLI api-error message"
-				}
-				errEv := &ErrorEvent{
-					Err:   fmt.Errorf("%w: %s", ErrAPI, msg),
-					Fatal: true,
-				}
+				lastStdoutErr = apiErr
+				turnAPIErr = true
+				errEv := &ErrorEvent{Err: apiErr, Fatal: true}
 				// Stämpla FÖRE trackState — se result-fallet.
 				sev := s.stamp(errEv)
 				s.trackState(errEv)
 				pumpSendStamped(sev)
 				continue
-			}
-			parentToolUseID := ""
-			if raw.ParentToolUseID != nil {
-				parentToolUseID = *raw.ParentToolUseID
 			}
 			// Emit TurnEvent for top-level assistant messages, matching
 			// ParseEvents behaviour so Session consumers see the same
@@ -1298,7 +1298,16 @@ func (s *Session) readLoop() {
 			if raw.Subtype == "error_max_turns" {
 				pumpSend(&ErrorEvent{Err: classifyMaxTurns(raw.Errors), Fatal: false})
 			}
+			// A synthetic message already reported this turn's API error.
+			if err := resultError(&raw); err != nil && !turnAPIErr {
+				lastStdoutErr = err
+				pumpSend(&ErrorEvent{Err: err, Fatal: false})
+			}
+			turnAPIErr = false
 			ev := newResultEvent(&raw, strings.Join(resultText, ""), modelUsage, snapshot)
+			if ev.IsError {
+				errorResult = ev
+			}
 			resultText = nil
 			s.noteTurnEnd(ev)
 			if transition, held := s.observeUnsolicitedResult(ev); held {
@@ -1367,6 +1376,9 @@ func (s *Session) readLoop() {
 			if cliErr.class == nil {
 				cliErr.class = lastStdoutErr
 			}
+		}
+		if cliErr.Message == "" && errorResult != nil {
+			cliErr.Message = exitResultMessage(errorResult)
 		}
 		if cliErr.Message == "" && len(unknowns) > 0 {
 			var msgs []string

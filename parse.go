@@ -83,33 +83,26 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 			if raw.Message == nil {
 				continue
 			}
-			// claude-cli emits a synthetic assistant message when the
-			// upstream Anthropic stream drops mid-turn: model="<synthetic>",
-			// isApiErrorMessage=true, content=[{type:"text", text:"API
-			// Error: ..."}]. Forwarding that text as a real reply leaks the
-			// transport error into the application (Neo discord-agent
-			// incident 2026-05-22). Emit as fatal ErrorEvent and terminate
-			// the stream — caller's session goes to StateFailed and next
-			// query reconnects with a fresh session.
-			if raw.IsApiErrorMessage {
-				msg := ""
-				for _, block := range raw.Message.Content {
-					if block.Type == "text" {
-						msg += block.Text
-					}
-				}
-				if msg == "" {
-					msg = "synthetic CLI api-error message"
-				}
-				emit(&ErrorEvent{
-					Err:   fmt.Errorf("%w: %s", ErrAPI, msg),
-					Fatal: true,
-				})
-				return
-			}
 			parentToolUseID := ""
 			if raw.ParentToolUseID != nil {
 				parentToolUseID = *raw.ParentToolUseID
+			}
+			// claude-cli emits a synthetic assistant message when an API call
+			// fails: model="<synthetic>", is_api_error_message=true,
+			// content=[{type:"text", text:"API Error: ..."}]. Forwarding that
+			// text as a real reply leaks the error into the application (Neo
+			// discord-agent incident 2026-05-22). A top-level one ends the
+			// run: emit a fatal ErrorEvent and terminate the stream — caller's
+			// session goes to StateFailed and next query reconnects with a
+			// fresh session. A subagent's ends only the subagent; the main
+			// agent carries on, so it is reported and not fatal.
+			if raw.isAPIErrorMessage() {
+				if parentToolUseID != "" {
+					emit(&ErrorEvent{Err: syntheticAPIError(&raw)})
+					continue
+				}
+				emit(&ErrorEvent{Err: syntheticAPIError(&raw), Fatal: true})
+				return
 			}
 			// Emit TurnEvent for top-level assistant messages only
 			if parentToolUseID == "" {
@@ -144,6 +137,9 @@ func ParseEvents(ctx context.Context, r io.Reader, ch chan<- Event) {
 			if raw.Subtype == "error_max_turns" {
 				mte := classifyMaxTurns(raw.Errors)
 				emit(&ErrorEvent{Err: mte, Fatal: false})
+			}
+			if err := resultError(&raw); err != nil {
+				emit(&ErrorEvent{Err: err, Fatal: false})
 			}
 			ev := newResultEvent(&raw, strings.Join(resultText, ""), modelUsage, snapshot)
 			// A result the CLI produced for its own task notification (the
@@ -528,12 +524,18 @@ type rawEvent struct {
 	// see Origin.
 	Origin json.RawMessage `json:"origin,omitempty"`
 
-	// Set on synthetic assistant messages that claude-cli emits when the
-	// upstream Anthropic stream drops mid-turn. The accompanying content
-	// is the error text rendered as if the model wrote it, with
-	// "model":"<synthetic>". Used to discriminate transport errors from
-	// real model output — see assistant-case in ParseEvents.
-	IsApiErrorMessage bool `json:"isApiErrorMessage,omitempty"`
+	// Set on synthetic assistant messages that claude-cli emits when an API
+	// call fails (a dropped stream, a prompt too long for the context
+	// window, a rate limit). The accompanying content is the error text
+	// rendered as if the model wrote it, with "model":"<synthetic>". Used to
+	// discriminate API errors from real model output — see
+	// syntheticAPIError. Older CLIs spell it isApiErrorMessage, 2.1.x
+	// is_api_error_message; read it through isAPIErrorMessage.
+	IsApiErrorMessage      bool `json:"isApiErrorMessage,omitempty"`
+	IsApiErrorMessageSnake bool `json:"is_api_error_message,omitempty"`
+	// APIErrorStatus is the HTTP status of the failed API call, on a
+	// synthetic assistant message and on the result that follows it.
+	APIErrorStatus int `json:"api_error_status,omitempty"`
 
 	// result event
 	Result           string                   `json:"result,omitempty"`
@@ -588,6 +590,12 @@ type rawEvent struct {
 	// files_persisted (system subtype)
 	Files  json.RawMessage `json:"files,omitempty"`
 	Failed json.RawMessage `json:"failed,omitempty"`
+}
+
+// isAPIErrorMessage reports whether an assistant line is the CLI's synthetic
+// API-error message, under either spelling of the flag.
+func (r *rawEvent) isAPIErrorMessage() bool {
+	return r.IsApiErrorMessage || r.IsApiErrorMessageSnake
 }
 
 type rawMessage struct {
@@ -941,6 +949,10 @@ func newResultEvent(raw *rawEvent, text string, modelUsage map[string]ModelUsage
 		ContextSnapshot:  snapshot,
 		Origin:           parseOrigin(raw.Origin),
 		ResultIndex:      raw.ResultIndex,
+		IsError:          raw.IsError,
+		TerminalReason:   raw.TerminalReason,
+		APIErrorStatus:   raw.APIErrorStatus,
+		Errors:           raw.Errors,
 	}
 }
 

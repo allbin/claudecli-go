@@ -15,6 +15,50 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`ResultEvent.IsError`, `TerminalReason`, `APIErrorStatus`, `Errors`.** The
+  CLI's `is_error`, `terminal_reason`, `api_error_status` and `errors` fields.
+  `IsError` is set on a failed turn even when `Subtype` is `"success"`.
+- **Classification of `is_error` results.** A result with `terminal_reason`
+  `prompt_too_long` or `blocking_limit` yields a non-fatal `ErrorEvent`
+  wrapping `ErrContextWindowExceeded`; otherwise `api_error_status` maps
+  through the usual sentinels (429 `ErrRateLimit`, 529 `ErrOverloaded`, …).
+  The classification also sets `Message` and the class of the process-exit
+  `*Error`, in `Run` and `Session`. An unclassified `is_error` result still
+  names its errors and terminal reason in `Error.Message`.
+
+### Fixed
+
+- **Prompt too long surfaced as an unclassified exit.** CLI 2.x spells the
+  synthetic API-error flag `is_api_error_message`, and only the older
+  `isApiErrorMessage` was read. The error text (e.g. "Prompt is too long")
+  arrived as a `TextEvent`, and the run ended in `claudecli: exit 1 (no error
+  details …)`. Both spellings are now read, and the message's `error` field
+  and `api_error_status` classify it: a prompt that does not fit the context
+  window now satisfies `errors.Is(err, ErrContextWindowExceeded)` on the
+  fatal `ErrorEvent`, `Stream.Wait`, `Session.Wait` and the process-exit
+  `*Error`.
+
+### Changed
+
+- **Synthetic API-error messages are classified.** The fatal `ErrorEvent`
+  still wraps `ErrAPI` and now also wraps the matching sentinel
+  (`ErrContextWindowExceeded`, `ErrRateLimit`, `ErrAuth`, `ErrOverloaded`,
+  `ErrBilling`, `ErrNotFound`, `ErrInvalidRequest`). Its text gains the
+  sentinel's prefix, e.g. `API error: context window exceeded: Prompt is too
+  long`.
+- **A subagent's synthetic API-error message is not fatal.** One with a
+  `parent_tool_use_id` ends only the subagent; it is now a non-fatal
+  `ErrorEvent` and the stream continues. Upgrade note: on CLI 2.x the
+  top-level guard is live for the first time (it read only the camelCase
+  flag). A Session that hits an API error now gets a fatal `ErrorEvent`
+  (`StateFailed`, `Wait` returns it) instead of the error as reply text. The
+  CLI then closes the turn with its `is_error` result, which returns the
+  session to `StateIdle`. After a prompt too long, the CLI keeps the oversized
+  message in the conversation, so the next query fails the same way (CLI
+  2.1.283): reconnect on `ErrContextWindowExceeded`.
+
 ## [0.13.0] - 2026-09-25
 
 ### Added

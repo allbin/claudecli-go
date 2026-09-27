@@ -1361,7 +1361,7 @@ All events implement the sealed `Event` interface. Use type switches or type ass
 | `*UnknownEvent`    | Unrecognized event type from CLI. `Type` is the raw type string (or `"content/<type>"` for unknown content blocks), `Raw` is the full JSON. Forward-compat catch-all — also used for error fallback diagnostics on non-zero exit. |
 | `*RateLimitEvent`  | Rate limit status change. Fields: `Status`, `Utilization`, `ResetsAt`, `RateLimitType`, overage fields, `UUID`, `SessionID`, `Raw`. |
 | `*StderrEvent`     | A line of stderr output from the CLI process.                                                                               |
-| `*ResultEvent`     | Session complete. Text, cost, duration, usage, `NumTurns`, `StopReason`, `StructuredOutput`, `ModelUsage` (per-model context window, token limits, web search/fetch counts), `ContextSnapshot` (per-API-call usage from last `message_start`/`message_delta`; requires `WithIncludePartialMessages`; nil otherwise). `Origin` (what started the turn; nil for your prompt, `Kind == OriginTaskNotification` for the CLI's own notification turns), `ResultIndex` (the CLI's per-process delivery sequence, nil on older CLIs; a gap means a result was lost) and `Unsolicited` (the result does not answer your prompt — see [task notifications](#results-the-cli-starts-by-itself-task-notifications)). Synthesized if CLI exits cleanly without one. |
+| `*ResultEvent`     | Session complete. Text, cost, duration, usage, `NumTurns`, `StopReason`, `StructuredOutput`, `ModelUsage` (per-model context window, token limits, web search/fetch counts), `ContextSnapshot` (per-API-call usage from last `message_start`/`message_delta`; requires `WithIncludePartialMessages`; nil otherwise). `Origin` (what started the turn; nil for your prompt, `Kind == OriginTaskNotification` for the CLI's own notification turns), `ResultIndex` (the CLI's per-process delivery sequence, nil on older CLIs; a gap means a result was lost), `IsError`, `TerminalReason` and `APIErrorStatus` (the turn failed, why the CLI's loop stopped, and the failed API call's HTTP status; `IsError` can be set on subtype `success`), `Errors` (the CLI's error strings) and `Unsolicited` (the result does not answer your prompt — see [task notifications](#results-the-cli-starts-by-itself-task-notifications)). Synthesized if CLI exits cleanly without one. |
 | `*ContextSnapshotEvent` | Mid-turn context measurement, so a context meter can move during the turn instead of jumping at the end. Same numbers as `ResultEvent.ContextSnapshot` plus `Model`, `SessionID` and `Phase`; `Used()` sums the four token fields. Two per API call (`Phase` `start` from `message_start` — prompt final, `OutputTokens` still 0 — and `final` from `message_delta`), so a tool-using turn emits several pairs. **Requires `WithIncludePartialMessages`.** `ContextWindow` is never zero: the CLI does not disclose the window mid-turn, so the event is withheld until one is known and then remembered for the session. In practice a Session's first turn is silent and later turns are not; calling `QueryContextUsage()` once unblocks the first turn too. `ParseEvents` never emits it (it returns at the terminal result). |
 | `*ContextManagementEvent` | Emitted when the CLI compresses or summarizes older turns to fit the context window. `Raw` contains the full JSON payload. |
 | `*ThinkingTokensEvent` | Running estimate of thinking-token usage during a turn (system subtype `thinking_tokens`). `EstimatedTokens` (cumulative) and `EstimatedTokensDelta` (increment). A progress signal, not authoritative accounting — use `ResultEvent.Usage` for final counts. |
@@ -1471,6 +1471,16 @@ if errors.Is(err, claudecli.ErrOverloaded) { ... }        // 529 API overloaded
 if errors.Is(err, claudecli.ErrMaxTurns) { ... }          // max turns reached
 if errors.Is(err, claudecli.ErrContextWindowExceeded) { ... } // context window exceeded
 
+// The CLI reports most API failures as a synthetic assistant message
+// (is_api_error_message) followed by a result with is_error set. The
+// synthetic message becomes a fatal ErrorEvent wrapping ErrAPI plus the
+// sentinel its "error" field, HTTP status or text maps to (a prompt too large
+// for the context window: ErrContextWindowExceeded). A subagent's synthetic
+// message is reported as a non-fatal ErrorEvent. An is_error result that
+// maps to a sentinel (terminal_reason prompt_too_long or blocking_limit, or
+// api_error_status) also yields a non-fatal ErrorEvent, and the
+// classification carries over to the process-exit *Error.
+
 // Extract turn count from max turns errors
 var mte *claudecli.MaxTurnsError
 if errors.As(err, &mte) {
@@ -1552,6 +1562,7 @@ claudecli-go/
 - **`command_lifecycle` is not parsed** — it arrives as an `UnknownEvent`. It marks the start of a CLI-initiated turn only when the CLI's notice has a uuid; `InitEvent.Unsolicited` covers both cases.
 
 - **Task-notification classification relies on the replay echo** — a task-notification result counts as the answer only when the pending prompt's echo arrived first (the prompt was folded into the CLI's notification turn). Slash commands such as `/cost` are never echoed, so a slash-command query that got folded into a notification turn would leave `Wait()` waiting; not observed, since local commands run on their own. Verified against CLI 2.1.280.
+- **API-error classification reads the CLI's own mapping** — sentinels come from the synthetic message's `error` field, `api_error_status` and `terminal_reason`, whose value sets were read from the CLI 2.1.283 bundle. `max_output_tokens`, `account_on_hold`, `verification_required`, `cloud_credential_error` and `unknown` map to plain `ErrAPI`; `terminal_reason` values other than `prompt_too_long` and `blocking_limit` (e.g. `aborted_streaming`, `turn_setup_failed`, `hook_stopped`) map to no sentinel, and the process-exit `Error.Message` then carries the result's errors and terminal reason.
 - **JSONL format is unversioned** — Claude CLI's `stream-json` output format is not formally versioned by Anthropic. Tested with Claude Code CLI 2.x. Breaking changes across CLI versions are possible.
 - **No retry/backoff** — `RateLimitEvent` is emitted (with `ResetsAt` timestamp and `RateLimitType`) but the package does not automatically retry or backoff. Consumers must implement their own retry logic.
 - **`stdbuf` recommended on Linux** — `LocalExecutor` uses `stdbuf -oL` for line-buffered stdout on Linux when available, falling back to direct execution without it.

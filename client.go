@@ -112,6 +112,7 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 	var sawResult bool
 	var accText []string
 	var lastStdoutErr error      // last classified error from stdout "error" events
+	var errorResult *ResultEvent // last is_error result, for fallback diagnostics
 	var unknowns []*UnknownEvent // unrecognized event types for fallback diagnostics
 	parseDone := make(chan struct{})
 	go func() {
@@ -120,6 +121,9 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 			switch e := ev.(type) {
 			case *ResultEvent:
 				sawResult = true
+				if e.IsError {
+					errorResult = e
+				}
 			case *TextEvent:
 				accText = append(accText, e.Content)
 			case *ErrorEvent:
@@ -150,6 +154,9 @@ func (c *Client) readProcess(ctx context.Context, proc *Process, events chan<- E
 			if cliErr.class == nil {
 				cliErr.class = lastStdoutErr
 			}
+		}
+		if cliErr.Message == "" && errorResult != nil {
+			cliErr.Message = exitResultMessage(errorResult)
 		}
 		// If still no message, check UnknownEvents for diagnostic info.
 		// The CLI may emit error details in event types this SDK doesn't

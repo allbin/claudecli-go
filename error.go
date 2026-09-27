@@ -250,6 +250,134 @@ func classifyError(d *errorDetails) error {
 	}
 }
 
+// normalizeSyntheticErrorType maps the "error" field of a synthetic assistant
+// message (the CLI's SDKAssistantMessageError enum: rate_limit, overloaded,
+// authentication_failed, oauth_org_not_allowed, account_on_hold,
+// verification_required, billing_error, invalid_request, model_not_found,
+// server_error, max_output_tokens, cloud_credential_error, unknown) to the
+// short codes used by classifyError. Values with no sentinel return "".
+func normalizeSyntheticErrorType(errType string) string {
+	switch errType {
+	case "rate_limit", "overloaded", "invalid_request":
+		return errType
+	case "authentication_failed", "oauth_org_not_allowed":
+		return "auth"
+	case "billing_error":
+		return "billing"
+	case "model_not_found":
+		return "not_found"
+	case "server_error":
+		return "api"
+	default:
+		return ""
+	}
+}
+
+// statusErrorType maps an Anthropic API HTTP status to the short codes used
+// by classifyError, following the API's documented error types.
+func statusErrorType(status int) string {
+	switch {
+	case status == 400:
+		return "invalid_request"
+	case status == 401:
+		return "auth"
+	case status == 402:
+		return "billing"
+	case status == 403:
+		return "permission"
+	case status == 404:
+		return "not_found"
+	case status == 413:
+		return "request_too_large"
+	case status == 429:
+		return "rate_limit"
+	case status == 529:
+		return "overloaded"
+	case status >= 500:
+		return "api"
+	default:
+		return ""
+	}
+}
+
+// classifyAPIFailure classifies an API failure the CLI reported on stdout from
+// its text, its typed kind (a synthetic message's "error" field) and its HTTP
+// status, in that order. Nil when none of them names a sentinel.
+func classifyAPIFailure(msg, errType string, status int) error {
+	typ := normalizeSyntheticErrorType(errType)
+	if typ == "" {
+		typ = statusErrorType(status)
+	}
+	return classifyError(&errorDetails{typ: typ, message: msg})
+}
+
+// syntheticAPIError builds the error for a synthetic assistant message. It
+// always wraps ErrAPI, and also the sentinel the failure classifies as.
+func syntheticAPIError(raw *rawEvent) error {
+	var msg string
+	for _, block := range raw.Message.Content {
+		if block.Type == "text" {
+			msg += block.Text
+		}
+	}
+	if msg == "" {
+		msg = "synthetic CLI api-error message"
+	}
+	var errType string
+	_ = json.Unmarshal(raw.ErrorData, &errType)
+	class := classifyAPIFailure(msg, errType, raw.APIErrorStatus)
+	if class == nil || errors.Is(class, ErrAPI) {
+		return fmt.Errorf("%w: %s", ErrAPI, msg)
+	}
+	return fmt.Errorf("%w: %w", ErrAPI, class)
+}
+
+// resultError classifies a result the CLI flagged is_error. Nil when the result
+// is not an error, is error_max_turns (classified by classifyMaxTurns), or
+// names no sentinel — an interrupted turn, for one.
+func resultError(raw *rawEvent) error {
+	if !raw.IsError || raw.Subtype == "error_max_turns" {
+		return nil
+	}
+	msg := resultErrorText(raw)
+	switch raw.TerminalReason {
+	// blocking_limit: the conversation reached the CLI's blocking context
+	// limit and compaction could not help; the CLI reports it with the same
+	// "Prompt is too long" text as prompt_too_long.
+	case "prompt_too_long", "blocking_limit":
+		return fmt.Errorf("%w: %s", ErrContextWindowExceeded, msg)
+	}
+	return classifyAPIFailure(msg, "", raw.APIErrorStatus)
+}
+
+// resultErrorText describes an is_error result: its result text, else its
+// errors.
+func resultErrorText(raw *rawEvent) string {
+	if raw.Result != "" {
+		return raw.Result
+	}
+	if len(raw.Errors) > 0 {
+		return strings.Join(raw.Errors, "; ")
+	}
+	return "turn ended in error"
+}
+
+// exitResultMessage is the process-exit Error.Message for an is_error result
+// nothing classified, so the exit still says why the turn failed.
+func exitResultMessage(r *ResultEvent) string {
+	msg := strings.Join(r.Errors, "; ")
+	if msg == "" {
+		msg = r.Text
+	}
+	if msg == "" {
+		msg = "turn ended in error"
+	}
+	if r.TerminalReason != "" {
+		msg += " (terminal_reason " + r.TerminalReason + ")"
+	}
+	return msg
+}
+
 func isContextWindowError(msg string) bool {
 	lower := strings.ToLower(msg)
 	return strings.Contains(lower, "context window exceeded") ||

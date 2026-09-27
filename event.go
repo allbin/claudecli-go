@@ -833,6 +833,22 @@ type ResultEvent struct {
 	// within the process, starting at 0 (result_index). A gap means a result
 	// was lost. Nil on CLIs that predate the field.
 	ResultIndex *int
+	// IsError is the CLI's is_error flag: the turn ended in a failure rather
+	// than an answer, even when Subtype is "success" (an API error such as a
+	// prompt that does not fit the context window reports subtype "success"
+	// with IsError set). A failure that maps to a sentinel also arrives as a
+	// non-fatal ErrorEvent ahead of this result.
+	IsError bool
+	// TerminalReason is why the CLI's query loop stopped (terminal_reason),
+	// e.g. "completed", "prompt_too_long", "api_error", "max_turns",
+	// "aborted_streaming". Empty on CLIs that predate the field.
+	TerminalReason string
+	// APIErrorStatus is the HTTP status of the API error that ended the turn
+	// (api_error_status), or 0 when the turn did not end on an API error.
+	APIErrorStatus int
+	// Errors carries the CLI's error strings for a failed turn (errors), e.g.
+	// on subtype "error_during_execution" or "error_max_turns".
+	Errors []string
 	// Unsolicited is true when this result closes a turn the CLI started by
 	// itself and does not answer a prompt the caller sent: Origin is
 	// OriginTaskNotification and, on a Session, the pending query's prompt
