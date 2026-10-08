@@ -1,7 +1,9 @@
 package claudecli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -530,5 +532,81 @@ func TestWriteBrowserCaptureScript(t *testing.T) {
 	// URL file path is inside the temp dir.
 	if filepath.Dir(urlFile) != dir {
 		t.Errorf("urlFile %q not in dir %q", urlFile, dir)
+	}
+}
+
+// Submit sends a localhost address to the CLI's callback server, then waits
+// for the verdict the CLI prints.
+func TestSubmitRoutesLocalhostURL(t *testing.T) {
+	var lp *LoginProcess
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RequestURI()
+		w.WriteHeader(200)
+		go lp.outcome.observe("Paste code here if prompted > Login successful.")
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	port, _ := strconv.Atoi(u.Port())
+	lp = &LoginProcess{callbackPort: port, outcome: newLoginOutcome()}
+
+	in := fmt.Sprintf(" http://localhost:%d/callback?code=c&state=s\n", port)
+	if err := lp.Submit(context.Background(), in); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if gotPath != "/callback?code=c&state=s" {
+		t.Errorf("callback path = %q", gotPath)
+	}
+}
+
+func TestManualCodeFromURL(t *testing.T) {
+	tests := []struct {
+		in, want string
+		ok       bool
+	}{
+		{"https://platform.claude.com/oauth/code/callback?code=abc&state=xyz", "abc#xyz", true},
+		{"https://platform.claude.com/oauth/code/callback?code=abc", "", false},
+		{"https://example.com/other?code=abc&state=xyz", "", false},
+		{"abc#xyz", "", false},
+	}
+	for _, tt := range tests {
+		got, ok := manualCodeFromURL(tt.in)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("manualCodeFromURL(%q) = %q, %v; want %q, %v", tt.in, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestLoginOutcomeObserve(t *testing.T) {
+	tests := []struct {
+		line      string
+		finished  bool
+		message   string // "" means success when finished
+		retryable bool
+	}{
+		{"Paste code here if prompted > Login successful.", true, "", false},
+		{stripANSI("\x1b[31mLogin failed: Request failed with status code 400\x1b[39m\r"), true, "Request failed with status code 400", false},
+		{"Paste code here if prompted > Invalid code. Please make sure the full code was copied.", false, "Invalid code. Please make sure the full code was copied.", true},
+	}
+	for _, tt := range tests {
+		o := newLoginOutcome()
+		seen, _ := o.begin()
+		o.observe(tt.line)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		err := o.await(ctx, seen)
+		cancel()
+		if o.finished != tt.finished {
+			t.Errorf("%q: finished = %v", tt.line, o.finished)
+		}
+		if tt.message == "" {
+			if err != nil {
+				t.Errorf("%q: err = %v, want nil", tt.line, err)
+			}
+			continue
+		}
+		var le *LoginError
+		if !errors.As(err, &le) || le.Message != tt.message || le.Retryable != tt.retryable {
+			t.Errorf("%q: err = %#v, want message %q retryable %v", tt.line, err, tt.message, tt.retryable)
+		}
 	}
 }

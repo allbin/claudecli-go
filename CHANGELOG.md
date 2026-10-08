@@ -15,6 +15,26 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **Manual-code login: `LoginProcess.SubmitManualCode` and `Submit`.** Sign in
+  from another device with `LoginProcess.URL`: after the person authorizes,
+  Claude's page shows a `CODE#STATE`, and `SubmitManualCode(ctx, code)` writes
+  it to the CLI's prompt and waits for the CLI's verdict. `Submit(ctx, input)`
+  takes whatever the person pasted: a failed `http://localhost…` page address
+  goes to the callback server (as `SubmitCode`), anything else to the prompt.
+  Both return nil on `Login successful.`, or a `*LoginError` with the CLI's
+  text; `Retryable` is true for input that is not `CODE#STATE` (the CLI keeps
+  waiting) and false once a code fails the token exchange (the CLI exits; start
+  a new `AuthLogin`).
+
+### Changed
+
+- **`LoginProcess.Wait` is safe to call more than once**, and the login's
+  output is read to the end before the process counts as exited, so a final
+  line is no longer lost.
+- **`SubmitCode` no longer logs the code or state at debug level.**
+
 ## [0.14.0] - 2026-09-27
 
 ### Added

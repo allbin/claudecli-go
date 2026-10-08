@@ -5,10 +5,13 @@
 //	go run ./cmd/authtest
 //	go run ./cmd/authtest -method console
 //	go run ./cmd/authtest -status-only
+//	go run ./cmd/authtest -config-dir /tmp/acct   # sign in a throwaway account
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -22,10 +25,15 @@ import (
 func main() {
 	method := flag.String("method", "", "auth method: claudeai or console")
 	statusOnly := flag.Bool("status-only", false, "only check auth status, don't attempt login")
+	configDir := flag.String("config-dir", "", "CLAUDE_CONFIG_DIR for the CLI (default: the process's)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	client := claudecli.NewClient([]claudecli.ClientOption{claudecli.WithLogger(logger)})
+	var defaults []claudecli.Option
+	if *configDir != "" {
+		defaults = append(defaults, claudecli.WithEnv(map[string]string{"CLAUDE_CONFIG_DIR": *configDir}))
+	}
+	client := claudecli.NewClient([]claudecli.ClientOption{claudecli.WithLogger(logger)}, defaults...)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
@@ -86,32 +94,34 @@ func main() {
 	)
 
 	fmt.Println()
+	fmt.Println("Open this URL on any device, authorize, then paste the code Claude's page shows:")
+	fmt.Println(proc.URL)
 	if proc.AutoOpenURL != "" {
-		fmt.Println("Open this URL in your browser (the redirect to localhost will fail — that's expected):")
+		fmt.Println()
+		fmt.Println("Or open this one; if the localhost page fails to load, paste its address:")
 		fmt.Println(proc.AutoOpenURL)
-		fmt.Println()
-		fmt.Println("After authorizing, copy the full URL from the browser error page and paste below.")
-		fmt.Println("(It will look like: http://localhost:PORT/callback?code=...&state=...)")
-	} else {
-		fmt.Println("Open this URL in your browser:")
-		fmt.Println(proc.URL)
-		fmt.Println()
-		fmt.Println("After authorizing, paste the CODE#STATE below.")
 	}
 	fmt.Print("> ")
 
-	var code string
-	if _, err := fmt.Scanln(&code); err != nil {
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
 		logger.Error("stdin read failed", "error", err)
 		_ = proc.Cancel()
 		return
 	}
 
-	fmt.Fprintln(os.Stderr, "\n=== SubmitCode ===")
-	if err := proc.SubmitCode(code); err != nil {
-		logger.Error("SubmitCode failed", "error", err)
-	} else {
-		logger.Info("SubmitCode succeeded")
+	fmt.Fprintln(os.Stderr, "\n=== Submit ===")
+	submitCtx, submitCancel := context.WithTimeout(ctx, 60*time.Second)
+	err = proc.Submit(submitCtx, line)
+	submitCancel()
+	var le *claudecli.LoginError
+	switch {
+	case err == nil:
+		logger.Info("Submit: login successful")
+	case errors.As(err, &le):
+		logger.Error("Submit: CLI rejected the code", "message", le.Message, "retryable", le.Retryable)
+	default:
+		logger.Error("Submit failed", "error", err)
 	}
 
 	fmt.Fprintln(os.Stderr, "\n=== Waiting ===")

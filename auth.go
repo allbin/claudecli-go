@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -88,26 +89,31 @@ func WithNoBrowser() AuthLoginOption {
 
 // LoginProcess represents an in-progress OAuth login.
 //
-// Two URLs are available:
-//   - URL: the manual-visit URL (redirect_uri=platform.claude.com). Shows CODE#STATE
-//     to the user, but the code cannot be submitted programmatically.
-//   - AutoOpenURL: the browser URL (redirect_uri=localhost:PORT). After authorizing,
-//     the browser redirects to localhost which may fail if the browser is on a
-//     different machine. Use SubmitCode with the failed redirect URL to complete.
+// Two URLs are available, and either can complete the login:
+//   - URL: the manual URL (redirect_uri=platform.claude.com). After the person
+//     authorizes, Claude's page shows a CODE#STATE with a Copy button; pass it
+//     to SubmitManualCode or Submit. This is the flow for signing in from a
+//     different device, e.g. a phone.
+//   - AutoOpenURL: the browser URL (redirect_uri=localhost:PORT). After
+//     authorizing, the browser redirects to localhost, which only loads on the
+//     machine running the CLI. Elsewhere the page fails to load; pass its
+//     address to SubmitCode or Submit. Requires WithNoBrowser.
 //
-// For remote/headless setups, show AutoOpenURL to the user. After authorizing,
-// they copy the localhost redirect URL (from the browser error page) and pass
-// it to SubmitCode.
+// Submit accepts whatever the person pasted from either flow and waits for
+// the CLI's verdict.
 type LoginProcess struct {
-	URL          string // manual-visit URL (platform.claude.com redirect)
+	URL          string // manual URL (platform.claude.com redirect, shows CODE#STATE)
 	AutoOpenURL  string // browser URL (localhost redirect, may be empty)
 	callbackPort int    // port of the CLI's local OAuth callback server
 	tmpDir       string // temp dir for browser capture script; cleaned up on Wait/Cancel
 	stdin        io.WriteCloser
 	cmd          *exec.Cmd
 	pp           *platformProc
-	done         chan error
-	logger       *slog.Logger // may be nil
+	exited       chan struct{} // closed once the CLI has exited
+	exitErr      error         // the CLI's exit error, valid once exited is closed
+	outcome      *loginOutcome // what the CLI reported; nil only in tests
+	submitMu     sync.Mutex    // one submission at a time
+	logger       *slog.Logger  // may be nil
 }
 
 // CallbackPort returns the port of the CLI's local OAuth callback server.
@@ -121,9 +127,11 @@ func (p *LoginProcess) log() *slog.Logger {
 	return slog.New(discardHandler{})
 }
 
-// Wait blocks until the login process completes. Returns nil on success.
+// Wait blocks until the login process exits. Returns nil on success, and
+// otherwise the CLI's exit error. Safe to call more than once.
 func (p *LoginProcess) Wait() error {
-	err := <-p.done
+	<-p.exited
+	err := p.exitErr
 	if p.stdin != nil {
 		p.stdin.Close()
 	}
@@ -142,8 +150,12 @@ func (p *LoginProcess) Wait() error {
 // The code must have been issued for the AutoOpenURL flow (redirect_uri=localhost),
 // not the manual URL flow (redirect_uri=platform.claude.com).
 func (p *LoginProcess) SubmitCode(code string) error {
+	return p.submitCallback(context.Background(), code)
+}
+
+func (p *LoginProcess) submitCallback(ctx context.Context, code string) error {
 	log := p.log()
-	log.Debug("submit code", "input", code, "callbackPort", p.callbackPort)
+	log.Debug("submit code", "callbackPort", p.callbackPort)
 
 	if p.callbackPort == 0 {
 		return fmt.Errorf("callback port not available (requires WithNoBrowser)")
@@ -152,19 +164,19 @@ func (p *LoginProcess) SubmitCode(code string) error {
 	var authCode, state string
 
 	// Check if input is a full redirect URL.
-	if strings.HasPrefix(code, "http://localhost") || strings.HasPrefix(code, "https://localhost") {
+	if isLocalhostURL(code) {
 		u, err := url.Parse(code)
 		if err != nil {
 			return fmt.Errorf("parse redirect URL: %w", err)
 		}
 		authCode = u.Query().Get("code")
 		state = u.Query().Get("state")
-		log.Debug("submit code: parsed redirect URL", "code", authCode, "state", state)
+		log.Debug("submit code: parsed redirect URL")
 	} else if parts := strings.SplitN(code, "#", 2); len(parts) == 2 {
 		// CODE#STATE format.
 		authCode = parts[0]
 		state = parts[1]
-		log.Debug("submit code: parsed CODE#STATE", "code", authCode, "state", state)
+		log.Debug("submit code: parsed CODE#STATE")
 	} else {
 		return fmt.Errorf("expected redirect URL (http://localhost:...) or CODE#STATE format")
 	}
@@ -178,9 +190,13 @@ func (p *LoginProcess) SubmitCode(code string) error {
 
 	callbackURL := fmt.Sprintf("http://localhost:%d/callback?code=%s&state=%s",
 		p.callbackPort, url.QueryEscape(authCode), url.QueryEscape(state))
-	log.Debug("submit code: calling callback", "url", callbackURL)
+	log.Debug("submit code: calling callback", "port", p.callbackPort)
 
-	resp, err := http.Get(callbackURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, callbackURL, nil)
+	if err != nil {
+		return fmt.Errorf("callback request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("callback request: %w", err)
 	}
@@ -194,8 +210,12 @@ func (p *LoginProcess) SubmitCode(code string) error {
 	return nil
 }
 
-// Cancel terminates the login process.
+// Cancel terminates the login process. A submission waiting for the CLI's
+// verdict returns at once with an error.
 func (p *LoginProcess) Cancel() error {
+	if p.outcome != nil {
+		p.outcome.finish(errLoginCancelled)
+	}
 	if p.tmpDir != "" {
 		os.RemoveAll(p.tmpDir)
 	}
@@ -309,64 +329,101 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 		log.Debug("auth login: BROWSER capture", "script", scriptPath, "urlFile", urlFile)
 	}
 
-	// Merge stdout and stderr — the URL may appear on either.
-	stdout, err := cmd.StdoutPipe()
+	// Merge stdout and stderr into one pipe we own: the URL, the prompt and
+	// the verdict are split across both, and one writer keeps their order.
+	// Owning the read end (rather than cmd.StdoutPipe) lets cmd.Wait return
+	// at exit without closing it under the reader, so no final line is lost.
+	outR, outW, err := os.Pipe()
 	if err != nil {
 		os.RemoveAll(tmpDir)
-		return nil, fmt.Errorf("auth login: stdout pipe: %w", err)
+		return nil, fmt.Errorf("auth login: output pipe: %w", err)
 	}
-	cmd.Stderr = cmd.Stdout // merge stderr into stdout pipe
+	cmd.Stdout = outW
+	cmd.Stderr = outW
 
+	// The CLI reads the manual CODE#STATE from stdin with a line reader
+	// (not its Ink TUI), so a plain pipe reaches it on every platform.
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
+		outR.Close()
+		outW.Close()
 		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("auth login: stdin pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		pp.release()
+		outR.Close()
+		outW.Close()
 		os.RemoveAll(tmpDir)
 		return nil, fmt.Errorf("auth login: start: %w", err)
 	}
+	outW.Close() // the child holds its own copy
 	pp.afterStart(cmd)
 	log.Debug("auth login: process started", "pid", cmd.Process.Pid)
 
-	// Scan output for the authorization URL and any localhost redirect URLs.
+	lp := &LoginProcess{
+		tmpDir:  tmpDir,
+		stdin:   stdinPipe,
+		cmd:     cmd,
+		pp:      pp,
+		exited:  make(chan struct{}),
+		outcome: newLoginOutcome(),
+		logger:  c.logger,
+	}
+
+	// Scan output for the authorization URL, any localhost redirect URLs,
+	// and the CLI's verdict on a submitted code.
 	urlCh := make(chan string, 1)
 	localhostURLCh := make(chan string, 1)
-	doneCh := make(chan error, 1)
+	readerDone := make(chan struct{})
 
 	go func() {
-		scanner := bufio.NewScanner(stdout)
+		defer close(readerDone)
+		defer outR.Close()
+		scanner := bufio.NewScanner(outR)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			line := scanner.Text()
-			log.Debug("auth login: stdout", "line", line)
+			line := stripANSI(scanner.Text())
+			log.Debug("auth login: output", "line", line)
 			if u := extractLoginURL(line); u != "" {
 				log.Debug("auth login: extracted login URL", "url", u)
-				urlCh <- u
+				select {
+				case urlCh <- u:
+				default:
+				}
 			}
 			// Also capture any URL containing a localhost redirect_uri —
 			// this is the auto-open URL that carries the callback port.
 			if strings.Contains(line, "localhost") {
 				if u := extractFirstHTTPS(line); u != "" {
-					log.Debug("auth login: found localhost URL in stdout", "url", u)
+					log.Debug("auth login: found localhost URL in output", "url", u)
 					select {
 					case localhostURLCh <- u:
 					default:
 					}
 				}
 			}
+			lp.outcome.observe(line)
 		}
 		if err := scanner.Err(); err != nil {
 			log.Debug("auth login: scanner error", "error", err)
 		}
-		log.Debug("auth login: stdout scanner finished")
+		log.Debug("auth login: output scanner finished")
 	}()
 
 	go func() {
 		err := cmd.Wait()
 		pp.release()
-		doneCh <- err
+		// The verdict line is written before exit; give the reader a moment
+		// to drain it. A grandchild holding the pipe open must not stall this.
+		select {
+		case <-readerDone:
+		case <-time.After(2 * time.Second):
+		}
+		lp.exitErr = err
+		lp.outcome.exit(err)
+		close(lp.exited)
 	}()
 
 	// Wait for either the URL, process exit, or context cancellation.
@@ -419,21 +476,14 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 		} else {
 			log.Debug("auth login: callback port resolved", "port", port, "source", portSource)
 		}
-		lp := &LoginProcess{
-			URL:          loginURL,
-			AutoOpenURL:  autoOpenURL,
-			callbackPort: port,
-			tmpDir:       tmpDir,
-			stdin:        stdinPipe,
-			cmd:          cmd,
-			pp:           pp,
-			done:         doneCh,
-			logger:       c.logger,
-		}
+		lp.URL = loginURL
+		lp.AutoOpenURL = autoOpenURL
+		lp.callbackPort = port
 		return lp, nil
-	case err := <-doneCh:
+	case <-lp.exited:
 		stdinPipe.Close()
 		os.RemoveAll(tmpDir)
+		err := lp.exitErr
 		log.Debug("auth login: process exited before URL", "error", err)
 		// Process exited before we got a URL.
 		if err != nil {
@@ -445,7 +495,7 @@ func (c *Client) AuthLogin(ctx context.Context, opts ...AuthLoginOption) (*Login
 		log.Debug("auth login: context cancelled, killing process")
 		os.RemoveAll(tmpDir)
 		_ = pp.killTree(cmd)
-		<-doneCh // drain to ensure process exits and pipes close
+		<-lp.exited // drain to ensure process exits and pipes close
 		stdinPipe.Close()
 		return nil, ctx.Err()
 	}

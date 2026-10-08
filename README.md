@@ -152,19 +152,27 @@ Check, login, and logout via the CLI's `auth` subcommands.
 status, err := client.AuthStatus(ctx)
 fmt.Println(status.Status, status.Email, status.OrgName)
 
-// Start OAuth login — returns URL for user to visit
+// Start OAuth login — returns URLs for the person to visit
 proc, err := client.AuthLogin(ctx,
-    claudecli.WithNoBrowser(), // required for SubmitCode
+    claudecli.WithNoBrowser(), // keeps the CLI from opening a browser; required for the localhost route
 )
-// Show AutoOpenURL to the user (localhost redirect).
-// After authorizing, the browser redirects to localhost which fails on remote
-// machines. User copies the failed redirect URL and passes it to SubmitCode.
-fmt.Println("Visit:", proc.AutoOpenURL)
+// proc.URL works from any device: after authorizing, Claude's page shows a
+// CODE#STATE with a Copy button.
+fmt.Println("Visit:", proc.URL)
 
-// User pastes the redirect URL (http://localhost:PORT/callback?code=X&state=Y):
-err = proc.SubmitCode(redirectURL)
-
-err = proc.Wait() // blocks until login completes
+// Pass whatever the person pasted: the CODE#STATE, the code page's address,
+// or the failed localhost page's address (from proc.AutoOpenURL).
+err = proc.Submit(ctx, pasted)
+var le *claudecli.LoginError
+switch {
+case err == nil:
+    // Logged in; the CLI has stored the credentials.
+case errors.As(err, &le) && le.Retryable:
+    // Not a CODE#STATE; the same proc still takes a code.
+case errors.As(err, &le):
+    // The CLI rejected the code (le.Message) and exited: start a new AuthLogin.
+}
+_ = proc.Wait() // reap the CLI
 
 // Logout
 err = client.AuthLogout(ctx)
@@ -181,16 +189,25 @@ Use `NewClient([]ClientOption{WithLogger(logger)})` for debug logging.
 | `WithAuthMethod(method)`  | `AuthMethodClaudeAI` (default) or `AuthMethodConsole` (API billing). |
 | `WithSSO()`               | Force SSO login flow.                |
 | `WithLoginEmail(string)`  | Pre-populate email on login page.    |
-| `WithNoBrowser()`         | Suppress browser; required for `SubmitCode`. |
+| `WithNoBrowser()`         | Suppress browser; required for `SubmitCode` and the localhost route of `Submit`. |
 
 | LoginProcess field/method | Description                          |
 | ------------------------- | ------------------------------------ |
-| `URL`                     | Manual-visit URL (platform.claude.com redirect, shows CODE#STATE). |
-| `AutoOpenURL`             | Browser URL (localhost redirect). Use this for remote/headless setups. |
+| `URL`                     | Manual URL (platform.claude.com redirect). Claude's page then shows `CODE#STATE`. Use this for sign-in from another device. |
+| `AutoOpenURL`             | Browser URL (localhost redirect). Only loads on the machine running the CLI. |
 | `CallbackPort() int`      | Port of the CLI's local callback server (0 if unavailable). |
-| `SubmitCode(string) error`| Submit auth via localhost callback. Accepts a full redirect URL (`http://localhost:PORT/callback?code=X&state=Y`) or `CODE#STATE`. |
-| `Wait() error`            | Block until login completes.         |
-| `Cancel() error`          | Terminate the login process.         |
+| `Submit(ctx, string) error` | Route whatever was pasted and wait for the CLI's verdict: a `http://localhost…` address to the callback server, anything else (`CODE#STATE`, or the code page's `…/oauth/code/callback?code=X&state=Y` address) to `SubmitManualCode`. |
+| `SubmitManualCode(ctx, string) error` | Write the manual `CODE#STATE` to the CLI's prompt and wait for its verdict: nil on `Login successful.`, `*LoginError` on rejection, `ctx.Err()` if none arrives. |
+| `SubmitCode(string) error`| Submit to the localhost callback without waiting for a verdict. Accepts a full redirect URL (`http://localhost:PORT/callback?code=X&state=Y`) or a localhost-flow `CODE#STATE`. |
+| `Wait() error`            | Block until the CLI exits; nil on success. |
+| `Cancel() error`          | Terminate the login process; a pending submit returns an error. |
+
+`*LoginError` carries the CLI's text in `Message`. `Retryable` tells the two
+rejections apart: input that is not `CODE#STATE` leaves the CLI waiting for
+another code (the SDK rejects it before it reaches the CLI), while a
+well-formed code that fails the token exchange (wrong, expired, used, or
+issued for the other URL) ends the CLI with `Login failed: Request failed with
+status code 400`, so a new `AuthLogin` is needed.
 
 ## Install method detection
 
@@ -1538,6 +1555,7 @@ claudecli-go/
   control.go     Control message types, ContentBlock/ImageSource for multimodal input
   blocking.go    RunBlocking/RunBlockingJSON — non-streaming JSON output mode
   auth.go        AuthStatus (defensive three-state parsing), AuthLogin (BROWSER capture + localhost callback), AuthLogout, LoginProcess
+  auth_submit.go Manual-code login: Submit, SubmitManualCode (CODE#STATE to the CLI's stdin prompt), LoginError, verdict parsing
   pool.go        Pool multi-session registry, FormatAgentMessage, SendAgentMessage
   version.go     sdkVersion (module version reported to CLI, build-info sourced), SDKVersion dev fallback, MinCLIVersion, CLI version checking with semver parsing
   install.go     DetectInstall — read-only install-method detection (npm/native/package-manager/version-manager) and the matching update command
@@ -1581,6 +1599,10 @@ claudecli-go/
   failing the spawn. There is no Windows CI, so the job path (sessions,
   `AuthLogin`, `Update`) needs a manual smoke test on real Windows: spawn,
   kill, confirm no node/chrome survivors in Task Manager.
+- **Manual-code login is untested on Windows** — `SubmitManualCode` writes to
+  the CLI's stdin through a plain pipe, which the CLI reads with a line
+  reader on every platform (no terminal needed), but only Linux has been
+  exercised against the real CLI.
 - **Cancelling `Update` on Windows kills without grace** — unix cancellation
   sends SIGINT to the updater's process group so a staged download can be
   unwound before the kill lands; Windows has no console interrupt deliverable
