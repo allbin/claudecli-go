@@ -15,6 +15,26 @@ or pin a specific version (e.g. `@v0.1.0`).
 
 ## [Unreleased]
 
+### Added
+
+- **`Session.Commands()`: the live slash-command list.** The commands and
+  skills the session can run now, with descriptions and argument hints:
+  seeded from the initialize handshake, replaced by every
+  `CommandsChangedEvent` and every `ReloadPlugins()` answer. Offer this list
+  when a person types `/` rather than scanning skill directories: the CLI
+  includes plugin skills, claude.ai synced skills and its own built-ins under
+  the names it resolves, and a directory scan drifts from its rules. Skills
+  added or edited mid-session arrive as a `CommandsChangedEvent` without a
+  reload (checked on CLI 2.1.296); a skills directory created after start
+  still needs `ReloadSkills()`, and a plugin installed after start
+  `ReloadPlugins()`.
+- **`SlashCommand.Aliases` and `SlashCommand.Builtin`.** A plugin skill is
+  named `plugin:skill`, and the CLI gives some of them a bare alias but not
+  all (CLI 2.1.296: `retro` for `mattpocock-skills:retro`, none for
+  `mattpocock-skills:pr`). Match typed input against `Aliases` as well as
+  `Name`, and insert `Name`: a bare name with no alias reaches the model as
+  plain text.
+
 ## [0.15.0] - 2026-10-08
 
 ### Added

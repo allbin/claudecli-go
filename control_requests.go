@@ -113,9 +113,20 @@ func (s *Session) ReloadSkills() ([]SlashCommand, error) {
 
 // SlashCommand describes a slash command or skill available in the session.
 type SlashCommand struct {
+	// Name is what follows the slash, namespaced for a plugin skill
+	// ("mattpocock-skills:retro").
 	Name         string `json:"name"`
 	Description  string `json:"description"`
 	ArgumentHint string `json:"argumentHint,omitempty"`
+	// Aliases are other names that invoke the same command, such as the bare
+	// "retro" for "mattpocock-skills:retro" or the directory name of a skill
+	// whose frontmatter sets `name`. Not every plugin skill gets a bare
+	// alias (CLI 2.1.296 gives none to "mattpocock-skills:pr"), so a client
+	// matches typed input against these as well as Name and inserts Name.
+	Aliases []string `json:"aliases,omitempty"`
+	// Builtin marks a command the CLI ships rather than one from a skill,
+	// command file or plugin.
+	Builtin bool `json:"builtin,omitempty"`
 }
 
 // ReloadPluginsResult is the refreshed session surface after a plugin reload.
@@ -141,5 +152,8 @@ func (s *Session) ReloadPlugins() (*ReloadPluginsResult, error) {
 		return nil, fmt.Errorf("reload_plugins: decode response: %w", err)
 	}
 	result.Raw = append(json.RawMessage(nil), raw...)
+	if result.Commands != nil {
+		s.setCommands(result.Commands)
+	}
 	return &result, nil
 }

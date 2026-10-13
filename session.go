@@ -95,6 +95,13 @@ type Session struct {
 	// readLoop, hence sync.Map. See observedContextWindow.
 	contextWindows sync.Map // map[string]int
 
+	// commands is the live slash-command list (Commands); commandsChanged
+	// records that a mid-session change replaced it, so the initialize
+	// answer, applied on another goroutine, cannot overwrite a newer list.
+	commandsMu      sync.Mutex
+	commands        []SlashCommand
+	commandsChanged bool
+
 	// ToolProgressEvent ticker. toolProgressStop is accessed only from the
 	// readLoop goroutine (start/stop are driven by transition observations,
 	// not user calls). Interval override is atomic so tests can adjust it
@@ -988,6 +995,7 @@ func (s *Session) initialize() error {
 			return fmt.Errorf("initialize: %w", result.Err)
 		}
 		s.serverInfo = result.Response
+		s.seedCommands(result.Response)
 		return nil
 	case <-ctx.Done():
 		if s.ctx.Err() != nil {
@@ -1182,6 +1190,11 @@ func (s *Session) readLoop() {
 				if !s.surfaceReplays {
 					continue
 				}
+			}
+			// Before delivery, so a consumer reacting to the event reads
+			// the new list from Commands.
+			if cc, isCC := ev.(*CommandsChangedEvent); isCC {
+				s.setCommands(cc.Commands)
 			}
 			if ev != nil {
 				pumpSend(ev)
